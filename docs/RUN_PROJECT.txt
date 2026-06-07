@@ -1,0 +1,38 @@
+Sefro Clinic - Run Guide
+
+1) Open PowerShell in the project folder:
+   cd C:\Users\Dani\Desktop\Sefro_Clinic
+
+2) Install dependencies:
+   py -m pip install -r requirements.txt
+
+3) If migrations are not created yet, create them:
+   py manage.py makemigrations
+
+4) Apply database migrations:
+   py manage.py migrate
+
+5) Start the server:
+   py manage.py runserver 127.0.0.1:8000
+
+6) Open Swagger in your browser:
+   http://127.0.0.1:8000/api/docs/
+   or run this in PowerShell:
+   Start-Process "http://127.0.0.1:8000/api/docs/"
+
+7) Default admin login:
+   username: sefro_admin
+   password: SefroClinic@2026
+
+8) Admin token login endpoint:
+   POST /api/auth/token/
+
+9) Notes:
+   - Tokens are stored in HttpOnly cookies.
+   - Passwords are hashed with Argon2id.
+   - Typing a URL directly in PowerShell does not open the browser.
+   - If you want to stop the server, press Ctrl+C in PowerShell.
+
+10) If you change models later, run:
+    py manage.py makemigrations
+    py manage.py migrate

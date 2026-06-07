@@ -1,0 +1,7 @@
+django==5.0.14
+argon2-cffi
+djangorestframework
+djangorestframework-simplejwt
+drf-spectacular
+drf-spectacular-sidecar
+django-cors-headers
