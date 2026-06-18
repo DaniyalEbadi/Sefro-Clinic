@@ -17,8 +17,8 @@ class CustomerAdmin(admin.ModelAdmin):
 
 @admin.register(Visit)
 class VisitAdmin(admin.ModelAdmin):
-    list_display = ('customer', 'visit_date', 'staff')
-    list_filter = ('visit_date',)
+    list_display = ('customer', 'start_at', 'end_at', 'status', 'staff')
+    list_filter = ('status', 'start_at')
     filter_horizontal = ('services',)
 
 

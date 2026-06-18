@@ -35,9 +35,6 @@
 35. Dashboard data is available through `GET /api/dashboard/`.
 36. The dashboard returns customer count, loyal customer count, and sales summaries.
 37. Sales summaries include daily, weekly, monthly, and yearly values.
-38. The appointment module manages clinic reservations.
-39. Each appointment has customer, service, staff, start time, end time, and status.
-40. Appointment endpoints are available under `/api/appointments/`.
 41. The product module stores products used or sold by the clinic.
 42. Product endpoints are available under `/api/inventory/products/`.
 43. The inventory module tracks product stock levels.

@@ -66,7 +66,7 @@ class AccountsE2ETest(TestCase):
 
         list_resp = self.client.get(reverse('accounts:employee-list'), format='json')
         self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(list_resp.data), 1)
+        self.assertGreaterEqual(len(list_resp.data['results']), 1)
 
         detail_resp = self.client.get(
             reverse('accounts:employee-detail', args=[emp_id]), format='json'

@@ -90,19 +90,6 @@ Bearer YOUR_ACCESS_TOKEN
 | PATCH | `/api/payments/{id}/` | بخشی از اطلاعات پرداخت را ویرایش می‌کند. |
 | DELETE | `/api/payments/{id}/` | پرداخت را حذف می‌کند. |
 
-## Appointments
-
-این بخش برای رزروهای تقویمی کلینیک است. هر رزرو به مشتری، خدمت، کارمند، زمان شروع و زمان پایان وصل می‌شود.
-
-| Method | Endpoint | توضیح |
-| --- | --- | --- |
-| GET | `/api/appointments/` | لیست رزروها را می‌دهد. |
-| POST | `/api/appointments/` | رزرو جدید ثبت می‌کند. |
-| GET | `/api/appointments/{id}/` | جزئیات یک رزرو را می‌دهد. |
-| PUT | `/api/appointments/{id}/` | تمام اطلاعات رزرو را ویرایش می‌کند. |
-| PATCH | `/api/appointments/{id}/` | بخشی از اطلاعات رزرو را ویرایش می‌کند. |
-| DELETE | `/api/appointments/{id}/` | رزرو را حذف می‌کند. |
-
 ## Products
 
 این بخش برای تعریف محصولات کلینیک است. محصول شامل نام، کد `SKU`، توضیح و قیمت واحد است.

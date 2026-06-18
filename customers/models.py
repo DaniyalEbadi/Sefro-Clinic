@@ -5,9 +5,24 @@ from django.core.validators import MinValueValidator
 from django.db import models
 
 
+class Category(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name_plural = 'categories'
+
+    def __str__(self):
+        return self.name
+
+
 class Service(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'))
+    time = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='services', null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -55,6 +70,12 @@ class Customer(models.Model):
 
 
 class Visit(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        CONFIRMED = 'confirmed', 'Confirmed'
+        COMPLETED = 'completed', 'Completed'
+        CANCELED = 'canceled', 'Canceled'
+
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='visits')
     staff = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -63,15 +84,17 @@ class Visit(models.Model):
         null=True,
         blank=True,
     )
-    visit_date = models.DateTimeField()
     services = models.ManyToManyField(Service, related_name='visits')
+    start_at = models.DateTimeField()
+    end_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     notes = models.TextField(blank=True)
 
     class Meta:
-        ordering = ['-visit_date']
+        ordering = ['-start_at']
 
     def __str__(self):
-        return f'{self.customer} - {self.visit_date:%Y-%m-%d %H:%M}'
+        return f'{self.customer} - {self.start_at:%Y-%m-%d %H:%M}'
 
 
 class Payment(models.Model):

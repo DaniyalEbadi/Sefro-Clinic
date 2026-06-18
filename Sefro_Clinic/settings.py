@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = 'django-insecure-&v43(g_+lr^dfloe3nh3)x_i#9!g&!pv6k6a$!n2-&*-g5rpb-'
@@ -21,7 +20,6 @@ INSTALLED_APPS = [
     'corsheaders',
     'accounts',
     'customers',
-    'appointments',
     'inventory',
 ]
 
@@ -97,6 +95,8 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
     ),
     'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
 }
 
 JWT_AUTH_COOKIE = 'access_token'
@@ -107,7 +107,7 @@ JWT_AUTH_COOKIE_SAMESITE = 'Lax'
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Sefro Clinic API',
-    'DESCRIPTION': 'Backend API for clinic management, customers, payments, inventory, and appointments.',
+    'DESCRIPTION': 'Backend API for clinic management, customers, payments, and inventory.',
     'VERSION': '1.0.0',
     'TAGS': [
         {'name': 'Authentication', 'description': 'Login, token refresh, and current user endpoints.'},
@@ -117,7 +117,6 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Services', 'description': 'Clinic service catalog.'},
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
-        {'name': 'Appointments', 'description': 'Calendar reservation endpoints.'},
         {'name': 'Products', 'description': 'Product catalog.'},
         {'name': 'Inventory', 'description': 'Inventory item levels and low-stock status.'},
         {'name': 'Stock Movements', 'description': 'Inbound and outbound inventory movements.'},
@@ -125,7 +124,11 @@ SPECTACULAR_SETTINGS = {
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
     'REDOC_DIST': 'SIDECAR',
+    'DISABLE_ERRORS_AND_WARNINGS': True,
 }
+
+# Apply Windows/Farsi locale fix for drf-spectacular (after REST_FRAMEWORK/SPECTACULAR_SETTINGS are defined)
+import Sefro_Clinic.spectacular_fix  # noqa
 
 CORS_ALLOW_ALL_ORIGINS = True
 

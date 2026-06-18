@@ -42,7 +42,7 @@ class CustomersE2ETest(TestCase):
     def test_02_customer_full_crud(self):
         list_resp = self.client.get('/api/customers/')
         self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(list_resp.data), 1)
+        self.assertGreaterEqual(len(list_resp.data['results']), 1)
 
         create_resp = self.client.post('/api/customers/', {
             'first_name': 'Sara', 'last_name': 'Mohammadi',
@@ -76,7 +76,7 @@ class CustomersE2ETest(TestCase):
     def test_03_service_full_crud(self):
         list_resp = self.client.get('/api/services/')
         self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(list_resp.data), 1)
+        self.assertGreaterEqual(list_resp.data['count'], 1)
 
         create_resp = self.client.post('/api/services/', {
             'name': 'Massage', 'description': 'Relaxing massage',
@@ -102,9 +102,14 @@ class CustomersE2ETest(TestCase):
         self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
 
     def test_04_visit_full_crud(self):
+        now = timezone.now()
+        start_at = '1404-03-23 14:00'
+        end_at = '1404-03-23 15:00'
+
         create_resp = self.client.post('/api/visits/', {
             'customer': self.customer.id,
-            'visit_date': timezone.now().isoformat(),
+            'start_at': start_at,
+            'end_at': end_at,
             'services': [self.service.id],
         }, format='json')
         self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
@@ -118,24 +123,98 @@ class CustomersE2ETest(TestCase):
 
         update_resp = self.client.put(f'/api/visits/{vid}/', {
             'customer': self.customer.id,
-            'visit_date': timezone.now().isoformat(),
+            'start_at': '1404-04-10 10:00',
+            'end_at': '1404-04-10 11:00',
             'services': [self.service.id],
             'notes': 'Follow-up needed',
+            'status': 'confirmed',
         }, format='json')
         self.assertEqual(update_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(update_resp.data['notes'], 'Follow-up needed')
+        self.assertEqual(update_resp.data['status'], 'confirmed')
 
         patch_resp = self.client.patch(f'/api/visits/{vid}/', {
-            'notes': 'No follow-up needed',
+            'status': 'completed',
         }, format='json')
         self.assertEqual(patch_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_resp.data['status'], 'completed')
 
         delete_resp = self.client.delete(f'/api/visits/{vid}/')
         self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
 
+    def test_05_visit_search_by_customer_name(self):
+        start_at = '1404-05-01 10:00'
+        end_at = '1404-05-01 11:00'
+        self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': start_at,
+            'end_at': end_at,
+            'services': [self.service.id],
+        }, format='json')
+
+        search_resp = self.client.get('/api/visits/?search=Ali')
+        self.assertEqual(search_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(search_resp.data['results']), 1)
+
+        search_resp = self.client.get('/api/visits/?search=Rezaei')
+        self.assertEqual(search_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(search_resp.data['results']), 1)
+
+    def test_06_visit_filter_by_status(self):
+        start_at = '1404-06-01 10:00'
+        end_at = '1404-06-01 11:00'
+        self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': start_at,
+            'end_at': end_at,
+            'services': [self.service.id],
+            'status': 'confirmed',
+        }, format='json')
+
+        filter_resp = self.client.get('/api/visits/?status=confirmed')
+        self.assertEqual(filter_resp.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(filter_resp.data['results']), 1)
+
+        filter_resp = self.client.get('/api/visits/?status=canceled')
+        self.assertEqual(filter_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(filter_resp.data['results']), 0)
+
+    def test_07_visit_custom_actions(self):
+        start_at = '1404-07-01 10:00'
+        end_at = '1404-07-01 11:00'
+        create_resp = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': start_at,
+            'end_at': end_at,
+            'services': [self.service.id],
+        }, format='json')
+        vid = create_resp.data['id']
+        self.assertEqual(create_resp.data['status'], 'pending')
+
+        confirm_resp = self.client.post(f'/api/visits/{vid}/confirm/')
+        self.assertEqual(confirm_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(confirm_resp.data['status'], 'confirmed')
+
+        complete_resp = self.client.post(f'/api/visits/{vid}/complete/')
+        self.assertEqual(complete_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(complete_resp.data['status'], 'completed')
+
+        create_resp2 = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': '1404-08-01 10:00',
+            'end_at': '1404-08-01 11:00',
+            'services': [self.service.id],
+        }, format='json')
+        vid2 = create_resp2.data['id']
+
+        cancel_resp = self.client.post(f'/api/visits/{vid2}/cancel/')
+        self.assertEqual(cancel_resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(cancel_resp.data['status'], 'canceled')
+
     def test_05_payment_full_crud(self):
+        now = timezone.now()
         visit = Visit.objects.create(
-            customer=self.customer, visit_date=timezone.now()
+            customer=self.customer, start_at=now, end_at=now
         )
         visit.services.add(self.service)
 
@@ -144,7 +223,7 @@ class CustomersE2ETest(TestCase):
             'visit': visit.id,
             'amount': '150000',
             'payment_method': 'cash',
-            'paid_at': timezone.now().isoformat(),
+            'paid_at': '1404-03-23 14:00',
         }, format='json')
         self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
         pid = create_resp.data['id']
@@ -160,7 +239,7 @@ class CustomersE2ETest(TestCase):
             'visit': visit.id,
             'amount': '200000',
             'payment_method': 'card',
-            'paid_at': timezone.now().isoformat(),
+            'paid_at': '1404-04-01 12:00',
         }, format='json')
         self.assertEqual(update_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(update_resp.data['amount'], '200000.00')

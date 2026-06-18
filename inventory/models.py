@@ -8,6 +8,8 @@ class Product(models.Model):
     name = models.CharField(max_length=120)
     sku = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True)
+    category = models.CharField(max_length=100, blank=True)
+    expiry_date = models.DateField(null=True, blank=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))])
 
     class Meta:

@@ -40,9 +40,9 @@ class CustomerSearchTest(TestCase):
     def test_search_by_name(self):
         resp = self.client.get('/api/customers/?search=John')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(len(resp.data['results']), 1)
 
     def test_search_by_mobile(self):
         resp = self.client.get('/api/customers/?search=09120000002')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(resp.data), 1)
+        self.assertEqual(len(resp.data['results']), 1)

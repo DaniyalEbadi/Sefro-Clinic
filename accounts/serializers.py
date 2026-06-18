@@ -1,12 +1,16 @@
 from rest_framework import serializers
 
+from Sefro_Clinic.fields import ShamsiDateTimeField
+
 from .models import ClinicUser
 
 
 class ClinicUserSerializer(serializers.ModelSerializer):
+    date_joined = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'phone_number', 'role']
+        fields = ['id', 'username', 'first_name', 'last_name', 'phone_number', 'role', 'date_joined']
 
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):

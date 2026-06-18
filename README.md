@@ -10,7 +10,6 @@ A comprehensive RESTful backend API for beauty clinics, built with **Django 5.0*
 
 - **مدیریت کاربران و کارمندان** — احراز هویت با JWT (Token + HttpOnly Cookie)
 - **مدیریت مشتریان** — ثبت مشخصات، تاریخچه مراجعات و پرداخت‌ها
-- **نوبت‌دهی آنلاین** — سیستم رزرو وقت با وضعیت‌های مختلف
 - **مدیریت خدمات** — تعریف و مدیریت خدمات کلینیک
 - **انبارداری** — کنترل موجودی کالا، ردیابی ورود/خروج
 - **داشبورد تحلیلی** — آمار فروش، مشتریان وفادار، هشدار موجودی
@@ -123,14 +122,6 @@ python manage.py runserver
 | POST | `/api/services/` | تعریف خدمت جدید |
 | GET/PUT/PATCH/DELETE | `/api/services/{id}/` | مدیریت خدمات |
 
-### 📅 نوبت‌ها (`/api/appointments/`)
-
-| متد | مسیر | توضیح |
-|------|------|---------|
-| GET | `/api/appointments/` | لیست نوبت‌ها |
-| POST | `/api/appointments/` | ثبت نوبت جدید |
-| GET/PUT/PATCH/DELETE | `/api/appointments/{id}/` | مدیریت نوبت |
-
 ### 🏪 انبار (`/api/inventory/`)
 
 | متد | مسیر | توضیح |
@@ -164,10 +155,6 @@ Sefro_Clinic/
 │   ├── models.py          # Customer, Visit, Payment, Service
 │   ├── serializers.py
 │   └── views.py           # ModelViewSet + Dashboard
-├── appointments/          # سیستم نوبت‌دهی
-│   ├── models.py          # Appointment
-│   ├── serializers.py
-│   └── views.py
 ├── inventory/             # مدیریت انبار
 │   ├── models.py          # Product, InventoryItem, StockMovement
 │   ├── serializers.py

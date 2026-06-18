@@ -118,7 +118,7 @@ class InventoryE2ETest(TestCase):
 
         list_resp = self.client.get('/api/inventory/movements/')
         self.assertEqual(list_resp.status_code, status.HTTP_200_OK)
-        self.assertGreaterEqual(len(list_resp.data), 2)
+        self.assertGreaterEqual(len(list_resp.data['results']), 2)
 
         detail_resp = self.client.get(f'/api/inventory/movements/{mid_in}/')
         self.assertEqual(detail_resp.status_code, status.HTTP_200_OK)

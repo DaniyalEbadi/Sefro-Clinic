@@ -42,8 +42,15 @@ class VisitModelTest(TestCase):
 
     def test_str(self):
         from django.utils import timezone
-        v = Visit.objects.create(customer=self.customer, visit_date=timezone.now())
+        now = timezone.now()
+        v = Visit.objects.create(customer=self.customer, start_at=now, end_at=now)
         self.assertIn('Ali', str(v))
+
+    def test_default_status_pending(self):
+        from django.utils import timezone
+        now = timezone.now()
+        v = Visit.objects.create(customer=self.customer, start_at=now, end_at=now)
+        self.assertEqual(v.status, Visit.Status.PENDING)
 
 
 class PaymentModelTest(TestCase):

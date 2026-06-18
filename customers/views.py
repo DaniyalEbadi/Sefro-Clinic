@@ -4,13 +4,15 @@ from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, TruncYe
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, viewsets
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from inventory.models import InventoryItem
 
-from .models import Customer, Payment, Service, Visit
-from .serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
+from .models import Category, Customer, Payment, Service, Visit
+from .serializers import (CategorySerializer, CustomerSerializer, PaymentSerializer,
+                          ServiceSerializer, VisitSerializer)
 
 
 class DashboardAPIView(APIView):
@@ -55,6 +57,13 @@ class DashboardAPIView(APIView):
         return Response(data)
 
 
+@extend_schema(tags=['Services'])
+class CategoryViewSet(viewsets.ModelViewSet):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+
 @extend_schema(tags=['Customers'])
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
@@ -76,6 +85,47 @@ class VisitViewSet(viewsets.ModelViewSet):
     queryset = Visit.objects.select_related('customer', 'staff').prefetch_related('services')
     serializer_class = VisitSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['customer__first_name', 'customer__last_name', 'notes', 'status']
+    ordering_fields = ['start_at', 'end_at', 'status', 'customer__first_name']
+    ordering = ['-start_at']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        status = self.request.query_params.get('status')
+        if status:
+            qs = qs.filter(status=status)
+        date_from = self.request.query_params.get('date_from')
+        if date_from:
+            qs = qs.filter(start_at__date__gte=date_from)
+        date_to = self.request.query_params.get('date_to')
+        if date_to:
+            qs = qs.filter(start_at__date__lte=date_to)
+        return qs
+
+    @action(detail=True, methods=['post'])
+    @extend_schema(responses=VisitSerializer)
+    def confirm(self, request, pk=None):
+        visit = self.get_object()
+        visit.status = Visit.Status.CONFIRMED
+        visit.save(update_fields=['status'])
+        return Response(self.get_serializer(visit).data)
+
+    @action(detail=True, methods=['post'])
+    @extend_schema(responses=VisitSerializer)
+    def complete(self, request, pk=None):
+        visit = self.get_object()
+        visit.status = Visit.Status.COMPLETED
+        visit.save(update_fields=['status'])
+        return Response(self.get_serializer(visit).data)
+
+    @action(detail=True, methods=['post'])
+    @extend_schema(responses=VisitSerializer)
+    def cancel(self, request, pk=None):
+        visit = self.get_object()
+        visit.status = Visit.Status.CANCELED
+        visit.save(update_fields=['status'])
+        return Response(self.get_serializer(visit).data)
 
 
 @extend_schema(tags=['Payments'])

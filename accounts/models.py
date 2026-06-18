@@ -20,6 +20,9 @@ class ClinicUser(AbstractUser):
 
     objects = ClinicUserManager()
 
+    class Meta:
+        ordering = ['username']
+
     def clean(self):
         super().clean()
         configured_username = settings.CLINIC_ADMIN['username']
