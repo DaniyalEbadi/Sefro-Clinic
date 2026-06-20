@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .models import ClinicUser
+from .permissions import IsAdmin, IsAdminOrReadOnly
 from .serializers import ClinicUserSerializer, EmployeeCreateSerializer, EmployeeUpdateSerializer
 
 
@@ -75,20 +76,20 @@ class MeAPIView(APIView):
 class EmployeeCreateAPIView(generics.CreateAPIView):
     queryset = ClinicUser.objects.filter(role=ClinicUser.Role.EMPLOYEE)
     serializer_class = EmployeeCreateSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
 
 
 @extend_schema(tags=['Employees'])
 class EmployeeListAPIView(generics.ListAPIView):
     queryset = ClinicUser.objects.filter(role=ClinicUser.Role.EMPLOYEE)
     serializer_class = ClinicUserSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated]
 
 
 @extend_schema(tags=['Employees'])
 class EmployeeRetrieveUpdateDestroyAPIView(generics.RetrieveUpdateDestroyAPIView):
     queryset = ClinicUser.objects.filter(role=ClinicUser.Role.EMPLOYEE)
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
 
     def get_serializer_class(self):
         if self.request.method in ('PUT', 'PATCH'):

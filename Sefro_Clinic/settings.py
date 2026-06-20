@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     'accounts',
     'customers',
     'inventory',
+    'logs',
 ]
 
 MIDDLEWARE = [
@@ -32,6 +33,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'logs.middleware.RequestUserMiddleware',
 ]
 
 ROOT_URLCONF = 'Sefro_Clinic.urls'
@@ -118,8 +120,6 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
         {'name': 'Products', 'description': 'Product catalog.'},
-        {'name': 'Inventory', 'description': 'Inventory item levels and low-stock status.'},
-        {'name': 'Stock Movements', 'description': 'Inbound and outbound inventory movements.'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',

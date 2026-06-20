@@ -5,24 +5,11 @@ from django.core.validators import MinValueValidator
 from django.db import models
 
 
-class Category(models.Model):
-    name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
-
-    class Meta:
-        ordering = ['name']
-        verbose_name_plural = 'categories'
-
-    def __str__(self):
-        return self.name
-
-
 class Service(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'))
     time = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
-    category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name='services', null=True, blank=True)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -37,8 +24,9 @@ class Customer(models.Model):
     last_name = models.CharField(max_length=100)
     mobile_number = models.CharField(max_length=20, unique=True)
     national_id = models.CharField(max_length=20, unique=True)
-    bitmoji_code = models.CharField(max_length=50, unique=True)
+    bitmoji_code = models.CharField(max_length=50, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    satisfaction = models.PositiveSmallIntegerField(null=True, blank=True, help_text='Customer satisfaction rating 1-5')
     notes = models.TextField(blank=True)
 
     class Meta:
@@ -67,6 +55,14 @@ class Customer(models.Model):
     def total_payments(self):
         total = self.payments.aggregate(total=models.Sum('amount'))['total']
         return total or Decimal('0')
+
+    @property
+    def last_visit_date(self):
+        last = self.visits.order_by('-start_at').first()
+        if not last:
+            return None
+        from Sefro_Clinic.fields import greg_to_shamsi_date
+        return greg_to_shamsi_date(last.start_at)
 
 
 class Visit(models.Model):

@@ -10,7 +10,7 @@ class ClinicUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'phone_number', 'role', 'date_joined']
+        fields = ['id', 'username', 'role', 'date_joined']
 
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
@@ -18,7 +18,7 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'phone_number', 'password']
+        fields = ['id', 'username', 'password']
 
     def create(self, validated_data):
         password = validated_data.pop('password')
@@ -33,7 +33,7 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'first_name', 'last_name', 'phone_number', 'password']
+        fields = ['id', 'username', 'password']
         read_only_fields = ['id']
 
     def update(self, instance, validated_data):
