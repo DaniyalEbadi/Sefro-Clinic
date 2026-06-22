@@ -8,3 +8,5 @@ server.err
 server.log
 .qodo/
 .qwen/
+.vscode/
+test_all.py
