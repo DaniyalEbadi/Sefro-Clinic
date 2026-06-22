@@ -23,7 +23,7 @@ class VisitSerializer(serializers.ModelSerializer):
 
 
 class PaymentSerializer(serializers.ModelSerializer):
-    paid_at = ShamsiDateTimeField()
+    paid_at = ShamsiDateTimeField(required=False)
     customer_name = serializers.SerializerMethodField()
 
     class Meta:

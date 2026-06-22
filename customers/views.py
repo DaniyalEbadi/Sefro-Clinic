@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from collections import defaultdict
 
 import jdatetime
@@ -23,7 +23,7 @@ def _shamsi_today_range():
     now = timezone.localtime(timezone.now())
     shamsi_date = jdatetime.datetime.fromgregorian(datetime=now).date()
     greg_date = shamsi_date.togregorian()
-    day_start = timezone.make_aware(datetime.combine(greg_date, datetime.min.time()))
+    day_start = timezone.make_aware(datetime.combine(greg_date, time.min))
     day_end = day_start + timedelta(days=1)
     return day_start, day_end
 
@@ -129,8 +129,8 @@ def _shamsi_period_range(period):
     else:
         return None, None
 
-    gs = timezone.make_aware(datetime.combine(start.togregorian(), datetime.min.time()))
-    ge = timezone.make_aware(datetime.combine(end.togregorian(), datetime.min.time()))
+    gs = timezone.make_aware(datetime.combine(start.togregorian(), time.min))
+    ge = timezone.make_aware(datetime.combine(end.togregorian(), time.min))
     return gs, ge
 
 
@@ -450,8 +450,8 @@ class VisitViewSet(viewsets.ModelViewSet):
                 else:
                     smonth_end = jdatetime.date(int(year), int(month) + 1, 1)
                 gend = smonth_end.togregorian()
-                day_start = timezone.make_aware(datetime.combine(gstart, datetime.min.time()))
-                day_end = timezone.make_aware(datetime.combine(gend, datetime.min.time()))
+                day_start = timezone.make_aware(datetime.combine(gstart, time.min))
+                day_end = timezone.make_aware(datetime.combine(gend, time.min))
                 qs = qs.filter(start_at__gte=day_start, start_at__lt=day_end)
             except ValueError:
                 pass
@@ -509,8 +509,8 @@ class VisitViewSet(viewsets.ModelViewSet):
         try:
             greg_date = shamsi_to_greg_date(shamsi_date_str)
             hour, minute = map(int, time_str.split(':'))
-            start_dt = timezone.make_aware(datetime.combine(greg_date, datetime(hour=hour, minute=minute).time()))
-        except (ValueError, TypeError):
+            start_dt = timezone.make_aware(datetime.combine(greg_date, time(hour=hour, minute=minute)))
+        except (ValueError, TypeError, serializers.ValidationError):
             return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
 
         if start_dt < timezone.now():
@@ -565,7 +565,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
             qs = qs.filter(paid_at__lt=shamsi_to_greg_date(date_to) + timedelta(days=1))
 
         service_totals = {}
-        for payment in qs.iterator():
+        for payment in qs.all():
             if not payment.visit:
                 continue
             for service in payment.visit.services.all():
