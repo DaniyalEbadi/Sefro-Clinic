@@ -1,4 +1,5 @@
 import sys
+from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
@@ -32,15 +33,16 @@ def _log_post_save(sender, instance, created, **kwargs):
     if sender in SKIP_MODELS:
         return
     try:
-        action = AuditLog.Action.CREATE if created else AuditLog.Action.UPDATE
-        AuditLog.objects.create(
-            user=get_current_user(),
-            action=action,
-            model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
-            object_id=instance.pk,
-            object_repr=str(instance)[:255],
-            changes=_collect_fields(instance),
-        )
+        with transaction.atomic():
+            action = AuditLog.Action.CREATE if created else AuditLog.Action.UPDATE
+            AuditLog.objects.create(
+                user=get_current_user(),
+                action=action,
+                model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
+                object_id=instance.pk,
+                object_repr=str(instance)[:255],
+                changes=_collect_fields(instance),
+            )
     except Exception as e:
         _safe_write(f'[audit_log] post_save error: {e}')
 
@@ -50,13 +52,14 @@ def _log_post_delete(sender, instance, **kwargs):
     if sender in SKIP_MODELS:
         return
     try:
-        AuditLog.objects.create(
-            user=get_current_user(),
-            action=AuditLog.Action.DELETE,
-            model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
-            object_id=instance.pk,
-            object_repr=str(instance)[:255],
-            changes=_collect_fields(instance),
-        )
+        with transaction.atomic():
+            AuditLog.objects.create(
+                user=get_current_user(),
+                action=AuditLog.Action.DELETE,
+                model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
+                object_id=instance.pk,
+                object_repr=str(instance)[:255],
+                changes=_collect_fields(instance),
+            )
     except Exception as e:
         _safe_write(f'[audit_log] post_delete error: {e}')
