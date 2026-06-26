@@ -111,3 +111,15 @@ class Payment(models.Model):
 
     def __str__(self):
         return f'{self.customer} - {self.amount}'
+
+
+class WorkTime(models.Model):
+    start_time = models.TimeField(verbose_name='ساعت شروع')
+    end_time = models.TimeField(verbose_name='ساعت پایان')
+
+    class Meta:
+        verbose_name = 'زمان کاری'
+        verbose_name_plural = 'ساعات کاری'
+
+    def __str__(self):
+        return f'{self.start_time:%H:%M} تا {self.end_time:%H:%M}'

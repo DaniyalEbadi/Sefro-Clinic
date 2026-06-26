@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Customer, Payment, Service, Visit
+from .models import Customer, Payment, Service, Visit, WorkTime
 
 
 @admin.register(Service)
@@ -26,3 +26,8 @@ class VisitAdmin(admin.ModelAdmin):
 class PaymentAdmin(admin.ModelAdmin):
     list_display = ('customer', 'amount', 'payment_method', 'paid_at')
     list_filter = ('payment_method', 'paid_at')
+
+
+@admin.register(WorkTime)
+class WorkTimeAdmin(admin.ModelAdmin):
+    list_display = ('start_time', 'end_time')
