@@ -556,9 +556,6 @@ class VisitViewSet(viewsets.ModelViewSet):
         except (ValueError, TypeError, serializers.ValidationError):
             return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if start_dt < timezone.now():
-            return Response({'error': 'Reservation must be in the future'}, status=status.HTTP_400_BAD_REQUEST)
-
         services = list(Service.objects.filter(id__in=service_ids))
         if not services:
             return Response({'error': 'No valid services found'}, status=status.HTTP_400_BAD_REQUEST)
