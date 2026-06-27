@@ -439,8 +439,8 @@ class ServiceViewSet(viewsets.ModelViewSet):
     parameters=[
         OpenApiParameter('year', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Shamsi year'),
         OpenApiParameter('month', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Shamsi month (1-12)'),
-        OpenApiParameter('date_from', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Gregorian date YYYY-MM-DD'),
-        OpenApiParameter('date_to', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Gregorian date YYYY-MM-DD'),
+        OpenApiParameter('date_from', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Shamsi date YYYY-MM-DD'),
+        OpenApiParameter('date_to', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Shamsi date YYYY-MM-DD'),
         OpenApiParameter('status', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Visit status'),
     ],
 )
@@ -493,10 +493,18 @@ class VisitViewSet(viewsets.ModelViewSet):
 
         date_from = self.request.query_params.get('date_from')
         if date_from:
-            qs = qs.filter(start_at__date__gte=date_from)
+            try:
+                gdate = shamsi_to_greg_date(date_from)
+                qs = qs.filter(start_at__date__gte=gdate)
+            except (ValueError, TypeError, serializers.ValidationError):
+                pass
         date_to = self.request.query_params.get('date_to')
         if date_to:
-            qs = qs.filter(start_at__date__lte=date_to)
+            try:
+                gdate = shamsi_to_greg_date(date_to)
+                qs = qs.filter(start_at__date__lte=gdate)
+            except (ValueError, TypeError, serializers.ValidationError):
+                pass
         return qs
 
     @action(detail=True, methods=['post'])
