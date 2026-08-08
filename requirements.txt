@@ -7,3 +7,4 @@ drf-spectacular-sidecar
 django-cors-headers
 jdatetime
 tzdata
+psycopg2-binary

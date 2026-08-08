@@ -2,21 +2,7 @@ from rest_framework import serializers
 
 from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
-from .models import Customer, Payment, Service, Visit, WorkTime
-
-
-class ShortTimeField(serializers.CharField):
-    def to_representation(self, value):
-        if isinstance(value, str):
-            return value
-        return value.strftime('%H:%M')
-
-    def to_internal_value(self, value):
-        from datetime import datetime
-        try:
-            return datetime.strptime(value, '%H:%M').time()
-        except (ValueError, TypeError):
-            raise serializers.ValidationError('فرمت زمان باید HH:MM باشد')
+from .models import Customer, Payment, Service, Visit
 
 
 class ServiceSerializer(serializers.ModelSerializer):
@@ -35,6 +21,13 @@ class VisitSerializer(serializers.ModelSerializer):
         fields = ['id', 'customer', 'staff', 'services', 'service_names', 'start_at', 'end_at',
                   'status', 'notes']
 
+    def validate(self, attrs):
+        start_at = attrs.get('start_at')
+        end_at = attrs.get('end_at')
+        if start_at and end_at and end_at < start_at:
+            raise serializers.ValidationError({'end_at': 'پایان ویزیت باید بعد از شروع آن باشد.'})
+        return attrs
+
 
 class PaymentSerializer(serializers.ModelSerializer):
     paid_at = ShamsiDateTimeField(required=False)
@@ -46,15 +39,6 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, obj):
         return str(obj.customer)
-
-
-class WorkTimeSerializer(serializers.ModelSerializer):
-    start_time = ShortTimeField()
-    end_time = ShortTimeField()
-
-    class Meta:
-        model = WorkTime
-        fields = ['id', 'start_time', 'end_time']
 
 
 class CustomerSerializer(serializers.ModelSerializer):

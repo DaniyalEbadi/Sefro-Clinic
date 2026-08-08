@@ -31,7 +31,7 @@ def shamsi_to_greg_dt(value):
     try:
         dt = jdatetime.datetime.strptime(str(value), SHAMSI_DATETIME_FORMAT)
         return dt.togregorian()
-    except (ValueError, jdatetime.InvalidDate):
+    except ValueError:
         raise serializers.ValidationError(f'Invalid Shamsi datetime format. Use {SHAMSI_DATETIME_FORMAT}')
 
 

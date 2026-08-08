@@ -13,9 +13,9 @@ from rest_framework.views import APIView
 from accounts.permissions import IsAdmin, IsAdminOrReadOnly
 from Sefro_Clinic.fields import greg_to_shamsi_date, shamsi_to_greg_date, shamsi_to_greg_dt
 
-from .models import Customer, Payment, Service, Visit, WorkTime
+from .models import Customer, Payment, Service, Visit
 from .serializers import (CustomerSerializer, PaymentSerializer,
-                          ServiceSerializer, VisitSerializer, WorkTimeSerializer)
+                          ServiceSerializer, VisitSerializer)
 
 
 def _shamsi_today_range():
@@ -397,31 +397,6 @@ class ReferralReportView(APIView):
         })
 
 
-def validate_visit_work_time(start_dt, end_dt):
-    wt = WorkTime.objects.first()
-    if not wt:
-        return
-    work_start = wt.start_time.hour * 60 + wt.start_time.minute
-    work_end = wt.end_time.hour * 60 + wt.end_time.minute
-    start_min = start_dt.hour * 60 + start_dt.minute
-    end_min = end_dt.hour * 60 + end_dt.minute
-    if end_min < start_min:
-        end_min += 24 * 60
-    if start_min < work_start or start_min > work_end or end_min > work_end:
-        raise serializers.ValidationError(
-            f'ساعت کاری کلینیک از {wt.start_time:%H:%M} تا {wt.end_time:%H:%M} می‌باشد. '
-            'لطفاً در ساعات کاری وقت رزرو کنید.'
-        )
-
-
-@extend_schema(tags=['Work Time'])
-class WorkTimeViewSet(viewsets.ModelViewSet):
-    queryset = WorkTime.objects.all()
-    serializer_class = WorkTimeSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
-    pagination_class = None
-
-
 @extend_schema(tags=['Customers'])
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
@@ -458,17 +433,9 @@ class VisitViewSet(viewsets.ModelViewSet):
     ordering = ['-start_at']
 
     def perform_create(self, serializer):
-        start_at = serializer.validated_data.get('start_at')
-        end_at = serializer.validated_data.get('end_at')
-        if start_at and end_at:
-            validate_visit_work_time(start_at, end_at)
         serializer.save()
 
     def perform_update(self, serializer):
-        start_at = serializer.validated_data.get('start_at')
-        end_at = serializer.validated_data.get('end_at')
-        if start_at and end_at:
-            validate_visit_work_time(start_at, end_at)
         serializer.save()
 
     def get_queryset(self):
@@ -566,8 +533,6 @@ class VisitViewSet(viewsets.ModelViewSet):
 
         total_minutes = sum(s.time for s in services)
         end_dt = start_dt + timedelta(minutes=total_minutes)
-
-        validate_visit_work_time(start_dt, end_dt)
 
         visit = Visit.objects.create(
             customer_id=customer_id,
