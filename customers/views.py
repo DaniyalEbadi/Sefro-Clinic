@@ -401,9 +401,13 @@ def validate_visit_work_time(start_dt, end_dt):
     wt = WorkTime.objects.first()
     if not wt:
         return
-    start_t = start_dt.time()
-    end_t = end_dt.time()
-    if start_t < wt.start_time or end_t > wt.end_time:
+    work_start = wt.start_time.hour * 60 + wt.start_time.minute
+    work_end = wt.end_time.hour * 60 + wt.end_time.minute
+    start_min = start_dt.hour * 60 + start_dt.minute
+    end_min = end_dt.hour * 60 + end_dt.minute
+    if end_min < start_min:
+        end_min += 24 * 60
+    if start_min < work_start or start_min > work_end or end_min > work_end:
         raise serializers.ValidationError(
             f'ساعت کاری کلینیک از {wt.start_time:%H:%M} تا {wt.end_time:%H:%M} می‌باشد. '
             'لطفاً در ساعات کاری وقت رزرو کنید.'

@@ -1,4 +1,5 @@
 import sys
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
@@ -8,6 +9,8 @@ from .models import AuditLog
 
 SKIP_MODELS = {AuditLog}
 
+UserModel = get_user_model()
+
 
 def _safe_write(msg):
     try:
@@ -15,6 +18,17 @@ def _safe_write(msg):
         sys.stderr.flush()
     except Exception:
         pass
+
+
+def _current_user():
+    user = get_current_user()
+    if user is None:
+        return None
+    if isinstance(user, UserModel):
+        return user
+    if getattr(user, 'is_authenticated', False) is True:
+        return user
+    return None
 
 
 def _collect_fields(instance):
@@ -36,7 +50,7 @@ def _log_post_save(sender, instance, created, **kwargs):
         with transaction.atomic():
             action = AuditLog.Action.CREATE if created else AuditLog.Action.UPDATE
             AuditLog.objects.create(
-                user=get_current_user(),
+                user=_current_user(),
                 action=action,
                 model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
                 object_id=instance.pk,
@@ -54,7 +68,7 @@ def _log_post_delete(sender, instance, **kwargs):
     try:
         with transaction.atomic():
             AuditLog.objects.create(
-                user=get_current_user(),
+                user=_current_user(),
                 action=AuditLog.Action.DELETE,
                 model_name=f'{sender._meta.app_label}.{sender._meta.model_name}',
                 object_id=instance.pk,
