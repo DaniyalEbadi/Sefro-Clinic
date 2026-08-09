@@ -4,6 +4,8 @@
 
 A comprehensive RESTful backend API for beauty clinics, built with **Django 5.0** & **Django REST Framework**.
 
+[![CI/CD](https://github.com/DaniyalEbadi/Sefro-Clinic/actions/workflows/ci.yml/badge.svg)](https://github.com/DaniyalEbadi/Sefro-Clinic/actions)
+
 ---
 
 ## ✨ ویژگی‌ها (Features)
