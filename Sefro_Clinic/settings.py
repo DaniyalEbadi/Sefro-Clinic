@@ -1,12 +1,19 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-&v43(g_+lr^dfloe3nh3)x_i#9!g&!pv6k6a$!n2-&*-g5rpb-',
-)
+load_dotenv(BASE_DIR / '.env')
+
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY is not set. Copy .env.example to .env and fill in the values.'
+    )
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
@@ -65,7 +72,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.environ.get('POSTGRES_DB', 'sefro_clinic'),
         'USER': os.environ.get('POSTGRES_USER', 'postgres'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'Danial2017!'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
         'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
     }
@@ -140,9 +147,15 @@ import Sefro_Clinic.spectacular_fix  # noqa
 
 CORS_ALLOW_ALL_ORIGINS = True
 
+CLINIC_ADMIN_USERNAME = os.environ.get('CLINIC_ADMIN_USERNAME', '')
+CLINIC_ADMIN_PASSWORD = os.environ.get('CLINIC_ADMIN_PASSWORD', '')
+if not CLINIC_ADMIN_USERNAME or not CLINIC_ADMIN_PASSWORD:
+    raise ImproperlyConfigured(
+        'CLINIC_ADMIN_USERNAME and CLINIC_ADMIN_PASSWORD must be set in .env.'
+    )
 CLINIC_ADMIN = {
-    'username': 'sefro_admin',
-    'password': 'SefroClinic@2026',
+    'username': CLINIC_ADMIN_USERNAME,
+    'password': CLINIC_ADMIN_PASSWORD,
     'first_name': 'System',
     'last_name': 'Admin',
 }

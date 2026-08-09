@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-sefro_clinic}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Danial2017!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -17,11 +17,14 @@ services:
   web:
     build: .
     environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
       POSTGRES_DB: ${POSTGRES_DB:-sefro_clinic}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Danial2017!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
+      CLINIC_ADMIN_USERNAME: ${CLINIC_ADMIN_USERNAME:?set CLINIC_ADMIN_USERNAME in .env}
+      CLINIC_ADMIN_PASSWORD: ${CLINIC_ADMIN_PASSWORD:?set CLINIC_ADMIN_PASSWORD in .env}
       DJANGO_DEBUG: "True"
       DJANGO_ALLOWED_HOSTS: "127.0.0.1,localhost"
     ports:
