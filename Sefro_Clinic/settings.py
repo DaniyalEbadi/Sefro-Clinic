@@ -1,10 +1,14 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-&v43(g_+lr^dfloe3nh3)x_i#9!g&!pv6k6a$!n2-&*-g5rpb-'
-DEBUG = True
-ALLOWED_HOSTS = []
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-&v43(g_+lr^dfloe3nh3)x_i#9!g&!pv6k6a$!n2-&*-g5rpb-',
+)
+DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -59,11 +63,11 @@ WSGI_APPLICATION = 'Sefro_Clinic.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'sefro_clinic',
-        'USER': 'postgres',
-        'PASSWORD': 'Danial2017!',
-        'HOST': '127.0.0.1',
-        'PORT': '5432',
+        'NAME': os.environ.get('POSTGRES_DB', 'sefro_clinic'),
+        'USER': os.environ.get('POSTGRES_USER', 'postgres'),
+        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'Danial2017!'),
+        'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
+        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
     }
 }
 

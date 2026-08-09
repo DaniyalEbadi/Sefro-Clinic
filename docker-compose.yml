@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sefro_clinic}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Danial2017!}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sefro_clinic"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    build: .
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sefro_clinic}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Danial2017!}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_DEBUG: "True"
+      DJANGO_ALLOWED_HOSTS: "127.0.0.1,localhost"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

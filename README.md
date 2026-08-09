@@ -28,16 +28,38 @@ A comprehensive RESTful backend API for beauty clinics, built with **Django 5.0*
 | SimpleJWT | احراز هویت JWT |
 | drf-spectacular | مستندات Swagger/OpenAPI |
 | Argon2 | هش کردن رمز عبور (امن‌ترین روش) |
-| SQLite | پایگاه داده (قابل ارتقا به PostgreSQL) |
+| PostgreSQL | پایگاه داده |
+| Docker | اجرای کل پروژه با یک دستور |
+| Gunicorn | سرور WSGI درون کانتینر |
 
 ---
 
 ## 🚀 نصب و راه‌اندازی (Installation)
 
+### ✅ روش سریع با Docker (پیشنهادی)
+
+فقط **Docker Desktop** را نصب کنید؛ بقیه چیزها (Python، PostgreSQL و ...) خودکار انجام می‌شود:
+
+```bash
+# 1. کلون کردن پروژه
+git clone https://github.com/DaniyalEbadi/Sefro-Clinic.git
+cd Sefro-Clinic
+
+# 2. ساخت و اجرای کامل (دیتابیس PostgreSQL خودکار ساخته می‌شود)
+docker compose up -d --build
+```
+
+- پس از اولین اجرا، مایگریشن‌ها و کاربر ادمین به صورت خودکار ساخته می‌شوند.
+- داده‌ها در یک volume به نام `postgres_data` نگه‌داری می‌شوند و با ری‌استارت از بین نمی‌روند.
+- برای متوقف کردن: `docker compose down` (داده‌ها باقی می‌مانند) — برای حذف کامل داده‌ها: `docker compose down -v`.
+
+### 🐍 روش دستی (بدون Docker)
+
 ### پیش‌نیازها (Prerequisites)
 
 - Python 3.12 یا بالاتر
 - pip (Python package manager)
+- PostgreSQL (پایگاه داده باید ساخته شود: `CREATE DATABASE sefro_clinic;`)
 
 ### مراحل نصب
 
