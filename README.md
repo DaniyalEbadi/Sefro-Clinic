@@ -36,64 +36,111 @@ A comprehensive RESTful backend API for beauty clinics, built with **Django 5.0*
 
 ## 🚀 نصب و راه‌اندازی (Installation)
 
-### ✅ روش سریع با Docker (پیشنهادی)
+> حداقل پیش‌نیاز: فقط **Docker Desktop**. بقیه چیزها (Python، PostgreSQL، Django) خودکار نصب می‌شوند.
 
-فقط **Docker Desktop** را نصب کنید؛ بقیه چیزها (Python، PostgreSQL و ...) خودکار انجام می‌شود:
+---
 
-```bash
-# 1. کلون کردن پروژه
+### ✅ روش ۱ — اجرا با Docker (ساده‌ترین روش، پیشنهادی)
+
+**قدم ۱ — نصب Docker Desktop:**
+از https://www.docker.com/products/docker-desktop/ نصب و اجرا کنید (اگر نصب است، فقط مطمئن شوید باز است — آیکونش در تسک‌بار باشد).
+
+**قدم ۲ — کلون کردن پروژه** (در PowerShell یا Terminal):
+
+```powershell
 git clone https://github.com/DaniyalEbadi/Sefro-Clinic.git
 cd Sefro-Clinic
+```
 
-# 2. ساخت و اجرای کامل (دیتابیس PostgreSQL خودکار ساخته می‌شود)
+**قدم ۳ — ساختن فایل `.env`** (تنظیمات و رمزهای امن):
+
+```powershell
+# Windows PowerShell:
+copy .env.example .env
+
+# Linux / Mac:
+cp .env.example .env
+```
+
+**قدم ۴ — پر کردن فایل `.env`:** فایل را با هر ویرایشگر متنی (Notepad) باز کنید و مقادیر زیر را عوض کنید:
+
+| متغیر | چه چیزی بگذارم؟ |
+|--------|----------------|
+| `DJANGO_SECRET_KEY` | یک متن تصادفی بلند (حداقل ۵۰ حرف/عدد) — از https://djecrety.ir بگیرید یا خودتان تایپ کنید |
+| `POSTGRES_PASSWORD` | یک رمز دلخواه برای دیتابیس (مثلاً `MyDb@12345`) |
+| `CLINIC_ADMIN_USERNAME` | نام کاربری ادمین (مثلاً `admin`) |
+| `CLINIC_ADMIN_PASSWORD` | رمز عبور ادمین (مثلاً `Admin@12345`) |
+
+> ⚠️ بدون این فایل پروژه بالا نمی‌آید — این کار عمدی است (امنیتی). فایل `.env` هرگز در Git ذخیره نمی‌شود و فقط روی کامپیوتر شماست.
+
+**قدم ۵ — اجرای کامل پروژه:**
+
+```powershell
 docker compose up -d --build
 ```
 
-- پس از اولین اجرا، مایگریشن‌ها و کاربر ادمین به صورت خودکار ساخته می‌شوند.
-- داده‌ها در یک volume به نام `postgres_data` نگه‌داری می‌شوند و با ری‌استارت از بین نمی‌روند.
-- برای متوقف کردن: `docker compose down` (داده‌ها باقی می‌مانند) — برای حذف کامل داده‌ها: `docker compose down -v`.
+- بار اول ۲–۳ دقیقه طول می‌کشد (دانلود Python و نصب پکیج‌ها). دفعات بعد سریع است:
+- فقط برای روشن/خاموش کردن بعدی: `docker compose up -d` و `docker compose down`
 
-### 🐍 روش دستی (بدون Docker)
+**قدم ۶ — باز کردن در مرورگر:**
 
-### پیش‌نیازها (Prerequisites)
+| سرویس | آدرس |
+|--------|------|
+| **مستندات API (Swagger)** | http://127.0.0.1:8000/api/docs/ |
+| **Django Admin** | http://127.0.0.1:8000/admin/ |
 
-- Python 3.12 یا بالاتر
-- pip (Python package manager)
-- PostgreSQL (پایگاه داده باید ساخته شود: `CREATE DATABASE sefro_clinic;`)
+وارد شوید با **نام کاربری و رمزی که در `.env` گذاشتید** (کاربر ادمین هنگام اولین اجرا خودکار ساخته می‌شود).
 
-### مراحل نصب
+**دستورهای مفید بعدی:**
 
-```bash
-# 1. کلون کردن پروژه
-git clone https://github.com/DaniyalEbadi/Sefro-Clinic.git
-cd Sefro-Clinic
-
-# 2. ایجاد محیط مجازی
-python -m venv venv
-
-# 3. فعال‌سازی محیط مجازی
-# Windows:
-venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# 4. نصب وابستگی‌ها
-pip install -r requirements.txt
-
-# 5. اجرای مایگریشن‌ها
-python manage.py migrate
-
-# 6. اجرای سرور توسعه
-python manage.py runserver
+```powershell
+docker compose ps            # وضعیت سرویس‌ها (باید Up / Healthy باشد)
+docker compose logs -f web   # دیدن لاگ‌های برنامه (خروج با Ctrl+C)
+docker compose down          # متوقف کردن (داده‌ها حفظ می‌شوند)
+docker compose down -v       # متوقف کردن + پاک کردن کامل دیتابیس
 ```
 
-### کاربر پیش‌فرض ادمین (Default Admin)
+---
 
-> پس از اجرای `migrate`، کاربر ادمین به صورت خودکار ساخته می‌شود.
+### 🐍 روش ۲ — اجرای دستی (بدون Docker، با venv)
 
-| کاربر | رمز عبور |
-|-------|-----------|
-| `sefro_admin` | `SefroClinic@2026` |
+**پیش‌نیازها:** Python 3.10 تا 3.12 و PostgreSQL نصب شده.
+
+**قدم ۱ — ساخت دیتابیس** در PostgreSQL (با psql یا pgAdmin):
+
+```sql
+CREATE DATABASE sefro_clinic;
+```
+
+**قدم ۲ — کلون و آماده‌سازی:**
+
+```powershell
+git clone https://github.com/DaniyalEbadi/Sefro-Clinic.git
+cd Sefro-Clinic
+python -m venv venv
+venv\Scripts\activate          # Linux/Mac: source venv/bin/activate
+pip install -r requirements.txt
+copy .env.example .env         # Linux/Mac: cp .env.example .env
+```
+
+**قدم ۳ — ویرایش `.env`:** `DJANGO_SECRET_KEY` و `CLINIC_ADMIN_*` را پر کنید؛ `POSTGRES_PASSWORD` را رمز PostgreSQL خودتان بگذارید (اگر کاربر/نام دیتابیس متفاوت است، `POSTGRES_USER` و `POSTGRES_DB` را هم عوض کنید).
+
+**قدم ۴ — اجرا:**
+
+```powershell
+python manage.py migrate
+python manage.py runserver 127.0.0.1:8000
+```
+
+---
+
+### 🆘 رفع مشکلات (Troubleshooting)
+
+| مشکل | راه‌حل |
+|------|--------|
+| خطای `DJANGO_SECRET_KEY is not set` یا `set POSTGRES_PASSWORD in .env` | فایل `.env` را از روی `.env.example` ساختی و مقادیرش را پر کردی؟ |
+| خطای `port 8000 is already in use` | برنامه دیگری روی پورت ۸۰۰۰ است؛ آن را ببندید یا در `docker-compose.yml` خط `"8000:8000"` را به `"8080:8000"` تغییر دهید و آدرس http://127.0.0.1:8080 را باز کنید |
+| مرورگر صفحه را باز نمی‌کند | اول `docker compose ps` بزنید (STATUS باید `Up`/`Healthy` باشد)، بعد `docker compose logs web` را ببینید |
 
 ---
 
@@ -166,7 +213,7 @@ python manage.py runserver
 ## 📂 ساختار پروژه (Project Structure)
 
 ```
-Sefro_Clinic/
+Sefro-Clinic/
 ├── accounts/              # مدیریت کاربران و احراز هویت
 │   ├── models.py          # مدل کاربر سفارشی (ClinicUser)
 │   ├── serializers.py     # سریالایزرهای کاربران
@@ -182,10 +229,13 @@ Sefro_Clinic/
 │   ├── serializers.py
 │   └── views.py
 ├── Sefro_Clinic/          # تنظیمات اصلی پروژه
-│   ├── settings.py        # تنظیمات (زبان فارسی، JWT، CORS و ...)
+│   ├── settings.py        # تنظیمات (زبان فارسی، JWT، CORS، .env و ...)
 │   ├── urls.py            # مسیریابی اصلی
 │   └── middleware.py
 ├── docs/                  # مستندات پروژه
+├── Dockerfile             # ساخت ایمیج برنامه
+├── docker-compose.yml     # اجرای کامل (web + PostgreSQL) با یک دستور
+├── .env.example           # الگوی فایل تنظیمات امن (باید کپی شود به .env)
 ├── manage.py              # ابزار مدیریت Django
 └── requirements.txt       # وابستگی‌ها
 ```
