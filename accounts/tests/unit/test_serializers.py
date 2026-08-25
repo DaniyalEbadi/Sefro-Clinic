@@ -2,7 +2,6 @@ from django.test import TestCase
 
 from accounts.models import ClinicUser
 from accounts.serializers import (
-    ClinicUserSerializer,
     EmployeeCreateSerializer,
     EmployeeUpdateSerializer,
 )
@@ -12,7 +11,7 @@ class EmployeeCreateSerializerTest(TestCase):
     def test_create_employee_sets_role(self):
         data = {
             'username': 'emp1',
-            'password': 'Test1234',
+            'password': 'Str0ng!Pass9',
             'first_name': 'John',
             'last_name': 'Doe',
             'phone_number': '09120000000',
@@ -21,7 +20,7 @@ class EmployeeCreateSerializerTest(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         user = serializer.save()
         self.assertEqual(user.role, ClinicUser.Role.EMPLOYEE)
-        self.assertTrue(user.check_password('Test1234'))
+        self.assertTrue(user.check_password('Str0ng!Pass9'))
         self.assertEqual(user.first_name, 'John')
 
 

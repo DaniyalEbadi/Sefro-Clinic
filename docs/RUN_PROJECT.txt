@@ -22,7 +22,7 @@ Sefro Clinic - Run Guide
 
 7) Default admin login:
    username: sefro_admin
-   password: SefroClinic@2026
+   password: <the CLINIC_ADMIN_PASSWORD value from your .env>
 
 8) Admin token login endpoint:
    POST /api/auth/token/

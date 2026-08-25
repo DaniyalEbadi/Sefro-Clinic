@@ -1,13 +1,23 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views import (AllReportsView, CustomerReportView, CustomerViewSet,
-                    DailyReportView, DashboardAPIView, MonthlyReportView,
-                    PaymentViewSet, QuarterlyReportView, ReferralReportView,
-                    ReportsAPIView, ServiceViewSet, VisitReportView,
-                    VisitViewSet, WeeklyReportView,
-                    YearlyReportView)
-
+from .views import (
+                    AllReportsView,
+                    CustomerReportView,
+                    CustomerViewSet,
+                    DailyReportView,
+                    DashboardAPIView,
+                    MonthlyReportView,
+                    PaymentViewSet,
+                    QuarterlyReportView,
+                    ReferralReportView,
+                    ReportsAPIView,
+                    ServiceViewSet,
+                    VisitReportView,
+                    VisitViewSet,
+                    WeeklyReportView,
+                    YearlyReportView,
+)
 
 router = DefaultRouter()
 router.register('customers', CustomerViewSet, basename='customer')

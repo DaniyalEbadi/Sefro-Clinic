@@ -10,7 +10,6 @@ from .views import (
     MeAPIView,
 )
 
-
 app_name = 'accounts'
 
 urlpatterns = [

@@ -1,0 +1,4 @@
+coverage==7.*
+ruff==0.*
+bandit==1.*
+pip-audit==2.*

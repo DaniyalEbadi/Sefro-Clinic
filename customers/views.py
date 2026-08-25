@@ -1,8 +1,8 @@
-from datetime import datetime, time, timedelta
 from collections import defaultdict
+from datetime import datetime, time, timedelta
 
 import jdatetime
-from django.db.models import Avg, Count, Q, Sum
+from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, status, viewsets
@@ -11,11 +11,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdmin, IsAdminOrReadOnly
-from Sefro_Clinic.fields import greg_to_shamsi_date, shamsi_to_greg_date, shamsi_to_greg_dt
+from Sefro_Clinic.fields import shamsi_to_greg_date
 
 from .models import Customer, Payment, Service, Visit
-from .serializers import (CustomerSerializer, PaymentSerializer,
-                          ServiceSerializer, VisitSerializer)
+from .serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
 
 
 def _shamsi_today_range():
@@ -32,7 +31,8 @@ def _shamsi_period_key(shamsi_date, period):
     if period == 'daily':
         return shamsi_date.strftime('%Y-%m-%d')
     elif period == 'weekly':
-        doy = shamsi_date.timetuple().tm_yday
+        year_start = shamsi_date.replace(day=1, month=1)
+        doy = (shamsi_date - year_start).days + 1
         wn = (doy - 1) // 7 + 1
         return f"{shamsi_date.year}-W{wn:02d}"
     elif period == 'monthly':

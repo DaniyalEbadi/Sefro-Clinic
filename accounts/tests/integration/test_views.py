@@ -4,26 +4,21 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import ClinicUser
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
 
 
 class EmployeeAPIViewTest(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.admin, _ = ClinicUser.objects.get_or_create(
-            username='sefro_admin',
-            defaults={'role': ClinicUser.Role.ADMIN, 'is_staff': True, 'is_superuser': True},
-        )
-        if not self.admin.check_password('SefroClinic@2026'):
-            self.admin.set_password('SefroClinic@2026')
-            self.admin.save()
+        make_admin()
         login_resp = self.client.post(reverse('accounts:token-obtain-pair'), {
-            'username': 'sefro_admin', 'password': 'SefroClinic@2026',
+            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
 
     def test_non_admin_cannot_create_employee(self):
         self.client.credentials()
-        emp_user = ClinicUser.objects.create_user(
+        ClinicUser.objects.create_user(
             username='emp', password='pass123', role=ClinicUser.Role.EMPLOYEE
         )
         login_resp = self.client.post(reverse('accounts:token-obtain-pair'), {

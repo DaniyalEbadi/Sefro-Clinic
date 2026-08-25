@@ -1,13 +1,16 @@
 import sys
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
 from .middleware import get_current_user
 from .models import AuditLog
 
-SKIP_MODELS = {AuditLog}
+# Internal/token-bookkeeping models must stay out of the audit trail.
+SKIP_MODELS = {AuditLog, OutstandingToken, BlacklistedToken}
 
 UserModel = get_user_model()
 

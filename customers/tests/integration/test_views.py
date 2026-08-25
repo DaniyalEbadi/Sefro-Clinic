@@ -1,28 +1,17 @@
 from django.test import TestCase
-from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import ClinicUser
-from customers.models import Customer, Service, Visit
+from customers.models import Customer
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
 
 
 class CustomerSearchTest(TestCase):
-    def _ensure_admin(self):
-        admin, _ = ClinicUser.objects.get_or_create(
-            username='sefro_admin',
-            defaults={'role': ClinicUser.Role.ADMIN, 'is_staff': True, 'is_superuser': True},
-        )
-        if not admin.check_password('SefroClinic@2026'):
-            admin.set_password('SefroClinic@2026')
-            admin.save()
-        return admin
-
     def setUp(self):
         self.client = APIClient()
-        self._ensure_admin()
+        make_admin()
         login_resp = self.client.post('/api/auth/token/', {
-            'username': 'sefro_admin', 'password': 'SefroClinic@2026',
+            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
 

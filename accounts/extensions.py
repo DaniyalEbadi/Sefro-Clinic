@@ -1,4 +1,5 @@
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
+
 from .authentication import CookieJWTAuthentication
 
 

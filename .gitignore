@@ -10,3 +10,8 @@ server.log
 .qwen/
 .vscode/
 test_all.py
+.coverage
+htmlcov/
+staticfiles/
+coverage.xml
+.run_pid

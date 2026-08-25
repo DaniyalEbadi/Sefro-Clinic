@@ -1,10 +1,12 @@
-from datetime import timedelta
-
 from django.conf import settings
+from django.middleware.csrf import get_token
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .models import ClinicUser
@@ -12,18 +14,27 @@ from .permissions import IsAdmin, IsAdminOrReadOnly
 from .serializers import ClinicUserSerializer, EmployeeCreateSerializer, EmployeeUpdateSerializer
 
 
-def set_jwt_cookies(response, access_token=None, refresh_token=None):
-    cookie_options = {
+def _cookie_options(max_age):
+    return {
         'httponly': settings.JWT_AUTH_COOKIE_HTTP_ONLY,
         'secure': settings.JWT_AUTH_COOKIE_SECURE,
         'samesite': settings.JWT_AUTH_COOKIE_SAMESITE,
         'path': '/',
-        'max_age': int(timedelta(days=7).total_seconds()),
+        'max_age': max_age,
     }
+
+
+def set_jwt_cookies(response, access_token=None, refresh_token=None):
+    access_max_age = int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds())
+    refresh_max_age = int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds())
     if access_token:
-        response.set_cookie(settings.JWT_AUTH_COOKIE, access_token, **cookie_options)
+        response.set_cookie(
+            settings.JWT_AUTH_COOKIE, access_token, **_cookie_options(access_max_age)
+        )
     if refresh_token:
-        response.set_cookie(settings.JWT_AUTH_REFRESH_COOKIE, refresh_token, **cookie_options)
+        response.set_cookie(
+            settings.JWT_AUTH_REFRESH_COOKIE, refresh_token, **_cookie_options(refresh_max_age)
+        )
 
 
 def clear_jwt_cookies(response):
@@ -31,18 +42,29 @@ def clear_jwt_cookies(response):
     response.delete_cookie(settings.JWT_AUTH_REFRESH_COOKIE, path='/', samesite=settings.JWT_AUTH_COOKIE_SAMESITE)
 
 
+
 @extend_schema(tags=['Authentication'])
 class ClinicTokenObtainPairView(TokenObtainPairView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth'
+
     def post(self, request, *args, **kwargs):
         response = super().post(request, *args, **kwargs)
-        access_token = response.data.get('access')
-        refresh_token = response.data.get('refresh')
-        set_jwt_cookies(response, access_token=access_token, refresh_token=refresh_token)
+        # Issue the CSRF cookie so cookie-authenticated clients can send X-CSRFToken.
+        get_token(request)
+        set_jwt_cookies(
+            response,
+            access_token=response.data.get('access'),
+            refresh_token=response.data.get('refresh'),
+        )
         return response
 
 
 @extend_schema(tags=['Authentication'])
 class ClinicTokenRefreshView(TokenRefreshView):
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth'
+
     def post(self, request, *args, **kwargs):
         if 'refresh' not in request.data:
             refresh_token = request.COOKIES.get(settings.JWT_AUTH_REFRESH_COOKIE)
@@ -50,7 +72,12 @@ class ClinicTokenRefreshView(TokenRefreshView):
                 request.data['refresh'] = refresh_token
 
         response = super().post(request, *args, **kwargs)
-        set_jwt_cookies(response, access_token=response.data.get('access'))
+        # With ROTATE_REFRESH_TOKENS the response carries a fresh refresh token too.
+        set_jwt_cookies(
+            response,
+            access_token=response.data.get('access'),
+            refresh_token=response.data.get('refresh'),
+        )
         return response
 
 
@@ -59,6 +86,15 @@ class LogoutAPIView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        raw_refresh = (
+            request.COOKIES.get(settings.JWT_AUTH_REFRESH_COOKIE)
+            or request.data.get('refresh')
+        )
+        if raw_refresh:
+            try:
+                RefreshToken(raw_refresh).blacklist()
+            except TokenError:
+                pass
         response = Response({'detail': 'Logged out.'})
         clear_jwt_cookies(response)
         return response

@@ -1,20 +1,17 @@
 import jdatetime
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
-from django.test import TestCase
 
-from accounts.models import ClinicUser
 from customers.models import Customer, Service
 from logs.models import AuditLog
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, EMPLOYEE_PASSWORD, make_admin, make_employee
 
 
 class AuditLogTest(TestCase):
     def setUp(self):
-        self.admin = ClinicUser.objects.get(username='sefro_admin')
-        self.employee = ClinicUser.objects.create_user(
-            username='emp_user', password='emp12345',
-            role=ClinicUser.Role.EMPLOYEE,
-        )
+        make_admin()
+        self.employee_user = make_employee()
         self.customer = Customer.objects.create(
             first_name='Ali', last_name='Rezaei',
             mobile_number='09121111111', national_id='001-0000001',
@@ -32,10 +29,10 @@ class AuditLogTest(TestCase):
         return client
 
     def _employee_client(self):
-        return self._client('emp_user', 'emp12345')
+        return self._client('emp_user', EMPLOYEE_PASSWORD)
 
     def _admin_client(self):
-        return self._client('sefro_admin', 'SefroClinic@2026')
+        return self._client(ADMIN_USERNAME, ADMIN_PASSWORD)
 
     def test_employee_crud_is_logged(self):
         client = self._employee_client()
@@ -59,7 +56,7 @@ class AuditLogTest(TestCase):
 
         client.delete(f'/api/visits/{vid}/')
 
-        logs = AuditLog.objects.filter(user=self.employee, model_name='customers.visit').order_by('timestamp')
+        logs = AuditLog.objects.filter(user=self.employee_user, model_name='customers.visit').order_by('timestamp')
         self.assertEqual(logs.count(), 3)
         actions = list(logs.values_list('action', flat=True))
         self.assertEqual(actions, ['CREATE', 'UPDATE', 'DELETE'])

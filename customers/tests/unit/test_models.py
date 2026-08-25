@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from customers.models import Customer, Service, Visit, Payment
+from customers.models import Customer, Payment, Service, Visit
 
 
 class CustomerModelTest(TestCase):

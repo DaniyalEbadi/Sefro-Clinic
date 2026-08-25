@@ -1,41 +1,21 @@
-name: CI/CD
+name: Tests
 
 on:
-  push:
-    branches: [master]
   pull_request:
     branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  test:
-    name: Run Tests (49)
+  lint:
+    name: Lint (ruff)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: sefro_clinic
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d sefro_clinic"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
-      CLINIC_ADMIN_USERNAME: sefro_admin
-      CLINIC_ADMIN_PASSWORD: SefroClinic@2026
-      POSTGRES_DB: sefro_clinic
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,21 +25,77 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Install dev dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -r requirements.txt
 
-      - name: Run tests
-        run: python manage.py test
+      - name: Ruff check
+        run: ruff check .
+
+  test:
+    name: Test suite + coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: ci-only-admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run full test suite with coverage
+        run: coverage run --source=accounts,customers,logs,Sefro_Clinic manage.py test --parallel 1 --noinput
+
+      - name: Enforce coverage threshold
+        run: coverage report --fail-under=90
+
+      - name: Generate coverage XML
+        run: coverage xml -o coverage.xml
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
 
   build:
     name: Build Docker image
-    needs: test
+    needs: [lint, test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

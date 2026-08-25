@@ -1,24 +1,40 @@
 import os
+import sys
+from datetime import timedelta
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
-
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv(BASE_DIR / '.env')
 
+
+def env_bool(name, default='False'):
+    return os.environ.get(name, default).strip().lower() in ('1', 'true', 'yes')
+
+
+def env_list(name, default=''):
+    return [item.strip() for item in os.environ.get(name, default).split(',') if item.strip()]
+
+
+# Throttling must not interfere with the test suite.
+TESTING = 'test' in sys.argv
+
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:
     raise ImproperlyConfigured(
         'DJANGO_SECRET_KEY is not set. Copy .env.example to .env and fill in the values.'
     )
-DEBUG = os.environ.get('DJANGO_DEBUG', 'True').lower() in ('1', 'true', 'yes')
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
+
+DEBUG = env_bool('DJANGO_DEBUG')
+
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS', '127.0.0.1,localhost')
+
+CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS')
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -26,12 +42,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'rest_framework_simplejwt',
+    'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
     'drf_spectacular_sidecar',
     'corsheaders',
     'accounts',
     'customers',
-    'inventory',
     'logs',
 ]
 
@@ -98,8 +114,36 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 AUTH_USER_MODEL = 'accounts.ClinicUser'
+
+# --- HTTPS / transport security (enable on the host, behind TLS) -------------
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT')
+SECURE_HSTS_SECONDS = 31536000 if SECURE_SSL_REDIRECT and not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_SSL_REDIRECT
+SECURE_HSTS_PRELOAD = SECURE_SSL_REDIRECT
+SESSION_COOKIE_SECURE = SECURE_SSL_REDIRECT
+CSRF_COOKIE_SECURE = SECURE_SSL_REDIRECT
+SECURE_REFERRER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
+
+# --- JWT --------------------------------------------------------------------
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': False,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
+JWT_AUTH_COOKIE = 'access_token'
+JWT_AUTH_REFRESH_COOKIE = 'refresh_token'
+JWT_AUTH_COOKIE_SECURE = env_bool('DJANGO_JWT_COOKIE_SECURE', str(SECURE_SSL_REDIRECT))
+JWT_AUTH_COOKIE_HTTP_ONLY = True
+JWT_AUTH_COOKIE_SAMESITE = 'Lax'
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -114,17 +158,29 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'rest_framework.views.exception_handler',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        # Login/refresh endpoints use the scoped 'auth' rate; keep it strict outside tests.
+        'auth': '100000/min' if TESTING else os.environ.get('THROTTLE_AUTH_RATE', '10/min'),
+        'anon': '100000/min' if TESTING else os.environ.get('THROTTLE_ANON_RATE', '60/min'),
+        'user': '100000/min' if TESTING else os.environ.get('THROTTLE_USER_RATE', '600/min'),
+    },
 }
 
-JWT_AUTH_COOKIE = 'access_token'
-JWT_AUTH_REFRESH_COOKIE = 'refresh_token'
-JWT_AUTH_COOKIE_SECURE = False
-JWT_AUTH_COOKIE_HTTP_ONLY = True
-JWT_AUTH_COOKIE_SAMESITE = 'Lax'
+# --- CORS -------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS')
+CORS_ALLOW_ALL_ORIGINS = env_bool('CORS_ALLOW_ALL_ORIGINS')
+CORS_ALLOW_CREDENTIALS = True
+
+# --- API docs ---------------------------------------------------------------
+DOCS_PUBLIC = env_bool('DJANGO_DOCS_PUBLIC')
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Sefro Clinic API',
-    'DESCRIPTION': 'Backend API for clinic management, customers, payments, and inventory.',
+    'DESCRIPTION': 'Backend API for clinic management, customers, and payments.',
     'VERSION': '1.0.0',
     'TAGS': [
         {'name': 'Authentication', 'description': 'Login, token refresh, and current user endpoints.'},
@@ -134,18 +190,12 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Services', 'description': 'Clinic service catalog.'},
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
-        {'name': 'Products', 'description': 'Product catalog.'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
     'REDOC_DIST': 'SIDECAR',
     'DISABLE_ERRORS_AND_WARNINGS': True,
 }
-
-# Apply Windows/Farsi locale fix for drf-spectacular (after REST_FRAMEWORK/SPECTACULAR_SETTINGS are defined)
-import Sefro_Clinic.spectacular_fix  # noqa
-
-CORS_ALLOW_ALL_ORIGINS = True
 
 CLINIC_ADMIN_USERNAME = os.environ.get('CLINIC_ADMIN_USERNAME', '')
 CLINIC_ADMIN_PASSWORD = os.environ.get('CLINIC_ADMIN_PASSWORD', '')
@@ -158,6 +208,33 @@ CLINIC_ADMIN = {
     'password': CLINIC_ADMIN_PASSWORD,
     'first_name': 'System',
     'last_name': 'Admin',
+}
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {
+            'format': '{levelname} {asctime} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'simple',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'),
+    },
+    'loggers': {
+        'django.request': {
+            'level': 'WARNING',
+            'propagate': True,
+        },
+    },
 }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

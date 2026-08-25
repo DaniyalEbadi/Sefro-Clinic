@@ -1,3 +1,4 @@
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from Sefro_Clinic.fields import ShamsiDateTimeField
@@ -20,6 +21,11 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
         model = ClinicUser
         fields = ['id', 'username', 'password', 'first_name', 'last_name', 'phone_number']
 
+    def validate_password(self, value):
+        candidate = ClinicUser(username=self.initial_data.get('username', ''))
+        validate_password(value, user=candidate)
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop('password')
         user = ClinicUser(**validated_data, role=ClinicUser.Role.EMPLOYEE)
@@ -35,6 +41,11 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
         model = ClinicUser
         fields = ['id', 'username', 'password', 'first_name', 'last_name', 'phone_number']
         read_only_fields = ['id']
+
+    def validate_password(self, value):
+        candidate = ClinicUser(username=self.initial_data.get('username', getattr(self.instance, 'username', '')))
+        validate_password(value, user=candidate)
+        return value
 
     def update(self, instance, validated_data):
         password = validated_data.pop('password', None)

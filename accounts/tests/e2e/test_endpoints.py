@@ -3,19 +3,13 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from accounts.models import ClinicUser
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
 
 
 class AccountsE2ETest(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.admin, _ = ClinicUser.objects.get_or_create(
-            username='sefro_admin',
-            defaults={'role': ClinicUser.Role.ADMIN, 'is_staff': True, 'is_superuser': True},
-        )
-        if not self.admin.check_password('SefroClinic@2026'):
-            self.admin.set_password('SefroClinic@2026')
-            self.admin.save()
+        self.admin = make_admin()
         self.employee_data = {
             'username': 'emp1',
             'password': 'TestPass123',
@@ -26,8 +20,8 @@ class AccountsE2ETest(TestCase):
 
     def _login_as_admin(self):
         resp = self.client.post(reverse('accounts:token-obtain-pair'), {
-            'username': 'sefro_admin',
-            'password': 'SefroClinic@2026',
+            'username': ADMIN_USERNAME,
+            'password': ADMIN_PASSWORD,
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         return resp

@@ -1,0 +1,19 @@
+[run]
+branch = True
+source = accounts, customers, logs, Sefro_Clinic
+omit =
+    */migrations/*
+    Sefro_Clinic/spectacular_fix.py
+    venv/*
+    tests/*
+    */tests/*
+    manage.py
+    */wsgi.py
+    */asgi.py
+
+[report]
+show_missing = True
+skip_empty = True
+
+[html]
+directory = htmlcov

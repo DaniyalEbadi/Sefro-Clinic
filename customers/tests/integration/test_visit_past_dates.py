@@ -1,4 +1,4 @@
-﻿from datetime import timedelta
+from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -7,12 +7,13 @@ from rest_framework.test import APIClient
 
 from accounts.models import ClinicUser
 from customers.models import Customer, Service, Visit
-
 from Sefro_Clinic.fields import greg_to_shamsi_dt
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
 
 
 class VisitUnrestrictedTimeTest(TestCase):
     def setUp(self):
+        make_admin()
         self.employee = ClinicUser.objects.create_user(
             username='emp_user', password='emp12345',
             role=ClinicUser.Role.EMPLOYEE,
@@ -153,7 +154,7 @@ class VisitUnrestrictedTimeTest(TestCase):
         self.assertEqual(client.post('/api/visits/', {}).status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_work_time_endpoint_no_longer_exists(self):
-        client = self._login('sefro_admin', 'SefroClinic@2026')
+        client = self._login(ADMIN_USERNAME, ADMIN_PASSWORD)
         resp = client.get('/api/work-time/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 

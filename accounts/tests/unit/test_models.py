@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from accounts.models import ClinicUser
+from tests.helpers import make_admin
 
 
 class ClinicUserModelTest(TestCase):
@@ -14,13 +15,7 @@ class ClinicUserModelTest(TestCase):
         self.assertTrue(user.is_active)
 
     def test_create_admin_only_via_superuser(self):
-        admin, _ = ClinicUser.objects.get_or_create(
-            username='sefro_admin',
-            defaults={'role': ClinicUser.Role.ADMIN, 'is_staff': True, 'is_superuser': True},
-        )
-        if not admin.check_password('SefroClinic@2026'):
-            admin.set_password('SefroClinic@2026')
-            admin.save()
+        admin = make_admin()
         self.assertEqual(admin.role, ClinicUser.Role.ADMIN)
         self.assertTrue(admin.is_admin_user)
         self.assertTrue(admin.is_staff)

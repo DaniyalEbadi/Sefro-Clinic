@@ -1,28 +1,18 @@
+from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
-from django.test import TestCase
 
-from accounts.models import ClinicUser
-from customers.models import Customer, Service, Visit, Payment
+from customers.models import Customer, Service, Visit
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
 
 
 class CustomersE2ETest(TestCase):
-    def _ensure_admin(self):
-        admin, _ = ClinicUser.objects.get_or_create(
-            username='sefro_admin',
-            defaults={'role': ClinicUser.Role.ADMIN, 'is_staff': True, 'is_superuser': True},
-        )
-        if not admin.check_password('SefroClinic@2026'):
-            admin.set_password('SefroClinic@2026')
-            admin.save()
-        return admin
-
     def setUp(self):
         self.client = APIClient()
-        self._ensure_admin()
+        make_admin()
         login_resp = self.client.post('/api/auth/token/', {
-            'username': 'sefro_admin', 'password': 'SefroClinic@2026',
+            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
         self.token = login_resp.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
@@ -102,7 +92,6 @@ class CustomersE2ETest(TestCase):
         self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
 
     def test_04_visit_full_crud(self):
-        now = timezone.now()
         start_at = '1404-03-23 14:00'
         end_at = '1404-03-23 15:00'
 
@@ -211,7 +200,7 @@ class CustomersE2ETest(TestCase):
         self.assertEqual(cancel_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(cancel_resp.data['status'], 'canceled')
 
-    def test_05_payment_full_crud(self):
+    def test_08_payment_full_crud(self):
         now = timezone.now()
         visit = Visit.objects.create(
             customer=self.customer, start_at=now, end_at=now
@@ -252,7 +241,7 @@ class CustomersE2ETest(TestCase):
         delete_resp = self.client.delete(f'/api/payments/{pid}/')
         self.assertEqual(delete_resp.status_code, status.HTTP_204_NO_CONTENT)
 
-    def test_06_unauthenticated_access_fails(self):
+    def test_09_unauthenticated_access_fails(self):
         self.client.credentials()
         self.client.cookies.clear()
         resp = self.client.get('/api/customers/')

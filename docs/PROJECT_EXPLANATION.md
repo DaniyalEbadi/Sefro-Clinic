@@ -35,13 +35,6 @@
 35. Dashboard data is available through `GET /api/dashboard/`.
 36. The dashboard returns customer count, loyal customer count, and sales summaries.
 37. Sales summaries include daily, weekly, monthly, and yearly values.
-41. The product module stores products used or sold by the clinic.
-42. Product endpoints are available under `/api/inventory/products/`.
-43. The inventory module tracks product stock levels.
-44. Inventory items include quantity and minimum quantity.
 45. Low stock status is calculated automatically.
-46. Inventory item endpoints are available under `/api/inventory/items/`.
-47. Stock movements record product entry and exit from inventory.
-48. Stock movement endpoints are available under `/api/inventory/movements/`.
-49. Swagger groups endpoints by clear categories like Authentication, Customers, Payments, and Inventory.
+49. Swagger groups endpoints by clear categories like Authentication, Customers, Payments.
 50. This structure keeps the backend organized, secure, and ready for a future frontend or mobile app.
