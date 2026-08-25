@@ -37,7 +37,7 @@ jobs:
 
       - name: Scan tests (dummy credentials are expected, skip B105/B106/B101/B404/B603/B607)
         run: >
-          bandit -q -r tests accounts/tests customers/tests
+          bandit -q -r tests
           --skip B105,B106,B101,B404,B603,B607 -ll
 
   dependency-audit:
