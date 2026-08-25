@@ -4,10 +4,12 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 
+from Sefro_Clinic.validators import TEXT_SANITIZERS
+
 
 class Service(models.Model):
-    name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
+    name = models.CharField(max_length=100, unique=True, validators=TEXT_SANITIZERS)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'))
     time = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
     is_active = models.BooleanField(default=True)
@@ -20,14 +22,14 @@ class Service(models.Model):
 
 
 class Customer(models.Model):
-    first_name = models.CharField(max_length=100)
-    last_name = models.CharField(max_length=100)
-    mobile_number = models.CharField(max_length=20, unique=True)
-    national_id = models.CharField(max_length=20, unique=True)
-    bitmoji_code = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    first_name = models.CharField(max_length=100, validators=TEXT_SANITIZERS)
+    last_name = models.CharField(max_length=100, validators=TEXT_SANITIZERS)
+    mobile_number = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
+    national_id = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
+    bitmoji_code = models.CharField(max_length=50, unique=True, null=True, blank=True, validators=TEXT_SANITIZERS)
     created_at = models.DateTimeField(auto_now_add=True)
     satisfaction = models.PositiveSmallIntegerField(null=True, blank=True, help_text='Customer satisfaction rating 1-5')
-    notes = models.TextField(blank=True)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
 
     class Meta:
         ordering = ['first_name', 'last_name']
@@ -84,7 +86,7 @@ class Visit(models.Model):
     start_at = models.DateTimeField()
     end_at = models.DateTimeField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
-    notes = models.TextField(blank=True)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
 
     class Meta:
         ordering = ['-start_at']
@@ -104,7 +106,7 @@ class Payment(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0'))])
     payment_method = models.CharField(max_length=20, choices=Method.choices, default=Method.CARD)
     paid_at = models.DateTimeField()
-    notes = models.TextField(blank=True)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
 
     class Meta:
         ordering = ['-paid_at']

@@ -5,6 +5,7 @@ djangorestframework-simplejwt>=5.5,<6
 drf-spectacular>=0.28,<1
 drf-spectacular-sidecar>=2025.1.1
 django-cors-headers>=4.4,<5
+whitenoise>=6.7,<7
 jdatetime>=5.0,<7
 tzdata
 psycopg2-binary>=2.9.9,<3

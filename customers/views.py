@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 
@@ -520,12 +521,31 @@ class VisitViewSet(viewsets.ModelViewSet):
         time_str = request.data.get('time')
         notes = request.data.get('notes', '')
 
+        if not isinstance(notes, str):
+            return Response({'error': 'notes must be a string'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(time_str, str) or not re.fullmatch(r'\d{1,2}:\d{2}', time_str.strip()):
+            return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             greg_date = shamsi_to_greg_date(shamsi_date_str)
-            hour, minute = map(int, time_str.split(':'))
+            hour, minute = (int(part) for part in time_str.strip().split(':'))
             start_dt = timezone.make_aware(datetime.combine(greg_date, time(hour=hour, minute=minute)))
         except (ValueError, TypeError, serializers.ValidationError):
             return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(customer_id, int):
+            return Response({'error': 'Valid customer is required'}, status=status.HTTP_400_BAD_REQUEST)
+        customer = Customer.objects.filter(id=customer_id).first()
+        if customer is None:
+            return Response({'error': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if (
+            not isinstance(service_ids, list)
+            or not service_ids
+            or not all(isinstance(sid, int) for sid in service_ids)
+        ):
+            return Response({'error': 'services must be a non-empty list of ids'}, status=status.HTTP_400_BAD_REQUEST)
 
         services = list(Service.objects.filter(id__in=service_ids))
         if not services:
@@ -535,7 +555,7 @@ class VisitViewSet(viewsets.ModelViewSet):
         end_dt = start_dt + timedelta(minutes=total_minutes)
 
         visit = Visit.objects.create(
-            customer_id=customer_id,
+            customer=customer,
             start_at=start_dt,
             end_at=end_dt,
             status=Visit.Status.PENDING,

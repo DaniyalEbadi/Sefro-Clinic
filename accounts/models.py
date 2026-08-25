@@ -3,6 +3,8 @@ from django.contrib.auth.models import AbstractUser, UserManager
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from Sefro_Clinic.validators import TEXT_SANITIZERS as NAME_SANITIZERS
+
 
 class ClinicUserManager(UserManager):
     def create_superuser(self, username, email=None, password=None, **extra_fields):
@@ -17,6 +19,13 @@ class ClinicUser(AbstractUser):
 
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.EMPLOYEE)
     phone_number = models.CharField(max_length=20, blank=True)
+    username = models.CharField(
+        max_length=150,
+        unique=True,
+        validators=[*AbstractUser.username.field.validators, *NAME_SANITIZERS],
+    )
+    first_name = models.CharField(max_length=150, blank=True, validators=NAME_SANITIZERS)
+    last_name = models.CharField(max_length=150, blank=True, validators=NAME_SANITIZERS)
 
     objects = ClinicUserManager()
 

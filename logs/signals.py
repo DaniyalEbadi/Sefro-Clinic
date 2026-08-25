@@ -12,6 +12,9 @@ from .models import AuditLog
 # Internal/token-bookkeeping models must stay out of the audit trail.
 SKIP_MODELS = {AuditLog, OutstandingToken, BlacklistedToken}
 
+# Credential material must never be copied into the audit trail.
+SKIP_COLUMNS = frozenset({'password'})
+
 UserModel = get_user_model()
 
 
@@ -38,6 +41,8 @@ def _collect_fields(instance):
     changes = {}
     for f in instance._meta.concrete_fields:
         if f.column == instance._meta.pk.column:
+            continue
+        if f.column in SKIP_COLUMNS:
             continue
         val = f.value_from_object(instance)
         if val is not None:
