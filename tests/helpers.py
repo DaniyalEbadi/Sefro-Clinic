@@ -8,14 +8,16 @@ EMPLOYEE_PASSWORD = 'Employee-Test-2026!'
 
 
 def make_admin(username=ADMIN_USERNAME, password=ADMIN_PASSWORD):
-    user, created = ClinicUser.objects.get_or_create(
-        username=username,
-        defaults={
-            'role': ClinicUser.Role.ADMIN,
-            'is_staff': True,
-            'is_superuser': True,
-        },
-    )
+    try:
+        user = ClinicUser.objects.get(username=username)
+    except ClinicUser.DoesNotExist:
+        return ClinicUser.objects.create_user(
+            username=username,
+            password=password,
+            role=ClinicUser.Role.ADMIN,
+            is_staff=True,
+            is_superuser=True,
+        )
     if not user.check_password(password):
         user.set_password(password)
         user.save()

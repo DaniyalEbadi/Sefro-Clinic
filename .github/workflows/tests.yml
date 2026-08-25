@@ -52,7 +52,7 @@ jobs:
           --health-retries 10
     env:
       DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
-      CLINIC_ADMIN_USERNAME: ci-only-admin
+      CLINIC_ADMIN_USERNAME: sefro_admin
       CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
       POSTGRES_DB: sefro_clinic
       POSTGRES_USER: postgres
