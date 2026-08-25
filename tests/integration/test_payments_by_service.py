@@ -43,6 +43,19 @@ class PaymentsByServiceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])
 
+    def test_decimal_amounts_summed_without_float_drift(self):
+        Payment.objects.create(
+            customer=self.customer, visit=self.visit,
+            amount='0.10', paid_at=timezone.now(),
+        )
+        Payment.objects.create(
+            customer=self.customer, visit=self.visit,
+            amount='0.20', paid_at=timezone.now(),
+        )
+        response = self.client.get('/api/payments/by_service/')
+        rows = {row['service_name']: row for row in response.data}
+        self.assertEqual(rows['Consultation']['total_payments'], 0.3)
+
     def test_employee_can_read_service_aggregates(self):
         from tests.helpers import employee_client
         Payment.objects.create(

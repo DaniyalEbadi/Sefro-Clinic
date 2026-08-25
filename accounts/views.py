@@ -43,6 +43,13 @@ def clear_jwt_cookies(response):
 
 
 
+def _strip_body_tokens(response):
+    if not getattr(settings, 'RETURN_TOKENS_IN_BODY', True):
+        response.data.pop('access', None)
+        response.data.pop('refresh', None)
+    return response
+
+
 @extend_schema(tags=['Authentication'])
 class ClinicTokenObtainPairView(TokenObtainPairView):
     throttle_classes = [ScopedRateThrottle]
@@ -52,11 +59,10 @@ class ClinicTokenObtainPairView(TokenObtainPairView):
         response = super().post(request, *args, **kwargs)
         # Issue the CSRF cookie so cookie-authenticated clients can send X-CSRFToken.
         get_token(request)
-        set_jwt_cookies(
-            response,
-            access_token=response.data.get('access'),
-            refresh_token=response.data.get('refresh'),
-        )
+        access = response.data.get('access')
+        refresh = response.data.get('refresh')
+        _strip_body_tokens(response)
+        set_jwt_cookies(response, access_token=access, refresh_token=refresh)
         return response
 
 
@@ -73,11 +79,10 @@ class ClinicTokenRefreshView(TokenRefreshView):
 
         response = super().post(request, *args, **kwargs)
         # With ROTATE_REFRESH_TOKENS the response carries a fresh refresh token too.
-        set_jwt_cookies(
-            response,
-            access_token=response.data.get('access'),
-            refresh_token=response.data.get('refresh'),
-        )
+        access = response.data.get('access')
+        refresh = response.data.get('refresh')
+        _strip_body_tokens(response)
+        set_jwt_cookies(response, access_token=access, refresh_token=refresh)
         return response
 
 

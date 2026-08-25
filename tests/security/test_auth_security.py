@@ -133,6 +133,46 @@ class TokenValidationTests(TestCase):
         self.assertTrue(settings.SIMPLE_JWT['BLACKLIST_AFTER_ROTATION'])
 
 
+class TokenBodyExposureTests(TestCase):
+    def setUp(self):
+        make_admin()
+        self.client = APIClient()
+
+    def test_tokens_in_body_by_default_for_backward_compatibility(self):
+        response = self.client.post(LOGIN_URL, {
+            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+
+    def test_cookies_always_set_regardless_of_body_mode(self):
+        from django.test import override_settings
+        with override_settings(RETURN_TOKENS_IN_BODY=False):
+            response = self.client.post(LOGIN_URL, {
+                'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
+            }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('access', response.data)
+        self.assertNotIn('refresh', response.data)
+        self.assertIn('access_token', response.cookies)
+        self.assertIn('refresh_token', response.cookies)
+
+    def test_refresh_endpoint_honors_body_mode(self):
+        from django.test import override_settings
+
+        login = self.client.post(LOGIN_URL, {
+            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
+        }, format='json')
+        refresh = login.data['refresh']
+        with override_settings(RETURN_TOKENS_IN_BODY=False):
+            response = self.client.post('/api/auth/token/refresh/', {
+                'refresh': refresh,
+            }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('access', response.data)
+
+
 class BruteForceProtectionTests(TestCase):
     def setUp(self):
         cache.clear()

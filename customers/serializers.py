@@ -15,6 +15,7 @@ class VisitSerializer(serializers.ModelSerializer):
     service_names = serializers.StringRelatedField(source='services', many=True, read_only=True)
     start_at = ShamsiDateTimeField()
     end_at = ShamsiDateTimeField()
+    staff = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = Visit
@@ -26,6 +27,22 @@ class VisitSerializer(serializers.ModelSerializer):
         end_at = attrs.get('end_at')
         if start_at and end_at and end_at < start_at:
             raise serializers.ValidationError({'end_at': 'پایان ویزیت باید بعد از شروع آن باشد.'})
+
+        customer = attrs.get('customer') or getattr(self.instance, 'customer', None)
+        start_at = start_at or getattr(self.instance, 'start_at', None)
+        end_at = end_at or getattr(self.instance, 'end_at', None)
+        if customer and start_at and end_at:
+            queryset = Visit.objects.filter(
+                customer=customer,
+                status__in=[Visit.Status.PENDING, Visit.Status.CONFIRMED, Visit.Status.COMPLETED],
+            )
+            if self.instance is not None:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            overlapping = queryset.filter(start_at__lt=end_at, end_at__gt=start_at).exists()
+            if overlapping:
+                raise serializers.ValidationError(
+                    {'start_at': 'این بازه زمانی با ویزیت دیگری از همین مشتری تداخل دارد.'}
+                )
         return attrs
 
 

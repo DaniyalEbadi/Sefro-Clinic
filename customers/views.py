@@ -1,6 +1,7 @@
 import re
 from collections import defaultdict
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 
 import jdatetime
 from django.db.models import Avg, Count, Sum
@@ -86,14 +87,14 @@ def _filtered_payments(date_from=None, date_to=None):
 
 
 def _build_sales_chart(payments_qs, periods):
-    buckets = {p: defaultdict(float) for p in periods}
+    buckets = {p: defaultdict(Decimal) for p in periods}
     for payment in payments_qs.iterator():
         shamsi_dt = jdatetime.datetime.fromgregorian(datetime=timezone.localtime(payment.paid_at))
         sdate = shamsi_dt.date()
         for period in buckets:
             key = _shamsi_period_key(sdate, period)
-            buckets[period][key] += float(payment.amount)
-    return {p: [{'period': k, 'total': v} for k, v in sorted(d.items())] for p, d in buckets.items()}
+            buckets[period][key] += payment.amount
+    return {p: [{'period': k, 'total': float(v)} for k, v in sorted(d.items())] for p, d in buckets.items()}
 
 
 def _shamsi_period_range(period):
@@ -605,9 +606,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     service_totals[key] = {
                         'service_id': service.id,
                         'service_name': service.name,
-                        'total_payments': 0,
+                        'total_payments': Decimal('0'),
                         'count': 0,
                     }
-                service_totals[key]['total_payments'] += float(payment.amount)
+                service_totals[key]['total_payments'] += payment.amount
                 service_totals[key]['count'] += 1
+        for row in service_totals.values():
+            row['total_payments'] = float(row['total_payments'])
         return Response(list(service_totals.values()))

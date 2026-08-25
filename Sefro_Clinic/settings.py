@@ -146,6 +146,11 @@ JWT_AUTH_COOKIE_SECURE = env_bool('DJANGO_JWT_COOKIE_SECURE', str(SECURE_SSL_RED
 JWT_AUTH_COOKIE_HTTP_ONLY = True
 JWT_AUTH_COOKIE_SAMESITE = 'Lax'
 
+# When cookies are the transport, keep tokens out of the JSON body so XSS
+# cannot read them from a parseable response. Flip to False on the host once
+# the frontend is confirmed cookie-only.
+RETURN_TOKENS_IN_BODY = env_bool('DJANGO_RETURN_TOKENS_IN_BODY', 'True')
+
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': (
