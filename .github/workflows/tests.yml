@@ -110,11 +110,21 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
-      - name: Build and push image
+      - name: Build image (secrets not configured, no push)
+        if: env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == ''
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push image
+        if: env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != ''
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
           tags: |
             ${{ env.DOCKERHUB_USERNAME }}/se-clinic-api:latest
             ${{ env.DOCKERHUB_USERNAME }}/se-clinic-api:${{ github.sha }}
