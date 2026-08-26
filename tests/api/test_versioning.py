@@ -11,24 +11,10 @@ class LegacySurfaceTests(TestCase):
         self.assertEqual(anon.get('/api/customers/').status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertEqual(anon.post('/api/auth/token/', {}, format='json').status_code, status.HTTP_400_BAD_REQUEST)
 
-
-class V1AliasTests(TestCase):
-    def test_v1_alias_requires_auth_and_serves_same_api(self):
+    def test_removed_v1_alias_is_gone(self):
         anon = APIClient()
-        self.assertEqual(anon.get('/api/v1/auth/me/').status_code, status.HTTP_401_UNAUTHORIZED)
-        client = admin_client()
-        response = client.get('/api/v1/customers/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_v1_token_login_works(self):
-        from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
-
-        make_admin()
-        client = APIClient()
-        response = client.post('/api/v1/auth/token/', {
-            'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
-        }, format='json')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(anon.get('/api/v1/customers/').status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(anon.post('/api/v1/auth/token/', {}, format='json').status_code, status.HTTP_404_NOT_FOUND)
 
 
 class V2ScaffoldTests(TestCase):
@@ -44,28 +30,33 @@ class V2ScaffoldTests(TestCase):
 
 
 class SplitSchemaTests(TestCase):
-    def test_v2_schema_excludes_dashboard_endpoints(self):
+    def test_v2_schema_is_isolated_and_self_described(self):
         body = admin_client().get('/api/v2/schema/').content.decode()
         self.assertIn('/api/v2/site/info/', body)
         self.assertNotIn('/api/customers/', body)
         self.assertNotIn('/api/reports/', body)
+        self.assertIn('Sefro Clinic Site API', body)
+        self.assertIn('2.0.0', body)
+        self.assertNotIn('"Employees"', body)
 
-    def test_v1_schema_excludes_site_endpoints(self):
-        body = admin_client().get('/api/v1/schema/').content.decode()
-        self.assertIn('/api/v1/customers/', body)
-        self.assertIn('/api/v1/auth/token/', body)
-        self.assertNotIn('/api/v2/', body)
-
-    def test_legacy_docs_point_at_dashboard_schema(self):
+    def test_legacy_schema_shows_dashboard_api_only(self):
         body = admin_client().get('/api/schema/').content.decode()
         self.assertIn('/api/customers/', body)
+        self.assertIn('/api/logs/', body)
         self.assertNotIn('/api/v2/', body)
 
     def test_versioned_docs_gated_like_legacy(self):
         with override_settings(DOCS_PUBLIC=False):
             anon = APIClient()
-            self.assertEqual(anon.get('/api/v1/docs/').status_code, status.HTTP_401_UNAUTHORIZED)
+            self.assertEqual(anon.get('/api/docs/').status_code, status.HTTP_401_UNAUTHORIZED)
             self.assertEqual(anon.get('/api/v2/docs/').status_code, status.HTTP_401_UNAUTHORIZED)
         client = admin_client()
-        self.assertEqual(client.get('/api/v1/docs/').status_code, status.HTTP_200_OK)
+        self.assertEqual(client.get('/api/docs/').status_code, status.HTTP_200_OK)
         self.assertEqual(client.get('/api/v2/docs/').status_code, status.HTTP_200_OK)
+
+    def test_docs_pages_render_version_switcher(self):
+        client = admin_client()
+        for url in ['/api/docs/', '/api/v2/docs/']:
+            body = client.get(url).content.decode()
+            self.assertIn('version-switcher', body, url)
+            self.assertIn('/api/v2/docs/', body, url)

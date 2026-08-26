@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'accounts',
     'customers',
+    'inventory',
     'logs',
 ]
 
@@ -186,7 +187,7 @@ DOCS_PUBLIC = env_bool('DJANGO_DOCS_PUBLIC')
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'Sefro Clinic API',
-    'DESCRIPTION': 'Backend API for clinic management, customers, and payments.',
+    'DESCRIPTION': 'Backend API for clinic management, customers, payments, and inventory.',
     'VERSION': '1.0.0',
     'TAGS': [
         {'name': 'Authentication', 'description': 'Login, token refresh, and current user endpoints.'},
@@ -196,6 +197,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Services', 'description': 'Clinic service catalog.'},
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
+        {'name': 'Products', 'description': 'Product catalog.'},
         {'name': 'Site', 'description': 'Website-facing API (v2).'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',

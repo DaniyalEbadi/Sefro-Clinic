@@ -31,15 +31,12 @@ class RemovedSurfaceTests(TestCase):
         response = APIClient().get('/admin/')
         self.assertEqual(response.status_code, 404)
 
-    def test_inventory_endpoints_are_gone(self):
+    def test_inventory_endpoints_require_authentication(self):
         for url in [
-            '/api/inventory/',
             '/api/inventory/products/',
-            '/api/inventory/items/',
-            '/api/inventory/movements/',
         ]:
             response = APIClient().get(url)
-            self.assertEqual(response.status_code, 404, url)
+            self.assertEqual(response.status_code, 401, url)
 
 
 class ErrorDisclosureTests(TestCase):
