@@ -196,6 +196,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Services', 'description': 'Clinic service catalog.'},
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
+        {'name': 'Site', 'description': 'Website-facing API (v2).'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',

@@ -1,37 +1,21 @@
-from django.conf import settings
 from django.urls import include, path
-from django.utils import translation
-from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from rest_framework import permissions
-from rest_framework.renderers import JSONRenderer
 
-
-class DocsAccessPermission(permissions.BasePermission):
-    """Allow anonymous access to the API docs only when explicitly enabled."""
-
-    def has_permission(self, request, view):
-        if getattr(settings, 'DOCS_PUBLIC', False):
-            return True
-        return bool(request.user and request.user.is_authenticated)
-
-
-class SwaggerUIView(SpectacularSwaggerView):
-    permission_classes = [DocsAccessPermission]
-
-
-class SafeSpectacularAPIView(SpectacularAPIView):
-    permission_classes = [DocsAccessPermission]
-    renderer_classes = [JSONRenderer]
-
-    def dispatch(self, request, *args, **kwargs):
-        with translation.override('en-us'):
-            return super().dispatch(request, *args, **kwargs)
-
+from .docs import EnUsJSONSchemaView, SwaggerUIView
 
 urlpatterns = [
-    path('api/schema/', SafeSpectacularAPIView.as_view(), name='schema'),
+    # Versioned documentation (each schema is scoped to its own urlconf)
+    path('api/v1/schema/', EnUsJSONSchemaView.as_view(urlconf='Sefro_Clinic.api_v1'), name='v1-schema'),
+    path('api/v1/docs/', SwaggerUIView.as_view(url_name='v1-schema'), name='v1-swagger-ui'),
+    path('api/v2/schema/', EnUsJSONSchemaView.as_view(urlconf='Sefro_Clinic.api_v2'), name='v2-schema'),
+    path('api/v2/docs/', SwaggerUIView.as_view(url_name='v2-schema'), name='v2-swagger-ui'),
+
+    # Legacy unversioned dashboard API: keeps current frontend working
+    # untouched; /api/docs documents exactly this surface.
+    path('api/schema/', EnUsJSONSchemaView.as_view(urlconf='Sefro_Clinic.api_legacy'), name='schema'),
     path('api/docs/', SwaggerUIView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/auth/', include('accounts.urls')),
-    path('api/', include('customers.urls')),
-    path('api/', include('logs.urls')),
+    path('', include('Sefro_Clinic.api_legacy')),
+
+    # Explicit version namespaces for future clients (self-prefixed urlconfs)
+    path('', include('Sefro_Clinic.api_v1')),
+    path('', include('Sefro_Clinic.api_v2')),
 ]
