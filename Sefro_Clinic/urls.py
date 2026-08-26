@@ -17,6 +17,7 @@ class SiteSchemaView(EnUsJSONSchemaView):
             {'name': 'Site Team', 'description': 'Clinic specialists.'},
             {'name': 'Site Testimonials', 'description': 'Customer testimonials.'},
             {'name': 'Site Contact', 'description': 'Public contact/consultation intake.'},
+            {'name': 'Site', 'description': 'API health and version info.'},
         ],
     }
 
