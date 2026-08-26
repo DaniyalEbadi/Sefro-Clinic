@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.core.validators import MinValueValidator
 from django.db import models
 
@@ -61,8 +63,12 @@ class SitePackage(models.Model):
 
     @property
     def discount_percent(self):
-        if self.original_price and self.original_price > self.price:
-            saved = (self.original_price - self.price) / self.original_price * 100
+        if self.original_price is None:
+            return 0
+        price = Decimal(self.price)
+        original = Decimal(self.original_price)
+        if original > price:
+            saved = (original - price) / original * 100
             return round(float(saved))
         return 0
 
