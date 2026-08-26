@@ -4,6 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from website.urls import urlpatterns as website_patterns
+
 
 class SiteInfoAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -29,6 +31,7 @@ urlpatterns = [
         'api/v2/',
         include([
             path('site/info/', SiteInfoAPIView.as_view(), name='site-info'),
+            path('', include(website_patterns)),
         ]),
     ),
 ]

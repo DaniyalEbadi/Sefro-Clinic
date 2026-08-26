@@ -74,7 +74,7 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Run full test suite with coverage
-        run: coverage run --source=accounts,customers,logs,Sefro_Clinic manage.py test --parallel 1 --noinput
+        run: coverage run --source=accounts,customers,logs,Sefro_Clinic,website manage.py test --parallel 1 --noinput
 
       - name: Enforce coverage threshold
         run: coverage report --fail-under=90

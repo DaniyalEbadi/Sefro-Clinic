@@ -8,9 +8,15 @@ class SiteSchemaView(EnUsJSONSchemaView):
     custom_settings = {
         'TITLE': 'Sefro Clinic Site API',
         'VERSION': '2.0.0',
-        'DESCRIPTION': 'Website-facing API. Independent from the financial dashboard API.',
+        'DESCRIPTION': 'Website-facing API for barancliniccenter.com. '
+                       'Independent from the financial dashboard API.',
         'TAGS': [
-            {'name': 'Site', 'description': 'Website-facing endpoints.'},
+            {'name': 'Site Services', 'description': 'Public clinic services catalog.'},
+            {'name': 'Site Packages', 'description': 'Bundled service packages with discounts.'},
+            {'name': 'Site Products', 'description': 'Skincare product catalog.'},
+            {'name': 'Site Team', 'description': 'Clinic specialists.'},
+            {'name': 'Site Testimonials', 'description': 'Customer testimonials.'},
+            {'name': 'Site Contact', 'description': 'Public contact/consultation intake.'},
         ],
     }
 

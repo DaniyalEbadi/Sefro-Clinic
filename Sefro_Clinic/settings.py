@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'customers',
     'inventory',
     'logs',
+    'website',
 ]
 
 MIDDLEWARE = [
@@ -172,6 +173,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         # Login/refresh endpoints use the scoped 'auth' rate; keep it strict outside tests.
         'auth': '100000/min' if TESTING else os.environ.get('THROTTLE_AUTH_RATE', '10/min'),
+        'contact': '100000/min' if TESTING else os.environ.get('THROTTLE_CONTACT_RATE', '5/min'),
         'anon': '100000/min' if TESTING else os.environ.get('THROTTLE_ANON_RATE', '60/min'),
         'user': '100000/min' if TESTING else os.environ.get('THROTTLE_USER_RATE', '600/min'),
     },
@@ -198,7 +200,6 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
         {'name': 'Products', 'description': 'Product catalog.'},
-        {'name': 'Site', 'description': 'Website-facing API (v2).'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
