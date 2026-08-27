@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn Sefro_Clinic.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60"]
+CMD ["sh", "-c", "python manage.py migrate --noinput && python manage.py collectstatic --noinput && exec gunicorn Sefro_Clinic.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 60"]
