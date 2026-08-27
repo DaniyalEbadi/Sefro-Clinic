@@ -124,7 +124,7 @@ class EmployeeCreateAPIView(generics.CreateAPIView):
 class EmployeeListAPIView(generics.ListAPIView):
     queryset = ClinicUser.objects.filter(role=ClinicUser.Role.EMPLOYEE)
     serializer_class = ClinicUserSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdmin]
 
 
 @extend_schema(tags=['Employees'])

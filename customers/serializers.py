@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
+from Sefro_Clinic.fields import ShamsiDateTimeField
 
 from .models import Customer, Payment, Service, Visit
 
@@ -59,12 +59,12 @@ class PaymentSerializer(serializers.ModelSerializer):
 
 
 class CustomerSerializer(serializers.ModelSerializer):
-    visit_number = serializers.IntegerField(source='visit_count', read_only=True)
-    is_new_customer = serializers.BooleanField(read_only=True)
-    is_loyal_customer = serializers.BooleanField(read_only=True)
-    total_payments = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    visit_number = serializers.IntegerField(source='num_visits', read_only=True)
+    is_new_customer = serializers.SerializerMethodField()
+    is_loyal_customer = serializers.SerializerMethodField()
+    total_payments = serializers.DecimalField(source='sum_payments', max_digits=12, decimal_places=2, read_only=True)
     created_at = ShamsiDateTimeField(read_only=True)
-    last_visit_date = ShamsiDateField(read_only=True)
+    last_visit_date = serializers.SerializerMethodField()
     bitmoji_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     satisfaction = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5)
 
@@ -86,3 +86,16 @@ class CustomerSerializer(serializers.ModelSerializer):
             'total_payments',
             'last_visit_date',
         ]
+
+    def get_is_new_customer(self, obj):
+        vc = getattr(obj, 'num_visits', None) or 0
+        return vc == 0
+
+    def get_is_loyal_customer(self, obj):
+        vc = getattr(obj, 'num_visits', None) or 0
+        return vc >= 5
+
+    def get_last_visit_date(self, obj):
+        from Sefro_Clinic.fields import greg_to_shamsi_date
+        dt = getattr(obj, 'last_visit_at', None)
+        return greg_to_shamsi_date(dt)

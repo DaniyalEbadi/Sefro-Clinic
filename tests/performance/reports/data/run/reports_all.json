@@ -1,0 +1,19 @@
+{
+  "n": 10,
+  "min_ms": 73.67,
+  "p50_ms": 80.13,
+  "p75_ms": 93.72,
+  "p90_ms": 96.39,
+  "p95_ms": 184.46,
+  "p99_ms": 184.46,
+  "max_ms": 184.46,
+  "mean_ms": 93.4,
+  "url": "/api/reports/all/",
+  "method": "GET",
+  "iterations": 10,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 10.7,
+  "avg_response_bytes": 6180,
+  "max_response_bytes": 6180
+}

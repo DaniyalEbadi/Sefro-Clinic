@@ -1,0 +1,20 @@
+{
+  "n": 20,
+  "min_ms": 6.3,
+  "p50_ms": 12.13,
+  "p75_ms": 30.32,
+  "p90_ms": 33.7,
+  "p95_ms": 36.57,
+  "p99_ms": 46.69,
+  "max_ms": 46.69,
+  "mean_ms": 18.76,
+  "workers": 4,
+  "requests_per_worker": 5,
+  "expected_requests": 20,
+  "executed_requests": 20,
+  "worker_errors": 0,
+  "fatals": [],
+  "error_rate": 0.0,
+  "wall_seconds": 0.23,
+  "aggregate_rps": 85.1
+}

@@ -1,0 +1,19 @@
+{
+  "n": 30,
+  "min_ms": 2.21,
+  "p50_ms": 3.24,
+  "p75_ms": 3.68,
+  "p90_ms": 4.45,
+  "p95_ms": 4.66,
+  "p99_ms": 6.54,
+  "max_ms": 6.54,
+  "mean_ms": 3.42,
+  "url": "/api/inventory/products/501/",
+  "method": "GET",
+  "iterations": 30,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 292.0,
+  "avg_response_bytes": 226,
+  "max_response_bytes": 226
+}

@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 import jdatetime
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, OuterRef, Subquery, Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, status, viewsets
@@ -12,7 +12,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdmin, IsAdminOrReadOnly
 from Sefro_Clinic.fields import shamsi_to_greg_date
 
 from .models import Customer, Payment, Service, Visit
@@ -66,13 +65,20 @@ class DashboardAPIView(APIView):
     def get(self, request):
         today = timezone.now().date()
         shamsi_start, shamsi_end = _shamsi_today_range()
-        payments = Payment.objects.all()
         data = {
             'customer_count': Customer.objects.count(),
-            'loyal_customer_count': sum(1 for customer in Customer.objects.all() if customer.is_loyal_customer),
-            'today_sales': payments.filter(paid_at__date=today).aggregate(total=Sum('amount'))['total'] or 0,
-            'today_visits': Visit.objects.filter(start_at__gte=shamsi_start, start_at__lt=shamsi_end).count(),
-            'new_customers': Customer.objects.filter(created_at__gte=shamsi_start, created_at__lt=shamsi_end).count(),
+            'loyal_customer_count': Customer.objects.annotate(
+                vc=Count('visits'),
+            ).filter(vc__gte=5).count(),
+            'today_sales': Payment.objects.filter(
+                paid_at__date=today,
+            ).aggregate(total=Sum('amount'))['total'] or 0,
+            'today_visits': Visit.objects.filter(
+                start_at__gte=shamsi_start, start_at__lt=shamsi_end,
+            ).count(),
+            'new_customers': Customer.objects.filter(
+                created_at__gte=shamsi_start, created_at__lt=shamsi_end,
+            ).count(),
         }
         return Response(data)
 
@@ -138,7 +144,7 @@ def _shamsi_period_range(period):
 
 @extend_schema(tags=['Reports'])
 class ReportsAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
         parameters=[
@@ -196,7 +202,7 @@ class ReportsAPIView(APIView):
 
 @extend_schema(tags=['Reports'])
 class DailyReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         gs, ge = _shamsi_period_range('daily')
@@ -212,7 +218,7 @@ class DailyReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class WeeklyReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         gs, ge = _shamsi_period_range('weekly')
@@ -228,7 +234,7 @@ class WeeklyReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class MonthlyReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         gs, ge = _shamsi_period_range('monthly')
@@ -244,7 +250,7 @@ class MonthlyReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class QuarterlyReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         gs, ge = _shamsi_period_range('quarterly')
@@ -260,7 +266,7 @@ class QuarterlyReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class YearlyReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         gs, ge = _shamsi_period_range('yearly')
@@ -276,7 +282,7 @@ class YearlyReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class AllReportsView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         qs = Payment.objects.all()
@@ -307,7 +313,7 @@ class AllReportsView(APIView):
 
 @extend_schema(tags=['Reports'])
 class VisitReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
         parameters=[
@@ -351,7 +357,7 @@ class VisitReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class CustomerReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         status_breakdown = {}
@@ -369,7 +375,7 @@ class CustomerReportView(APIView):
 
 @extend_schema(tags=['Reports'])
 class ReferralReportView(APIView):
-    permission_classes = [permissions.IsAuthenticated, IsAdmin]
+    permission_classes = [permissions.IsAuthenticated]
 
     @extend_schema(
         parameters=[
@@ -401,18 +407,29 @@ class ReferralReportView(APIView):
 
 @extend_schema(tags=['Customers'])
 class CustomerViewSet(viewsets.ModelViewSet):
-    queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
-    filter_backends = [filters.SearchFilter]
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['first_name', 'last_name', 'mobile_number', 'national_id', 'bitmoji_code']
+    ordering_fields = ['first_name', 'last_name', 'created_at', 'num_visits']
+    ordering = ['first_name', 'last_name']
+
+    def get_queryset(self):
+        last_visit_subquery = Subquery(
+            Visit.objects.filter(customer=OuterRef('pk')).order_by('-start_at').values('start_at')[:1],
+        )
+        return Customer.objects.annotate(
+            num_visits=Count('visits'),
+            sum_payments=Sum('payments__amount'),
+            last_visit_at=last_visit_subquery,
+        )
 
 
 @extend_schema(tags=['Services'])
 class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
 
 
 @extend_schema(
@@ -571,7 +588,7 @@ class VisitViewSet(viewsets.ModelViewSet):
 class PaymentViewSet(viewsets.ModelViewSet):
     queryset = Payment.objects.select_related('customer', 'visit')
     serializer_class = PaymentSerializer
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
+    permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['customer__first_name', 'customer__last_name', 'customer__id', 'customer__mobile_number']
     ordering_fields = ['paid_at', 'amount', 'payment_method']

@@ -1,0 +1,19 @@
+{
+  "n": 20,
+  "min_ms": 67.97,
+  "p50_ms": 77.78,
+  "p75_ms": 96.25,
+  "p90_ms": 102.16,
+  "p95_ms": 122.81,
+  "p99_ms": 229.25,
+  "max_ms": 229.25,
+  "mean_ms": 90.96,
+  "url": "/api/payments/by_service/",
+  "method": "GET",
+  "iterations": 20,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 11.0,
+  "avg_response_bytes": 2106,
+  "max_response_bytes": 2106
+}

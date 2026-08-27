@@ -88,9 +88,102 @@ jobs:
           name: coverage-report
           path: coverage.xml
 
+  logic:
+    name: Role-based logic tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: sefro_admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run role-based logic tests
+        run: python manage.py test tests.logic --parallel 1 --noinput -v 0
+
+  performance:
+    name: Performance regression checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: sefro_admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run performance regression tests (fast mode)
+        run: python manage.py test tests.performance --parallel 1 --noinput -v 0
+
+      - name: Collect performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: tests/performance/reports/data/
+
   build:
     name: Build Docker image
-    needs: [lint, test]
+    needs: [lint, test, logic, performance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     env:

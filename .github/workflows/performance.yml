@@ -1,0 +1,67 @@
+name: Performance (scheduled)
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"  # Every Monday at 03:00 UTC
+  workflow_dispatch:       # Allow manual trigger
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  SEFRO_PERF_HEAVY: "1"
+
+jobs:
+  heavy-performance:
+    name: Heavy performance suite (load/stress/spike/endurance)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: sefro_admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run full performance suite (heavy mode)
+        run: |
+          python manage.py test tests.performance --parallel 1 --noinput -v 2 2>&1 | tee performance-output.log
+
+      - name: Collect performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-heavy-results
+          path: |
+            tests/performance/reports/data/
+            performance-output.log

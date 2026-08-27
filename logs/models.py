@@ -20,6 +20,9 @@ class AuditLog(models.Model):
         ordering = ['-timestamp']
         verbose_name = 'audit log'
         verbose_name_plural = 'audit logs'
+        indexes = [
+            models.Index(fields=['timestamp'], name='auditlog_timestamp_idx'),
+        ]
 
     def __str__(self):
         return f'{self.user} {self.action} {self.model_name}#{self.object_id} at {self.timestamp}'

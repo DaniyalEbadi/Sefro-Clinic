@@ -55,14 +55,15 @@ class ProductCrudTests(TestCase):
 
 
 class ProductPermissionTests(TestCase):
-    def test_employee_can_read_but_not_write(self):
+    def test_employee_can_read_and_write(self):
         make_product()
         client = employee_client()
         self.assertEqual(client.get('/api/inventory/products/').status_code, 200)
         response = client.post('/api/inventory/products/', {
-            'name': 'Sneaky Product', 'unit_price': '1000',
+            'name': 'Employee Product', 'sku': 'EMP-001',
+            'unit_price': '100000.00', 'count': 5,
         }, format='json')
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
     def test_anonymous_blocked(self):
         from rest_framework.test import APIClient

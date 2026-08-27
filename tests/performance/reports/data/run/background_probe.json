@@ -1,0 +1,6 @@
+{
+  "celery_configured": false,
+  "broker_configured": false,
+  "finding": "NO Celery/broker in project. All work is synchronous in-request.",
+  "recommendation": "For long-running report generation or bulk operations, consider adding Celery with Redis broker in production."
+}

@@ -1,0 +1,19 @@
+{
+  "n": 30,
+  "min_ms": 3.55,
+  "p50_ms": 4.8,
+  "p75_ms": 5.44,
+  "p90_ms": 5.65,
+  "p95_ms": 5.86,
+  "p99_ms": 7.83,
+  "max_ms": 7.83,
+  "mean_ms": 4.88,
+  "url": "/api/services/",
+  "method": "GET",
+  "iterations": 30,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 204.9,
+  "avg_response_bytes": 2333,
+  "max_response_bytes": 2333
+}

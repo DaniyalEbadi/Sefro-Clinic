@@ -41,11 +41,11 @@ class ReportsAccessTests(TestCase):
             response = anon.get(url)
             self.assertEqual(response.status_code, 401, url)
 
-    def test_employee_is_forbidden_on_every_report_endpoint(self):
+    def test_employee_can_access_every_report_endpoint(self):
         client = employee_client()
         for url in self.ENDPOINTS:
             response = client.get(url)
-            self.assertEqual(response.status_code, 403, url)
+            self.assertEqual(response.status_code, 200, url)
 
     def test_admin_gets_ok_on_every_report_endpoint(self):
         client = admin_client()

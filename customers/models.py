@@ -90,6 +90,10 @@ class Visit(models.Model):
 
     class Meta:
         ordering = ['-start_at']
+        indexes = [
+            models.Index(fields=['start_at'], name='visits_start_at_idx'),
+            models.Index(fields=['customer', 'start_at', 'end_at'], name='visit_overlap_idx'),
+        ]
 
     def __str__(self):
         return f'{self.customer} - {self.start_at:%Y-%m-%d %H:%M}'
@@ -110,6 +114,9 @@ class Payment(models.Model):
 
     class Meta:
         ordering = ['-paid_at']
+        indexes = [
+            models.Index(fields=['paid_at'], name='payments_paid_at_idx'),
+        ]
 
     def __str__(self):
         return f'{self.customer} - {self.amount}'
