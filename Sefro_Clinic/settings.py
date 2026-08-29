@@ -1,6 +1,7 @@
 import os
 import sys
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -51,6 +52,7 @@ INSTALLED_APPS = [
     'inventory',
     'logs',
     'website',
+    'finance',
 ]
 
 MIDDLEWARE = [
@@ -200,6 +202,12 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Visits', 'description': 'Customer visit records and selected services.'},
         {'name': 'Payments', 'description': 'Customer payments and totals.'},
         {'name': 'Products', 'description': 'Product catalog.'},
+        {'name': 'Finance', 'description': 'Accounting, exchange rates, and financial reports.'},
+        {'name': 'Wallet', 'description': 'Customer wallet ledger and rewards.'},
+        {'name': 'Exchange Rates', 'description': 'USD/Toman exchange rate configuration.'},
+        {'name': 'Packages', 'description': 'Service and product bundles.'},
+        {'name': 'Expenses', 'description': 'Operational expense recording and approval.'},
+        {'name': 'Reports', 'description': 'Profit, revenue, and wallet reporting.'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
@@ -248,3 +256,10 @@ LOGGING = {
 }
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Finance / accounting defaults ------------------------------------------
+# Fallback exchange rate (Toman per 1 USD) used only when no ExchangeRate row
+# is configured. Always prefer configuring a real rate via the finance API.
+FINANCE_DEFAULT_USD_TO_TOMAN_RATE = Decimal(
+    os.environ.get('FINANCE_DEFAULT_USD_TO_TOMAN_RATE', '100000')
+)

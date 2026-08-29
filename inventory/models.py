@@ -14,6 +14,11 @@ class Product(models.Model):
     sku = models.CharField(max_length=50, unique=True, blank=True, null=True)
     description = models.TextField(blank=True)
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))])
+    cost_usd = models.DecimalField(
+        max_digits=14, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'),
+        help_text='Current clinic acquisition cost in USD. Historical costs are tracked via ProductCostHistory.',
+    )
     count = models.PositiveIntegerField(default=0)
     status = models.CharField(max_length=20, choices=StatusChoices.choices, default=StatusChoices.AVAILABLE)
     unit = models.CharField(max_length=50, blank=True, default='')

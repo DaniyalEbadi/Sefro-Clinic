@@ -16,3 +16,4 @@ staticfiles/
 coverage.xml
 .run_pid
 .ruff_cache/
+outfile.txt

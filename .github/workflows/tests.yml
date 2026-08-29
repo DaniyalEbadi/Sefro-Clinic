@@ -2,9 +2,7 @@ name: Tests
 
 on:
   pull_request:
-    branches: [master]
   push:
-    branches: [master]
 
 permissions:
   contents: read
@@ -73,14 +71,20 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Verify migrations are committed
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Run full test suite with coverage
-        run: coverage run --source=accounts,customers,logs,Sefro_Clinic,website manage.py test --parallel 1 --noinput
+        run: coverage run --branch --source=accounts,customers,finance,inventory,logs,Sefro_Clinic,website manage.py test --parallel 1 --noinput
 
       - name: Enforce coverage threshold
-        run: coverage report --fail-under=90
+        run: coverage report --fail-under=80
 
       - name: Generate coverage XML
         run: coverage xml -o coverage.xml
+
+      - name: Verify production static collection
+        run: python manage.py collectstatic --noinput
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4

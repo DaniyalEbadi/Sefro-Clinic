@@ -2,17 +2,7 @@ from django.test import TestCase
 
 from accounts.models import ClinicUser
 from customers.models import Customer, Service
-from tests.helpers import ADMIN_USERNAME, admin_client, employee_client, make_admin
-
-WRITE_ENDPOINTS = [
-    ('post', '/api/customers/', {
-        'first_name': 'X', 'last_name': 'Y',
-        'mobile_number': '09120001111', 'national_id': '020-0000020',
-    }),
-    ('delete', '/api/customers/1/', None),
-    ('post', '/api/services/', {'name': 'New Service'}),
-    ('patch', '/api/services/1/', {'price': '1'}),
-]
+from tests.helpers import admin_client, employee_client, make_admin
 
 
 class EmployeeWriteRestrictionTests(TestCase):
@@ -24,13 +14,18 @@ class EmployeeWriteRestrictionTests(TestCase):
         )
         Service.objects.create(name='Consultation')
 
-    def test_employee_cannot_use_any_write_endpoint(self):
-        for method, url, payload in WRITE_ENDPOINTS:
-            if payload is not None:
-                response = getattr(self.client, method)(url, payload, format='json')
-            else:
-                response = getattr(self.client, method)(url)
-            self.assertEqual(response.status_code, 403, f'{method.upper()} {url}')
+    def test_employee_can_create_and_update_operational_customer_records(self):
+        create = self.client.post('/api/customers/', {
+            'first_name': 'X', 'last_name': 'Y',
+            'mobile_number': '09120001111', 'national_id': '020-0000020',
+        }, format='json')
+        self.assertEqual(create.status_code, 201)
+
+        update = self.client.patch(
+            f'/api/customers/{create.data["id"]}/', {'first_name': 'Updated'}, format='json',
+        )
+        self.assertEqual(update.status_code, 200)
+        self.assertEqual(update.data['first_name'], 'Updated')
 
     def test_employee_can_read_customers(self):
         response = self.client.get('/api/customers/')
@@ -46,13 +41,11 @@ class EmployeeWriteRestrictionTests(TestCase):
         response = self.client.delete(f'/api/auth/employees/{target.id}/')
         self.assertEqual(response.status_code, 403)
 
-    def test_admin_accounts_hidden_from_employee_list(self):
+    def test_employee_cannot_access_user_administration(self):
         make_admin()
         client = employee_client()
         response = client.get('/api/auth/employees/list/')
-        self.assertEqual(response.status_code, 200)
-        usernames = [row['username'] for row in response.data['results']]
-        self.assertNotIn(ADMIN_USERNAME, usernames)
+        self.assertEqual(response.status_code, 403)
 
 
 class MassAssignmentTests(TestCase):

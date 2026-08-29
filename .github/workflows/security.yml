@@ -2,9 +2,7 @@ name: Security
 
 on:
   pull_request:
-    branches: [master]
   push:
-    branches: [master]
   schedule:
     - cron: "0 4 * * 1"
 
@@ -32,7 +30,7 @@ jobs:
 
       - name: Scan production code (fails on medium+ severity)
         run: >
-          bandit -q -r accounts customers logs Sefro_Clinic
+          bandit -q -r accounts customers finance inventory logs Sefro_Clinic website
           -x "**/migrations/*" -ll
 
       - name: Scan tests (dummy credentials are expected, skip B105/B106/B101/B404/B603/B607)

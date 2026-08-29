@@ -1,7 +1,7 @@
 import sys
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import OperationalError, ProgrammingError, transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
@@ -24,6 +24,12 @@ def _safe_write(msg):
         sys.stderr.flush()
     except Exception:
         pass
+
+
+def _audit_table_not_ready(error):
+    """Migrations legitimately save models before the audit table exists."""
+    cause = getattr(error, '__cause__', None)
+    return isinstance(error, (OperationalError, ProgrammingError)) and getattr(cause, 'pgcode', None) == '42P01'
 
 
 def _current_user():
@@ -66,6 +72,8 @@ def _log_post_save(sender, instance, created, **kwargs):
                 changes=_collect_fields(instance),
             )
     except Exception as e:
+        if _audit_table_not_ready(e):
+            return
         _safe_write(f'[audit_log] post_save error: {e}')
 
 
@@ -84,4 +92,6 @@ def _log_post_delete(sender, instance, **kwargs):
                 changes=_collect_fields(instance),
             )
     except Exception as e:
+        if _audit_table_not_ready(e):
+            return
         _safe_write(f'[audit_log] post_delete error: {e}')

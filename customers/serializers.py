@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from Sefro_Clinic.fields import ShamsiDateTimeField
@@ -6,9 +8,33 @@ from .models import Customer, Payment, Service, Visit
 
 
 class ServiceSerializer(serializers.ModelSerializer):
+    price_toman = serializers.SerializerMethodField()
+    exchange_rate = serializers.SerializerMethodField()
+
     class Meta:
         model = Service
-        fields = ['id', 'name', 'description', 'price', 'time', 'is_active']
+        fields = ['id', 'name', 'description', 'price', 'price_usd', 'price_toman', 'exchange_rate', 'time', 'is_active']
+
+    def _get_exchange_rate(self):
+        """Resolve the current rate once per serializer instance.
+
+        DRF reuses the child serializer while rendering a list. Keeping the
+        value here avoids two identical database queries for every service in
+        a paginated response.
+        """
+        if not hasattr(self, '_exchange_rate'):
+            from finance.services.exchange_rates import get_rate
+            self._exchange_rate = get_rate('USD', 'TOMAN')
+        return self._exchange_rate
+
+    def get_price_toman(self, obj):
+        if obj.price_usd is None or obj.price_usd == 0:
+            return None
+        from finance.services.exchange_rates import to_toman
+        return str(to_toman(obj.price_usd, self._get_exchange_rate()))
+
+    def get_exchange_rate(self, obj):
+        return str(self._get_exchange_rate())
 
 
 class VisitSerializer(serializers.ModelSerializer):
@@ -52,17 +78,18 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Payment
-        fields = ['id', 'customer', 'customer_name', 'visit', 'amount', 'payment_method', 'paid_at', 'notes']
+        fields = ['id', 'customer', 'customer_name', 'visit', 'amount', 'amount_usd', 'exchange_rate',
+                  'payment_method', 'paid_at', 'notes']
 
     def get_customer_name(self, obj):
         return str(obj.customer)
 
 
 class CustomerSerializer(serializers.ModelSerializer):
-    visit_number = serializers.IntegerField(source='num_visits', read_only=True)
+    visit_number = serializers.SerializerMethodField()
     is_new_customer = serializers.SerializerMethodField()
     is_loyal_customer = serializers.SerializerMethodField()
-    total_payments = serializers.DecimalField(source='sum_payments', max_digits=12, decimal_places=2, read_only=True)
+    total_payments = serializers.SerializerMethodField()
     created_at = ShamsiDateTimeField(read_only=True)
     last_visit_date = serializers.SerializerMethodField()
     bitmoji_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
@@ -91,9 +118,17 @@ class CustomerSerializer(serializers.ModelSerializer):
         vc = getattr(obj, 'num_visits', None) or 0
         return vc == 0
 
+    def get_visit_number(self, obj):
+        # Detail/create responses are not annotated. Preserve the API
+        # contract without triggering an extra query per row.
+        return getattr(obj, 'num_visits', 0) or 0
+
     def get_is_loyal_customer(self, obj):
         vc = getattr(obj, 'num_visits', None) or 0
         return vc >= 5
+
+    def get_total_payments(self, obj):
+        return getattr(obj, 'sum_payments', Decimal('0')) or Decimal('0')
 
     def get_last_visit_date(self, obj):
         from Sefro_Clinic.fields import greg_to_shamsi_date

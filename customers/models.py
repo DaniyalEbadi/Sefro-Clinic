@@ -11,6 +11,11 @@ class Service(models.Model):
     name = models.CharField(max_length=100, unique=True, validators=TEXT_SANITIZERS)
     description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'))
+    price_usd = models.DecimalField(
+        max_digits=14, decimal_places=2,
+        validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'),
+        help_text='USD base price. Authoritative for the financial system; "price" is the legacy display value.',
+    )
     time = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
     is_active = models.BooleanField(default=True)
 
@@ -104,10 +109,22 @@ class Payment(models.Model):
         CASH = 'cash', 'Cash'
         CARD = 'card', 'Card'
         TRANSFER = 'transfer', 'Transfer'
+        WALLET = 'wallet', 'Wallet'
+        MIXED = 'mixed', 'Mixed'
 
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='payments')
     visit = models.ForeignKey(Visit, on_delete=models.SET_NULL, related_name='payments', null=True, blank=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0'))])
+    amount_usd = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('0'))],
+        help_text='USD snapshot of the paid amount, when recorded through the financial system.',
+    )
+    exchange_rate = models.DecimalField(
+        max_digits=18, decimal_places=6, null=True, blank=True,
+        validators=[MinValueValidator(Decimal('0'))],
+        help_text='Toman-per-USD exchange rate snapshot at payment time.',
+    )
     payment_method = models.CharField(max_length=20, choices=Method.choices, default=Method.CARD)
     paid_at = models.DateTimeField()
     notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
