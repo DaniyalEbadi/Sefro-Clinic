@@ -8,29 +8,29 @@
 
 | Endpoint | p50 (ms) | p95 (ms) | p99 (ms) | RPS | Errors |
 |----------|----------|----------|----------|-----|--------|
-| auth_login | 127.85 | 204.89 | 281.05 | - | - |
-| auth_me | 1.99 | 4.83 | 15.12 | 338.9 | 0.0 |
-| auth_refresh | 7.72 | 11.62 | 34.46 | - | - |
-| crud_customer_detail | 7.43 | 8.88 | 23.64 | 127.1 | 0.0 |
-| crud_customer_list | 17.55 | 24.71 | 97.35 | 46.1 | 0.0 |
-| crud_customer_search | 24.93 | 30.47 | 36.72 | 38.4 | 0.0 |
-| crud_payment_by_service | 144.71 | 208.91 | 254.28 | 6.6 | 0.0 |
-| crud_payment_list | 13.35 | 16.89 | 22.43 | 72.1 | 0.0 |
-| crud_service_list | 8.27 | 10.13 | 23.84 | 112.1 | 0.0 |
-| crud_visit_list | 26.74 | 37.79 | 40.63 | 34.4 | 0.0 |
-| dashboard | 14.08 | 21.6 | 22.7 | 64.9 | 0.0 |
-| inventory_product_create | 8.75 | 13.55 | 21.06 | - | - |
-| inventory_product_detail | 5.0 | 8.57 | 20.0 | 159.6 | 0.0 |
-| inventory_product_list | 11.66 | 15.88 | 19.43 | 86.7 | 0.0 |
+| auth_login | 131.7 | 172.79 | 186.16 | - | - |
+| auth_me | 1.52 | 2.89 | 8.2 | 535.1 | 0.0 |
+| auth_refresh | 5.52 | 6.91 | 25.29 | - | - |
+| crud_customer_detail | 4.83 | 6.44 | 13.35 | 192.5 | 0.0 |
+| crud_customer_list | 14.16 | 18.37 | 21.28 | 70.3 | 0.0 |
+| crud_customer_search | 19.19 | 22.03 | 31.32 | 50.3 | 0.0 |
+| crud_payment_by_service | 82.98 | 222.58 | 316.71 | 9.8 | 0.0 |
+| crud_payment_list | 8.27 | 9.83 | 16.85 | 114.3 | 0.0 |
+| crud_service_list | 5.28 | 7.92 | 14.95 | 165.5 | 0.0 |
+| crud_visit_list | 16.87 | 20.36 | 27.71 | 57.1 | 0.0 |
+| dashboard | 8.51 | 11.6 | 16.28 | 109.0 | 0.0 |
+| inventory_product_create | 5.22 | 6.11 | 14.33 | - | - |
+| inventory_product_detail | 2.17 | 3.47 | 9.83 | 350.1 | 0.0 |
+| inventory_product_list | 4.9 | 6.05 | 12.09 | 192.7 | 0.0 |
 | inventory_product_list_size | - | - | - | - | - |
-| inventory_product_search | 10.5 | 13.68 | 25.49 | 85.4 | 0.0 |
-| reports_all | 153.85 | 174.51 | 174.51 | 6.3 | 0.0 |
-| reports_customers | 15.05 | 18.8 | 27.63 | 64.1 | 0.0 |
-| reports_daily | 10.68 | 13.79 | 22.46 | 87.8 | 0.0 |
-| reports_monthly | 20.61 | 23.86 | 31.88 | 47.2 | 0.0 |
-| reports_referral | 7.15 | 8.76 | 21.55 | 122.2 | 0.0 |
-| reports_summary | 145.37 | 174.63 | 231.48 | 6.7 | 0.0 |
-| reports_weekly | 12.64 | 14.9 | 21.46 | 75.4 | 0.0 |
+| inventory_product_search | 6.98 | 9.26 | 13.37 | 133.8 | 0.0 |
+| reports_all | 73.85 | 87.87 | 87.87 | 13.2 | 0.0 |
+| reports_customers | 13.38 | 14.73 | 18.69 | 77.5 | 0.0 |
+| reports_daily | 9.18 | 13.02 | 17.82 | 103.1 | 0.0 |
+| reports_monthly | 10.23 | 12.66 | 16.93 | 92.6 | 0.0 |
+| reports_referral | 4.67 | 7.56 | 10.87 | 182.9 | 0.0 |
+| reports_summary | 82.87 | 90.98 | 94.12 | 12.1 | 0.0 |
+| reports_weekly | 8.5 | 10.95 | 14.29 | 113.5 | 0.0 |
 
 ## Database Performance
 
@@ -38,22 +38,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 14.87,
-  "p50_ms": 17.93,
-  "p75_ms": 18.31,
-  "p90_ms": 19.87,
-  "p95_ms": 19.87,
-  "p99_ms": 23.19,
-  "max_ms": 23.19,
-  "mean_ms": 18.13,
+  "min_ms": 21.0,
+  "p50_ms": 24.38,
+  "p75_ms": 26.32,
+  "p90_ms": 30.99,
+  "p95_ms": 30.99,
+  "p99_ms": 34.74,
+  "max_ms": 34.74,
+  "mean_ms": 25.23,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 55.2,
-  "avg_response_bytes": 10707,
-  "max_response_bytes": 10707
+  "throughput_rps": 39.6,
+  "avg_response_bytes": 10645,
+  "max_response_bytes": 10645
 }
 ```
 
@@ -61,22 +61,22 @@
 ```json
 {
   "n": 10,
-  "min_ms": 7.3,
-  "p50_ms": 8.92,
-  "p75_ms": 9.3,
-  "p90_ms": 10.78,
-  "p95_ms": 14.18,
-  "p99_ms": 14.18,
-  "max_ms": 14.18,
-  "mean_ms": 9.41,
+  "min_ms": 10.91,
+  "p50_ms": 11.49,
+  "p75_ms": 12.28,
+  "p90_ms": 12.32,
+  "p95_ms": 23.32,
+  "p99_ms": 23.32,
+  "max_ms": 23.32,
+  "mean_ms": 12.79,
   "url": "/api/inventory/products/?search=\u0645\u062d\u0635\u0648\u0644",
   "method": "GET",
   "iterations": 10,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 106.3,
-  "avg_response_bytes": 4974,
-  "max_response_bytes": 4974
+  "throughput_rps": 78.2,
+  "avg_response_bytes": 4982,
+  "max_response_bytes": 4982
 }
 ```
 
@@ -84,22 +84,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 4.38,
-  "p50_ms": 5.09,
-  "p75_ms": 5.59,
-  "p90_ms": 6.46,
-  "p95_ms": 6.46,
-  "p99_ms": 11.87,
-  "max_ms": 11.87,
-  "mean_ms": 5.63,
+  "min_ms": 7.44,
+  "p50_ms": 8.03,
+  "p75_ms": 8.56,
+  "p90_ms": 9.92,
+  "p95_ms": 9.92,
+  "p99_ms": 19.43,
+  "max_ms": 19.43,
+  "mean_ms": 9.01,
   "url": "/api/inventory/products/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 177.6,
-  "avg_response_bytes": 4917,
-  "max_response_bytes": 4917
+  "throughput_rps": 111.0,
+  "avg_response_bytes": 4890,
+  "max_response_bytes": 4890
 }
 ```
 
@@ -107,22 +107,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 9.47,
-  "p50_ms": 13.16,
-  "p75_ms": 14.41,
-  "p90_ms": 16.31,
-  "p95_ms": 16.31,
-  "p99_ms": 24.19,
-  "max_ms": 24.19,
-  "mean_ms": 13.69,
+  "min_ms": 16.86,
+  "p50_ms": 17.92,
+  "p75_ms": 19.64,
+  "p90_ms": 20.59,
+  "p95_ms": 20.59,
+  "p99_ms": 38.05,
+  "max_ms": 38.05,
+  "mean_ms": 19.71,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 73.1,
-  "avg_response_bytes": 10641,
-  "max_response_bytes": 10641
+  "throughput_rps": 50.7,
+  "avg_response_bytes": 10580,
+  "max_response_bytes": 10580
 }
 ```
 
@@ -139,8 +139,8 @@
 - Workers: 4
 - Requests executed: 20
 - Error rate: 0.0
-- P95: 99.42 ms
-- Aggregate RPS: 50.0
+- P95: 64.91 ms
+- Aggregate RPS: 68.1
 
 ## Database Plan Analysis
 
@@ -164,25 +164,25 @@
 {
   "set": {
     "n": 100,
-    "min_ms": 0.02,
-    "p50_ms": 0.02,
-    "p75_ms": 0.02,
-    "p90_ms": 0.02,
-    "p95_ms": 0.02,
-    "p99_ms": 0.06,
-    "max_ms": 0.13,
-    "mean_ms": 0.02
+    "min_ms": 0.01,
+    "p50_ms": 0.01,
+    "p75_ms": 0.01,
+    "p90_ms": 0.01,
+    "p95_ms": 0.01,
+    "p99_ms": 0.01,
+    "max_ms": 0.04,
+    "mean_ms": 0.01
   },
   "get": {
     "n": 100,
-    "min_ms": 0.02,
-    "p50_ms": 0.02,
-    "p75_ms": 0.02,
-    "p90_ms": 0.02,
-    "p95_ms": 0.02,
-    "p99_ms": 0.03,
-    "max_ms": 0.04,
-    "mean_ms": 0.02
+    "min_ms": 0.01,
+    "p50_ms": 0.01,
+    "p75_ms": 0.01,
+    "p90_ms": 0.01,
+    "p95_ms": 0.01,
+    "p99_ms": 0.02,
+    "max_ms": 0.02,
+    "mean_ms": 0.01
   }
 }
 ```
@@ -191,38 +191,38 @@
 ```json
 {
   "n": 20,
-  "min_ms": 0.08,
-  "p50_ms": 0.08,
-  "p75_ms": 0.09,
-  "p90_ms": 0.13,
-  "p95_ms": 0.14,
-  "p99_ms": 0.16,
-  "max_ms": 0.16,
-  "mean_ms": 0.09
+  "min_ms": 0.04,
+  "p50_ms": 0.06,
+  "p75_ms": 0.08,
+  "p90_ms": 0.09,
+  "p95_ms": 0.09,
+  "p99_ms": 0.1,
+  "max_ms": 0.1,
+  "mean_ms": 0.07
 }
 ```
 
 ## Background Tasks
 
 - **background_probe**: {"celery_configured": false, "broker_configured": false, "finding": "NO Celery/broker in project. All work is synchronous in-request.", "recommendation": "For long-running report generation or bulk operations, consider adding Celery with Redis broker in production."}
-- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.013, "status": 401}, "/api/reports/": {"time_s": 0.003, "status": 401}, "/api/customers/": {"time_s": 0.002, "status": 401}}
+- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.009, "status": 401}, "/api/reports/": {"time_s": 0.001, "status": 401}, "/api/customers/": {"time_s": 0.001, "status": 401}}
 
 ## Response Sizes
 
 ```json
 {
-  "bytes": 4861
+  "bytes": 4920
 }
 ```
 ```json
 {
-  "/api/customers/": 10571,
-  "/api/visits/": 5462,
-  "/api/payments/": 4391,
+  "/api/customers/": 10570,
+  "/api/visits/": 5459,
+  "/api/payments/": 4375,
   "/api/services/": 2832,
-  "/api/inventory/products/": 4915,
+  "/api/inventory/products/": 4901,
   "/api/dashboard/": 108,
-  "/api/reports/": 5746
+  "/api/reports/": 5743
 }
 ```
 

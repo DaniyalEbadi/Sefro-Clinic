@@ -21,7 +21,10 @@ def env_list(name, default=''):
 
 
 # Throttling must not interfere with the test suite.
-TESTING = 'test' in sys.argv
+TESTING = any(
+        s in {'test', 'pytest', 'pytest-django'}
+        for s in sys.argv
+    )
 
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 if not SECRET_KEY:

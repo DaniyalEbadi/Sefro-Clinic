@@ -1,9 +1,9 @@
 {
-  "/api/customers/": 10571,
-  "/api/visits/": 5462,
-  "/api/payments/": 4391,
+  "/api/customers/": 10570,
+  "/api/visits/": 5459,
+  "/api/payments/": 4375,
   "/api/services/": 2832,
-  "/api/inventory/products/": 4915,
+  "/api/inventory/products/": 4901,
   "/api/dashboard/": 108,
-  "/api/reports/": 5746
+  "/api/reports/": 5743
 }

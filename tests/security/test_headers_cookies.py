@@ -54,7 +54,7 @@ class CookieSecurityTests(TestCase):
 
     def test_access_cookie_lifetime_matches_token_lifetime(self):
         response = self._login()
-        self.assertEqual(int(response.cookies['access_token']['max-age']), 24 * 60 * 60)
+        self.assertEqual(int(response.cookies['access_token']['max-age']), 86400)
         self.assertEqual(int(response.cookies['refresh_token']['max-age']), 7 * 24 * 3600)
 
     def test_cookies_not_secure_in_local_http_mode(self):

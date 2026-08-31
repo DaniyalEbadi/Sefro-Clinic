@@ -1,3 +1,3 @@
 {
-  "plan_fragment": "Sort  (cost=35.61..35.62 rows=1 width=268) (actual time=0.123..0.124 rows=0 loops=1)\n  Sort Key: first_name, last_name\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=35\n  ->  Seq Scan on customers_customer  (cost=0.00..35.60 rows=1 width=268) (actual time=0.113..0.113 rows=0 loops=1)\n "
+  "plan_fragment": "Sort  (cost=35.61..35.62 rows=1 width=268) (actual time=0.113..0.114 rows=0 loops=1)\n  Sort Key: first_name, last_name\n  Sort Method: quicksort  Memory: 25kB\n  Buffers: shared hit=35\n  ->  Seq Scan on customers_customer  (cost=0.00..35.60 rows=1 width=268) (actual time=0.105..0.105 rows=0 loops=1)\n "
 }

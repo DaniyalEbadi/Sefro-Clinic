@@ -127,8 +127,8 @@ class TokenValidationTests(TestCase):
         response = client.post('/api/auth/token/refresh/', {'refresh': str(refresh)}, format='json')
         self.assertEqual(response.status_code, 401)
 
-    def test_access_token_lifetime_matches_configuration(self):
-        self.assertEqual(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'], timedelta(hours=24))
+def test_access_token_lifetime_matches_configuration(self):
+        self.assertEqual(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'], timedelta(days=1))
         self.assertTrue(settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS'])
         self.assertTrue(settings.SIMPLE_JWT['BLACKLIST_AFTER_ROTATION'])
 
