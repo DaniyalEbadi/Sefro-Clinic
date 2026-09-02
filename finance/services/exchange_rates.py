@@ -65,6 +65,7 @@ def get_current_usd_to_toman_rate() -> Optional[Decimal]:
     """
     Return latest valid cached rate for USD→TOMAN.
     Uses DB cache; attempts external refresh if configured and cache stale.
+    Falls back to BrsApi backup if primary provider fails.
     Returns None if no valid rate available (caller should expose null).
     """
     # Try external provider if configured and cache stale
@@ -82,8 +83,14 @@ def get_current_usd_to_toman_rate() -> Optional[Decimal]:
                 if age < ttl:
                     is_stale = False
             if is_stale:
+                # Try primary provider first
                 ext = ExternalExchangeRateProvider()
                 fetched = ext.get_usd_to_toman_rate()
+                # If primary fails, try BrsApi backup
+                if fetched is None:
+                    logger.info('Primary exchange rate provider failed, trying BrsApi backup')
+                    backup = BrsApiExchangeRateProvider()
+                    fetched = backup.get_usd_to_toman_rate()
                 if fetched is not None:
                     # Cache fetched rate to DB so other workers reuse it
                     try:
@@ -122,10 +129,21 @@ class DatabaseExchangeRateProvider:
 class ExternalExchangeRateProvider:
     """Adapter for external exchange-rate HTTP API. Defaults to Tindex (tindex.app)."""
 
+    DEFAULT_URL = 'https://tindex.app/api/public/indicators/Foreign-Currency/USD-EXCHANGE-RATE'
+
+    def __init__(self, api_url: str = '', api_key: str = '', timeout: int = 5):
+        self.api_url = api_url
+        self.api_key = api_key
+        self.timeout = timeout
+
     def get_usd_to_toman_rate(self) -> Optional[Decimal]:
-        api_url = getattr(settings, 'EXCHANGE_RATE_API_URL', '') or 'https://tindex.app/api/public/indicators/Foreign-Currency/USD-EXCHANGE-RATE'
-        api_key = getattr(settings, 'EXCHANGE_RATE_API_KEY', '')
-        timeout = int(getattr(settings, 'EXCHANGE_RATE_TIMEOUT', 5))
+        api_url = self.api_url
+        if not api_url:
+            api_url = getattr(settings, 'EXCHANGE_RATE_API_URL', None)
+        if not api_url:
+            api_url = self.DEFAULT_URL
+        api_key = self.api_key or getattr(settings, 'EXCHANGE_RATE_API_KEY', '')
+        timeout = self.timeout or int(getattr(settings, 'EXCHANGE_RATE_TIMEOUT', 5))
         headers = {
             'Accept': 'application/json',
             'User-Agent': 'Mozilla/5.0 (SefroClinic/1.0)',
@@ -227,6 +245,81 @@ class ExternalExchangeRateProvider:
             if validated is not None:
                 return validated
         logger.warning('Exchange rate missing or invalid rate field')
+        return None
+
+
+class BrsApiExchangeRateProvider:
+    """Backup exchange-rate provider using BrsApi.ir Gold/Currency API."""
+
+    DEFAULT_URL = 'https://Api.BrsApi.ir/Market/Gold_Currency.php'
+
+    def get_usd_to_toman_rate(self) -> Optional[Decimal]:
+        api_url = getattr(settings, 'EXCHANGE_RATE_BACKUP_API_URL', '') or self.DEFAULT_URL
+        api_key = getattr(settings, 'EXCHANGE_RATE_BACKUP_API_KEY', '')
+        timeout = int(getattr(settings, 'EXCHANGE_RATE_TIMEOUT', 5))
+
+        if not api_key:
+            logger.warning('BrsApi backup: no API key configured')
+            return None
+
+        if not api_url.lower().startswith(('http://', 'https://')):
+            logger.warning('BrsApi backup: invalid API URL')
+            return None
+
+        url = f'{api_url}?key={api_key}'
+        headers = {
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (SefroClinic/1.0)',
+        }
+        req = urllib.request.Request(url, headers=headers, method='GET')
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status != 200:
+                    logger.warning('BrsApi backup: HTTP %s', resp.status)
+                    return None
+                body = resp.read().decode('utf-8')
+                data = json.loads(body)
+        except urllib.error.HTTPError as exc:
+            logger.warning('BrsApi backup: HTTPError %s', exc.code)
+            return None
+        except urllib.error.URLError:
+            logger.warning('BrsApi backup: URLError')
+            return None
+        except TimeoutError:
+            logger.warning('BrsApi backup: timeout')
+            return None
+        except json.JSONDecodeError:
+            logger.warning('BrsApi backup: malformed JSON')
+            return None
+        except Exception as exc:
+            logger.warning('BrsApi backup: %s', exc.__class__.__name__)
+            return None
+
+        # BrsApi response: {"GoldCurrency": [{"name":"...","price":"925000",...},...]}
+        candidates = []
+        try:
+            if isinstance(data, dict):
+                # Look for USD in GoldCurrency list
+                for key in ('GoldCurrency', 'gold_currency', 'data', 'result'):
+                    items = data.get(key, [])
+                    if isinstance(items, list):
+                        for item in items:
+                            if isinstance(item, dict):
+                                name = str(item.get('name', '')).upper()
+                                if 'USD' in name or 'DOLLAR' in name or 'دلار' in str(item.get('name', '')):
+                                    for price_key in ('price', 'rate', 'value', 'best_buy', 'best_sell', 'price_best_buy', 'price_best_sell'):
+                                        candidates.append(item.get(price_key))
+                    elif isinstance(items, dict):
+                        for k in ('price', 'rate', 'value', 'USD', 'usd'):
+                            candidates.append(items.get(k))
+        except Exception:
+            pass
+
+        for cand in candidates:
+            validated = _validate_rate(cand)
+            if validated is not None:
+                return validated
+        logger.warning('BrsApi backup: no valid rate found')
         return None
 
 
