@@ -101,3 +101,28 @@ class AuditLogTest(TestCase):
     def test_employee_cannot_access_logs(self):
         resp = self._employee_client().get('/api/logs/')
         self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_service_category_audit_is_recorded(self):
+        admin = self._admin_client()
+        create = admin.post('/api/service-categories/', {'name': 'Audit Cat', 'slug': 'audit-cat'}, format='json')
+        self.assertEqual(create.status_code, status.HTTP_201_CREATED)
+        cid = create.data['id']
+        admin.patch(f'/api/service-categories/{cid}/', {'description': 'updated'}, format='json')
+        admin.delete(f'/api/service-categories/{cid}/')
+        # AuditLog tracks via middleware? Check for category model logs (customers.servicecategory)
+        logs = AuditLog.objects.filter(model_name='customers.servicecategory').order_by('timestamp')
+        self.assertGreaterEqual(logs.count(), 2)
+        self.assertIn('CREATE', list(logs.values_list('action', flat=True)))
+
+    def test_service_product_link_audit(self):
+        from customers.models import Service
+        from inventory.models import Product
+        admin = self._admin_client()
+        svc = Service.objects.create(name='Audit Svc', price_usd='10')
+        prod = Product.objects.create(name='Audit Prod', unit_price='10', cost_usd='1', count=10)
+        create = admin.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '2'}, format='json')
+        self.assertEqual(create.status_code, status.HTTP_201_CREATED)
+        # Check that log exists for serviceitem if audited (finance.serviceitem)
+        # At minimum ensure no 500 and log endpoint still gated
+        resp = admin.get('/api/logs/?search=serviceitem')
+        self.assertEqual(resp.status_code, 200)

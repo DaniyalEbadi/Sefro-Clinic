@@ -45,6 +45,21 @@ class SplitSchemaTests(TestCase):
         self.assertIn('/api/logs/', body)
         self.assertNotIn('/api/v2/', body)
 
+    def test_legacy_schema_includes_new_pricing_and_category(self):
+        body = admin_client().get('/api/schema/').content.decode()
+        self.assertIn('/api/service-categories/', body)
+        self.assertIn('/api/services/', body)
+        self.assertIn('estimated_cost_usd', body)
+        self.assertIn('estimated_gross_profit_usd', body)
+        self.assertIn('estimated_margin_percent', body)
+        self.assertIn('price_toman', body)
+        self.assertIn('/api/finance/service-items/', body)
+
+    def test_service_category_not_in_v2_schema(self):
+        body = admin_client().get('/api/v2/schema/').content.decode()
+        self.assertNotIn('/api/service-categories/', body)
+        self.assertNotIn('estimated_cost_usd', body)
+
     def test_versioned_docs_gated_like_legacy(self):
         with override_settings(DOCS_PUBLIC=False):
             anon = APIClient()

@@ -1,6 +1,8 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from finance.views import ExchangeRateReportView
+
 from .views import (
                     AllReportsView,
                     CustomerReportView,
@@ -12,6 +14,7 @@ from .views import (
                     QuarterlyReportView,
                     ReferralReportView,
                     ReportsAPIView,
+                    ServiceCategoryViewSet,
                     ServiceViewSet,
                     VisitReportView,
                     VisitViewSet,
@@ -21,6 +24,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register('customers', CustomerViewSet, basename='customer')
+router.register('service-categories', ServiceCategoryViewSet, basename='service-category')
 router.register('services', ServiceViewSet, basename='service')
 router.register('visits', VisitViewSet, basename='visit')
 router.register('payments', PaymentViewSet, basename='payment')
@@ -37,5 +41,6 @@ urlpatterns = [
     path('reports/visits/', VisitReportView.as_view(), name='report-visits'),
     path('reports/customers/', CustomerReportView.as_view(), name='report-customers'),
     path('reports/referral/', ReferralReportView.as_view(), name='report-referral'),
+    path('reports/exchange-rate/', ExchangeRateReportView.as_view(), name='report-exchange-rate'),
     path('', include(router.urls)),
 ]

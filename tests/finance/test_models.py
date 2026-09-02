@@ -1,13 +1,20 @@
 from decimal import Decimal
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Customer
 from finance.models import (
-    ExchangeRate, Wallet, WalletTransaction, WalletRewardRule,
-    ProductCostHistory, ServiceItem, Package, PackageService, PackageItem,
-    ProductUsage, Sale, PaymentComponent, ExpenseCategory, Expense,
+    ExchangeRate,
+    Expense,
+    ExpenseCategory,
+    Package,
+    PackageService,
+    ProductCostHistory,
+    Sale,
+    ServiceItem,
+    WalletRewardRule,
+    WalletTransaction,
 )
 from finance.services.exchange_rates import get_rate, set_rate, to_toman
 
@@ -17,7 +24,6 @@ class ExchangeRateTests(TestCase):
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test')
 
     def test_exchange_rate_creation(self):
-        from finance.models import ExchangeRate
         rate = ExchangeRate.objects.create(
             currency_from='USD', currency_to='TOMAN', rate=Decimal('100000'),
             effective_at=timezone.now(), source='test'
@@ -127,7 +133,6 @@ class PackageTests(TestCase):
 
     def test_package_with_services(self):
         from customers.models import Service
-        from finance.models import PackageService
         package = Package.objects.create(name='Gold Package', price_usd=Decimal('200'))
         service = Service.objects.create(name='Facial', price=800000, price_usd=100, time=30)
         PackageService.objects.create(package=package, service=service)

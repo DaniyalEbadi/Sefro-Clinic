@@ -12,10 +12,17 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsAdminOrReadOnly
 from Sefro_Clinic.fields import shamsi_to_greg_date
 
-from .models import Customer, Payment, Service, Visit
-from .serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
+from .models import Customer, Payment, Service, ServiceCategory, Visit
+from .serializers import (
+    CustomerSerializer,
+    PaymentSerializer,
+    ServiceCategorySerializer,
+    ServiceSerializer,
+    VisitSerializer,
+)
 
 
 def _shamsi_today_range():
@@ -426,10 +433,62 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
 
 @extend_schema(tags=['Services'])
+class ServiceCategoryViewSet(viewsets.ModelViewSet):
+    queryset = ServiceCategory.objects.all()
+    serializer_class = ServiceCategorySerializer
+    permission_classes = [IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'slug', 'description']
+    ordering_fields = ['name', 'slug', 'sort_order', 'is_active']
+    ordering = ['sort_order', 'name']
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.services.exists():
+            return Response(
+                {'detail': 'Cannot delete category with existing services. Deactivate it instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Services'],
+    parameters=[
+        OpenApiParameter('category', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Filter by category id or slug'),
+        OpenApiParameter('is_active', OpenApiTypes.BOOL, OpenApiParameter.QUERY, description='Filter by active status'),
+        OpenApiParameter('search', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Search by service or category name'),
+    ],
+)
 class ServiceViewSet(viewsets.ModelViewSet):
-    queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description', 'category__name', 'category__slug']
+    ordering_fields = ['name', 'price_usd', 'time', 'is_active', 'category__name']
+    ordering = ['name']
+
+    def get_queryset(self):
+        qs = Service.objects.select_related('category').prefetch_related('items__product')
+        # Filtering per spec: ?category=2 and ?is_active=, ?search=
+        params = self.request.query_params
+        category = params.get('category')
+        if category:
+            try:
+                # allow filtering by id or slug
+                if category.isdigit():
+                    qs = qs.filter(category_id=int(category))
+                else:
+                    qs = qs.filter(category__slug=category)
+            except ValueError:
+                pass
+        is_active = params.get('is_active')
+        if is_active is not None:
+            if is_active.lower() in ('true', '1', 'yes'):
+                qs = qs.filter(is_active=True)
+            elif is_active.lower() in ('false', '0', 'no'):
+                qs = qs.filter(is_active=False)
+        return qs
 
 
 @extend_schema(

@@ -105,6 +105,7 @@ def _resolve_range(request):
     return start_dt, end_dt
 
 
+@extend_schema(tags=['Exchange Rates'])
 class ExchangeRateViewSet(viewsets.ModelViewSet):
     queryset = ExchangeRate.objects.all()
     serializer_class = ExchangeRateSerializer
@@ -113,12 +114,14 @@ class ExchangeRateViewSet(viewsets.ModelViewSet):
     ordering = ['-effective_at']
 
 
+@extend_schema(tags=['Wallet'])
 class WalletRewardRuleViewSet(viewsets.ModelViewSet):
     queryset = WalletRewardRule.objects.all()
     serializer_class = WalletRewardRuleSerializer
     permission_classes = [IsAdminOrReadOnly]
 
 
+@extend_schema(tags=['Packages'])
 class PackageViewSet(viewsets.ModelViewSet):
     queryset = Package.objects.all()
     serializer_class = PackageSerializer
@@ -128,30 +131,38 @@ class PackageViewSet(viewsets.ModelViewSet):
     ordering_fields = ['name', 'price_usd', 'created_at']
 
 
+@extend_schema(tags=['Services'])
 class ServiceItemViewSet(viewsets.ModelViewSet):
-    queryset = ServiceItem.objects.all()
+    queryset = ServiceItem.objects.select_related('service', 'product')
     serializer_class = ServiceItemSerializer
     permission_classes = [IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['service__name', 'product__name']
+    ordering_fields = ['service__name', 'product__name', 'quantity']
 
 
+@extend_schema(tags=['Packages'])
 class PackageItemViewSet(viewsets.ModelViewSet):
     queryset = PackageItem.objects.all()
     serializer_class = PackageItemSerializer
     permission_classes = [IsAdminOrReadOnly]
 
 
+@extend_schema(tags=['Packages'])
 class PackageServiceViewSet(viewsets.ModelViewSet):
     queryset = PackageService.objects.all()
     serializer_class = PackageServiceSerializer
     permission_classes = [IsAdminOrReadOnly]
 
 
+@extend_schema(tags=['Finance'])
 class ProductCostHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ProductCostHistory.objects.all()
     serializer_class = ProductCostHistorySerializer
     permission_classes = [IsEmployeeOrAdmin]
 
 
+@extend_schema(tags=['Finance'])
 class ProductUsageViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ProductUsage.objects.all()
     serializer_class = ProductUsageSerializer
@@ -171,6 +182,7 @@ class ProductUsageViewSet(viewsets.ReadOnlyModelViewSet):
         return qs.select_related('product', 'visit', 'service', 'package_sale')
 
 
+@extend_schema(tags=['Wallet'])
 class WalletViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Wallet.objects.all()
     serializer_class = WalletSerializer
@@ -216,6 +228,7 @@ class WalletViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(WalletTransactionSerializer(txn).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=['Wallet'])
 class WalletTransactionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = WalletTransaction.objects.all()
     serializer_class = WalletTransactionSerializer
@@ -231,6 +244,7 @@ class WalletTransactionViewSet(viewsets.ReadOnlyModelViewSet):
         return qs.select_related('wallet', 'wallet__customer')
 
 
+@extend_schema(tags=['Finance'])
 class SaleViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Sale.objects.all()
     serializer_class = SaleSerializer
@@ -267,12 +281,14 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(SaleSerializer(refund).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=['Expenses'])
 class ExpenseCategoryViewSet(viewsets.ModelViewSet):
     queryset = ExpenseCategory.objects.all()
     serializer_class = ExpenseCategorySerializer
     permission_classes = [IsAdminOrReadOnly]
 
 
+@extend_schema(tags=['Expenses'])
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all()
     serializer_class = ExpenseSerializer
@@ -358,6 +374,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         return Response(ExpenseSerializer(expense, context=self.get_serializer_context()).data)
 
 
+@extend_schema(tags=['Finance'])
 class ProductPurchaseViewSet(viewsets.ModelViewSet):
     queryset = ProductPurchase.objects.all()
     serializer_class = ProductPurchaseSerializer
@@ -378,6 +395,7 @@ class ProductPurchaseViewSet(viewsets.ModelViewSet):
         serializer.instance = purchase
 
 
+@extend_schema(tags=['Finance'])
 class CheckoutView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -415,6 +433,7 @@ class CheckoutView(APIView):
         return Response(SaleSerializer(sale).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=['Finance'])
 class RecordConsumptionView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -435,6 +454,7 @@ class RecordConsumptionView(APIView):
         return Response(ProductUsageSerializer(usages, many=True).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(tags=['Reports'])
 class FinancialSummaryView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -461,6 +481,7 @@ class FinancialSummaryView(APIView):
         return Response(_stringify(result))
 
 
+@extend_schema(tags=['Reports'])
 class ProfitByServiceView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -476,6 +497,7 @@ class ProfitByServiceView(APIView):
         return Response(_stringify(reporting.profit_by_service(start, end)))
 
 
+@extend_schema(tags=['Reports'])
 class ProfitByPackageView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -491,8 +513,63 @@ class ProfitByPackageView(APIView):
         return Response(_stringify(reporting.profit_by_package(start, end)))
 
 
+@extend_schema(tags=['Wallet'])
 class WalletSummaryView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
     def get(self, request):
         return Response(_stringify(reporting.wallet_summary()))
+
+
+@extend_schema(tags=['Reports'])
+class ExchangeRateReportView(APIView):
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('usd', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Optional USD amount to convert to Toman'),
+            OpenApiParameter('amount', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Alias for usd'),
+            OpenApiParameter('amount_usd', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Alias for usd'),
+        ],
+        responses=inline_serializer(
+            name='ExchangeRateReport',
+            fields={
+                'currency_from': serializers.CharField(),
+                'currency_to': serializers.CharField(),
+                'rate': serializers.CharField(),
+                'rate_toman_per_usd': serializers.CharField(),
+                'effective_at': serializers.CharField(allow_null=True),
+                'source': serializers.CharField(),
+                'amount_usd': serializers.CharField(required=False),
+                'amount_toman': serializers.CharField(required=False),
+            },
+        ),
+    )
+    def get(self, request):
+        from .services.exchange_rates import convert_usd_to_toman, get_current_usd_to_toman_rate
+
+        rate = get_current_usd_to_toman_rate()
+        if rate is None:
+            return Response({'detail': 'Exchange rate unavailable. Configure a valid rate via /api/finance/exchange-rates/ or external provider.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        latest = ExchangeRate.objects.filter(currency_from='USD', currency_to='TOMAN', is_active=True).order_by('-effective_at').first()
+        data = {
+            'currency_from': 'USD',
+            'currency_to': 'TOMAN',
+            'rate': str(rate),
+            'rate_toman_per_usd': str(rate),
+            'effective_at': latest.effective_at.isoformat() if latest else None,
+            'source': latest.source if latest and latest.source else 'fallback',
+        }
+        # Optional conversion: ?usd=100 or ?amount=100
+        raw_amount = request.query_params.get('usd') or request.query_params.get('amount') or request.query_params.get('amount_usd')
+        if raw_amount is not None:
+            try:
+                amt = Decimal(str(raw_amount))
+            except Exception:
+                return Response({'detail': 'Invalid amount. Must be numeric.'}, status=status.HTTP_400_BAD_REQUEST)
+            if amt < 0:
+                return Response({'detail': 'Amount must be non-negative.'}, status=status.HTTP_400_BAD_REQUEST)
+            data['amount_usd'] = str(amt.quantize(Decimal('0.01')))
+            data['amount_toman'] = str(convert_usd_to_toman(amt, rate))
+        return Response(data)

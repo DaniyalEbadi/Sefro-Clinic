@@ -93,3 +93,40 @@ class SensitiveDataExposureTests(TestCase):
         client = admin_client()
         response = client.get('/api/auth/me/')
         self.assertEqual(set(response.data.keys()), {'id', 'username', 'role', 'date_joined'})
+
+    def test_service_category_endpoints_require_auth(self):
+        from rest_framework.test import APIClient
+        anon = APIClient()
+        for url in ['/api/service-categories/', '/api/services/', '/api/finance/service-items/']:
+            self.assertEqual(anon.get(url).status_code, 401, url)
+
+    def test_employee_cannot_escalate_via_category(self):
+        emp = employee_client()
+        # employee tries to create category with admin field
+        resp = emp.post('/api/service-categories/', {'name': 'Hack', 'slug': 'hack', 'is_active': True}, format='json')
+        self.assertEqual(resp.status_code, 403)
+        # employee tries to link product to service
+        from customers.models import Service
+        from inventory.models import Product
+        svc = Service.objects.create(name='Sec Svc', price_usd='10')
+        prod = Product.objects.create(name='Sec Prod', unit_price='10', cost_usd='1', count=5)
+        resp2 = emp.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '1'}, format='json')
+        self.assertEqual(resp2.status_code, 403)
+
+
+class ServiceCategoryIdorTests(TestCase):
+    def test_employee_cannot_delete_category_with_service(self):
+        from decimal import Decimal
+
+        from customers.models import Service, ServiceCategory
+        cat = ServiceCategory.objects.create(name='Idor Cat', slug='idor-cat')
+        Service.objects.create(name='Idor Svc', price=Decimal('100'), category=cat)
+        emp = employee_client(username='idor_emp')
+        resp = emp.delete(f'/api/service-categories/{cat.id}/')
+        self.assertIn(resp.status_code, (403, 401, 400))  # either forbidden or protected
+
+    def test_service_category_slug_uniqueness_enforced(self):
+        client = admin_client()
+        client.post('/api/service-categories/', {'name': 'Dup', 'slug': 'dup'}, format='json')
+        dup = client.post('/api/service-categories/', {'name': 'Dup2', 'slug': 'dup'}, format='json')
+        self.assertEqual(dup.status_code, 400)

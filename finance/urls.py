@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CheckoutView,
+    ExchangeRateReportView,
     ExchangeRateViewSet,
     ExpenseCategoryViewSet,
     ExpenseViewSet,
@@ -47,5 +48,6 @@ urlpatterns = [
     path('reports/profit-by-service/', ProfitByServiceView.as_view(), name='profit-by-service'),
     path('reports/profit-by-package/', ProfitByPackageView.as_view(), name='profit-by-package'),
     path('reports/wallet-summary/', WalletSummaryView.as_view(), name='wallet-summary'),
+    path('reports/exchange-rate/', ExchangeRateReportView.as_view(), name='exchange-rate-report'),
     path('', include(router.urls)),
 ]

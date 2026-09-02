@@ -2,13 +2,20 @@ from decimal import Decimal
 
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
-from rest_framework.test import APIClient
 
 from customers.models import Customer
-from finance.models import Wallet, WalletTransaction, WalletRewardRule
-from finance.services.wallet import grant_reward, reverse_reward, credit, debit, current_balance, get_or_create_wallet, InsufficientFunds, compute_reward
-from finance.services.exchange_rates import get_rate, set_rate, to_toman
-from tests.helpers import make_admin, make_employee, admin_client, employee_client
+from finance.models import Wallet, WalletRewardRule, WalletTransaction
+from finance.services.exchange_rates import set_rate
+from finance.services.wallet import (
+    InsufficientFunds,
+    compute_reward,
+    credit,
+    current_balance,
+    debit,
+    get_or_create_wallet,
+    grant_reward,
+    reverse_reward,
+)
 
 
 class WalletModelTests(TestCase):
@@ -108,7 +115,6 @@ class WalletRewardRuleTests(TestCase):
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test')
 
     def test_percentage_reward_calculation(self):
-        from finance.services.wallet import compute_reward
         # Create a 5% rule first
         WalletRewardRule.objects.create(
             name='Test 5%', rule_type=WalletRewardRule.RuleType.PERCENTAGE,
@@ -118,7 +124,6 @@ class WalletRewardRuleTests(TestCase):
         self.assertEqual(reward, Decimal('50.00'))
 
     def test_fixed_reward_calculation(self):
-        from finance.services.wallet import compute_reward
         # Create a fixed 10 rule
         WalletRewardRule.objects.create(
             name='Fixed 10', rule_type=WalletRewardRule.RuleType.FIXED,
@@ -129,7 +134,6 @@ class WalletRewardRuleTests(TestCase):
         self.assertEqual(reward, Decimal('10.00'))
 
     def test_rule_inactive(self):
-        from finance.services.wallet import compute_reward
         # Create a percentage rule and make it inactive
         rule = WalletRewardRule.objects.create(
             name='Test 5%', rule_type=WalletRewardRule.RuleType.PERCENTAGE,

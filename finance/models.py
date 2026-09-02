@@ -176,9 +176,11 @@ class ProductCostHistory(models.Model):
 
 class ServiceItem(models.Model):
     service = models.ForeignKey('customers.Service', on_delete=models.CASCADE, related_name='items')
-    product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='service_usages')
+    # Maintain backward-compatible alias for spec naming (service_products)
+    # Access via service.service_products if using the alias property below.
+    product = models.ForeignKey('inventory.Product', on_delete=models.PROTECT, related_name='service_usages')
     quantity = models.DecimalField(
-        max_digits=10, decimal_places=3, default=Decimal('1'),
+        max_digits=12, decimal_places=3, default=Decimal('1'),
         validators=[MinValueValidator(Decimal('0'))],
     )
 
@@ -186,6 +188,7 @@ class ServiceItem(models.Model):
         ordering = ['service', 'product']
         constraints = [
             models.UniqueConstraint(fields=['service', 'product'], name='uniq_service_item'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='service_product_quantity_positive'),
         ]
 
     def __str__(self):

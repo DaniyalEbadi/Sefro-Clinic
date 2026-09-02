@@ -7,6 +7,23 @@ from django.db import models
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 
+class ServiceCategory(models.Model):
+    name = models.CharField(max_length=80, unique=True, validators=TEXT_SANITIZERS)
+    slug = models.SlugField(max_length=80, unique=True)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['sort_order', 'name']
+        indexes = [
+            models.Index(fields=['sort_order', 'name'], name='svc_cat_sort_idx'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Service(models.Model):
     name = models.CharField(max_length=100, unique=True, validators=TEXT_SANITIZERS)
     description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
@@ -18,9 +35,20 @@ class Service(models.Model):
     )
     time = models.PositiveIntegerField(default=0, help_text='Duration in minutes')
     is_active = models.BooleanField(default=True)
+    category = models.ForeignKey(
+        ServiceCategory,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='services',
+    )
 
     class Meta:
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['category', 'is_active'], name='svc_category_active_idx', condition=models.Q(is_active=True)),
+            models.Index(fields=['name'], name='svc_name_idx'),
+        ]
 
     def __str__(self):
         return self.name
@@ -133,6 +161,7 @@ class Payment(models.Model):
         ordering = ['-paid_at']
         indexes = [
             models.Index(fields=['paid_at'], name='payments_paid_at_idx'),
+            models.Index(fields=['paid_at', 'customer'], name='payments_paid_at_customer_idx'),
         ]
 
     def __str__(self):

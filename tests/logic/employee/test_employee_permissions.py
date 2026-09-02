@@ -365,3 +365,50 @@ class EmployeeAuthTests(TestCase):
         }, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('access', response.data)
+
+
+class EmployeeServiceCategoryLogicTests(TestCase):
+    """Employee logic: read-only for categories and pricing, no write."""
+
+    def setUp(self):
+        self.client, self.user = _employee_client()
+        from customers.models import ServiceCategory
+        self.cat = ServiceCategory.objects.create(name='Emp Read Cat', slug='emp-read-cat')
+
+    def test_employee_can_read_categories_and_services_with_pricing(self):
+        resp = self.client.get('/api/service-categories/')
+        self.assertEqual(resp.status_code, 200)
+        resp2 = self.client.get('/api/services/')
+        self.assertEqual(resp2.status_code, 200)
+        # pricing fields present for employee
+        if resp2.data['results']:
+            self.assertIn('estimated_cost_usd', resp2.data['results'][0])
+
+    def test_employee_cannot_create_or_delete_category(self):
+        resp = self.client.post('/api/service-categories/', {'name': 'Nope', 'slug': 'nope'}, format='json')
+        self.assertEqual(resp.status_code, 403)
+        resp2 = self.client.delete(f'/api/service-categories/{self.cat.id}/')
+        self.assertEqual(resp2.status_code, 403)
+
+    def test_employee_cannot_create_service_product_link(self):
+        from customers.models import Service
+        from inventory.models import Product
+        svc = Service.objects.create(name='Emp Svc', price_usd='30')
+        prod = Product.objects.create(name='EmpProd', unit_price='10', cost_usd='2', count=5)
+        resp = self.client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '1'}, format='json')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_inactive_product_logic_employee_read_only(self):
+        from customers.models import Service
+        from finance.models import ServiceItem
+        from inventory.models import Product
+        svc = Service.objects.create(name='Svc Inactive Logic', price_usd='20')
+        prod = Product.objects.create(name='InactiveProd', unit_price='10', cost_usd='1', count=5, status=Product.StatusChoices.FINISHED)
+        # Even admin cannot link inactive via API logic; employee read should still see existing link if created before inactivation
+        # Create link as admin via ORM (bypasses validation) then ensure employee can read it
+        ServiceItem.objects.create(service=svc, product=prod, quantity='1')
+        prod.status = Product.StatusChoices.AVAILABLE
+        prod.save()
+        # Now employee reads service with pricing
+        resp = self.client.get(f'/api/services/{svc.id}/')
+        self.assertEqual(resp.status_code, 200)

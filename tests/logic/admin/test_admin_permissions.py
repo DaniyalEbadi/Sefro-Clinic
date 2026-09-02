@@ -276,3 +276,43 @@ class AnonymousAccessTests(TestCase):
 
     def test_services_blocked(self):
         self.assertEqual(self.client.get('/api/services/').status_code, 401)
+
+    def test_service_categories_blocked(self):
+        self.assertEqual(self.client.get('/api/service-categories/').status_code, 401)
+
+    def test_service_items_blocked(self):
+        self.assertEqual(self.client.get('/api/finance/service-items/').status_code, 401)
+
+
+class AdminServiceCategoryLogicTests(TestCase):
+    """Admin logic for ServiceCategory: full control, protection of referenced categories."""
+
+    def setUp(self):
+        self.client = admin_client()
+
+    def test_admin_can_create_and_update_category(self):
+        create = self.client.post('/api/service-categories/', {'name': 'Logic Laser', 'slug': 'logic-laser', 'sort_order': 1}, format='json')
+        self.assertEqual(create.status_code, status.HTTP_201_CREATED)
+        cid = create.data['id']
+        upd = self.client.patch(f'/api/service-categories/{cid}/', {'description': 'updated', 'is_active': False}, format='json')
+        self.assertEqual(upd.status_code, 200)
+        self.assertFalse(upd.data['is_active'])
+
+    def test_admin_delete_referenced_category_blocked(self):
+        from customers.models import Service, ServiceCategory
+        cat = ServiceCategory.objects.create(name='Protected', slug='protected')
+        Service.objects.create(name='Svc Protected', price='1000', category=cat)
+        resp = self.client.delete(f'/api/service-categories/{cat.id}/')
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(ServiceCategory.objects.filter(id=cat.id).exists())
+
+    def test_admin_can_manage_service_product_link(self):
+        from customers.models import Service
+        from inventory.models import Product
+        svc = Service.objects.create(name='Logic Svc', price_usd='50')
+        prod = Product.objects.create(name='LogicProd', unit_price='100', cost_usd='5', count=10)
+        resp = self.client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '2.5'}, format='json')
+        self.assertEqual(resp.status_code, 201)
+        # duplicate blocked
+        dup = self.client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '1'}, format='json')
+        self.assertEqual(dup.status_code, 400)

@@ -10,6 +10,9 @@ class ExpenseError(Exception):
     pass
 
 
+Status = Expense.Status
+
+
 @transaction.atomic
 def create_expense(*, created_by, category, amount_usd, expense_date, vendor='', description='', receipt=None, rate=None):
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')

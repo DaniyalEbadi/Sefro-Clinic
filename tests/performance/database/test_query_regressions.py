@@ -98,7 +98,26 @@ class EndpointQueryBudgetTests(TestCase):
     def test_service_list_within_budget(self):
         probe, response = self._get('/api/services/')
         self.assertEqual(response.status_code, 200)
-        self.assertLessEqual(probe.count, 3)
+        # Budget 4: count + services(category join) + serviceitems + exchange rate
+        # Previously 3 before product costing; now includes prefetched products
+        self.assertLessEqual(probe.count, 5)
+
+    def test_service_category_list_within_budget(self):
+        probe, response = self._get('/api/service-categories/')
+        self.assertEqual(response.status_code, 200)
+        self.assertLessEqual(probe.count, 4)
+
+    def test_service_pricing_no_n_plus_one(self):
+        # Ensure pricing derivation does not issue per-service exchange query
+        with QueryProbe() as probe:
+            resp = self.client.get('/api/services/')
+        self.assertEqual(resp.status_code, 200)
+        # Only one exchange-rate query despite many services
+        rate_qs = probe.statements_matching('exchange')
+        self.assertLessEqual(len(rate_qs), 1, f'Exchange rate queried {len(rate_qs)} times')
+        # Only one serviceitems query
+        item_qs = probe.statements_matching('serviceitem')
+        self.assertLessEqual(len(item_qs), 1, 'ServiceItem prefetched more than once')
 
     # --- inventory (products) ---------------------------------------------
 

@@ -128,7 +128,9 @@ class TokenValidationTests(TestCase):
         self.assertEqual(response.status_code, 401)
 
 def test_access_token_lifetime_matches_configuration(self):
-        self.assertEqual(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'], timedelta(days=1))
+        from django.conf import settings
+        expected = timedelta(seconds=900)  # prod default 15 min
+        self.assertEqual(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'], expected)
         self.assertTrue(settings.SIMPLE_JWT['ROTATE_REFRESH_TOKENS'])
         self.assertTrue(settings.SIMPLE_JWT['BLACKLIST_AFTER_ROTATION'])
 
@@ -138,13 +140,26 @@ class TokenBodyExposureTests(TestCase):
         make_admin()
         self.client = APIClient()
 
-    def test_tokens_in_body_by_default_for_backward_compatibility(self):
+    def test_tokens_in_body_when_enabled(self):
+        from django.test import override_settings
+        with override_settings(DJANGO_RETURN_TOKENS_IN_BODY=True):
+            response = self.client.post(LOGIN_URL, {
+                'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
+            }, format='json')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('access', response.data)
+            self.assertIn('refresh', response.data)
+
+    def test_tokens_not_in_body_by_default(self):
+        # Default is now False for prod hardening
         response = self.client.post(LOGIN_URL, {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
         self.assertEqual(response.status_code, 200)
-        self.assertIn('access', response.data)
-        self.assertIn('refresh', response.data)
+        self.assertNotIn('access', response.data)
+        self.assertNotIn('refresh', response.data)
+        self.assertIn('access_token', response.cookies)
+        self.assertIn('refresh_token', response.cookies)
 
     def test_cookies_always_set_regardless_of_body_mode(self):
         from django.test import override_settings

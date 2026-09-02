@@ -1,10 +1,8 @@
-from django.test import TestCase
 from django.contrib.auth.models import AnonymousUser
-from rest_framework.permissions import SAFE_METHODS
+from django.test import TestCase
 
-from accounts.models import ClinicUser
-from accounts.permissions import IsAdmin, IsAdminOrReadOnly, CanManageVisits
-from tests.helpers import make_admin, make_employee, admin_client, employee_client
+from accounts.permissions import CanManageVisits, IsAdmin, IsAdminOrReadOnly
+from tests.helpers import make_admin, make_employee
 
 
 class IsAdminPermissionTests(TestCase):

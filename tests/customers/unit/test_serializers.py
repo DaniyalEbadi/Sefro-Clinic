@@ -1,7 +1,7 @@
 from django.test import TestCase
 
-from customers.models import Customer, Service, Visit, Payment
-from customers.serializers import ServiceSerializer, VisitSerializer, PaymentSerializer, CustomerSerializer
+from customers.models import Customer, Service
+from customers.serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
 
 
 class ServiceSerializerTest(TestCase):

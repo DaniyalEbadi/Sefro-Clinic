@@ -173,3 +173,50 @@ class WeakPasswordPolicyTests(TestCase):
             'username': 'numeric_pw', 'password': '9876543210',
         }, format='json')
         self.assertEqual(response.status_code, 400)
+
+
+class ServiceCategoryInputValidationTests(TestCase):
+    def test_category_xss_stored_is_plain_text(self):
+        client = admin_client()
+        create = client.post('/api/service-categories/', {'name': '<script>alert(1)</script>', 'slug': 'xss-cat'}, format='json')
+        self.assertEqual(create.status_code, 201)
+        detail = client.get(f"/api/service-categories/{create.data['id']}/")
+        self.assertEqual(detail.data['name'], '<script>alert(1)</script>')
+
+    def test_category_search_ignores_sql_injection(self):
+        client = admin_client()
+        client.post('/api/service-categories/', {'name': 'Safe', 'slug': 'safe'}, format='json')
+        for payload in ["' OR 1=1 --", "'; DROP TABLE customers_servicecategory; --"]:
+            resp = client.get(f'/api/service-categories/?search={payload}')
+            self.assertEqual(resp.status_code, 200, payload)
+
+    def test_service_product_quantity_validation(self):
+        client = admin_client()
+        from customers.models import Service
+        from inventory.models import Product
+        svc = Service.objects.create(name='Sec Svc2', price_usd='10')
+        prod = Product.objects.create(name='Sec Prod2', unit_price='10', cost_usd='1', count=5)
+        for bad_qty in ['0', '-2', '0.000', 'abc', '']:
+            resp = client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': bad_qty}, format='json')
+            self.assertEqual(resp.status_code, 400, f'qty {bad_qty}')
+
+    def test_service_product_duplicate_rejected(self):
+        client = admin_client()
+        from customers.models import Service
+        from inventory.models import Product
+        svc = Service.objects.create(name='Dup Svc', price_usd='10')
+        prod = Product.objects.create(name='Dup Prod', unit_price='10', cost_usd='1', count=5)
+        first = client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '1'}, format='json')
+        self.assertEqual(first.status_code, 201)
+        dup = client.post('/api/finance/service-items/', {'service': svc.id, 'product': prod.id, 'quantity': '1'}, format='json')
+        self.assertEqual(dup.status_code, 400)
+
+    def test_exchange_rate_key_not_leaked_in_response(self):
+        from django.test import override_settings
+        client = admin_client()
+        # Trigger external provider failure with key set, ensure key not in error response
+        with override_settings(EXCHANGE_RATE_PROVIDER='external', EXCHANGE_RATE_API_URL='http://invalid/', EXCHANGE_RATE_API_KEY='super-secret-key'):
+            resp = client.get('/api/services/')
+            self.assertEqual(resp.status_code, 200)
+            body = str(resp.data)
+            self.assertNotIn('super-secret-key', body)

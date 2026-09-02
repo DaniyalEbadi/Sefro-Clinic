@@ -138,9 +138,14 @@ SECURE_REFERRER_POLICY = 'same-origin'
 X_FRAME_OPTIONS = 'DENY'
 
 # --- JWT --------------------------------------------------------------------
+# Access token lifetime: prod default 15 min (900s), dev/test can override via env.
+# REFRESH_TOKEN_LIFETIME 7d is standard.
+ACCESS_TOKEN_LIFETIME = int(os.environ.get('JWT_ACCESS_TOKEN_LIFETIME', '900') or 900)
+REFRESH_TOKEN_LIFETIME = int(os.environ.get('JWT_REFRESH_TOKEN_LIFETIME', '604800') or 604800)
+
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(seconds=ACCESS_TOKEN_LIFETIME),
+    'REFRESH_TOKEN_LIFETIME': timedelta(seconds=REFRESH_TOKEN_LIFETIME),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': False,
@@ -154,9 +159,8 @@ JWT_AUTH_COOKIE_HTTP_ONLY = True
 JWT_AUTH_COOKIE_SAMESITE = 'Lax'
 
 # When cookies are the transport, keep tokens out of the JSON body so XSS
-# cannot read them from a parseable response. Flip to False on the host once
-# the frontend is confirmed cookie-only.
-RETURN_TOKENS_IN_BODY = env_bool('DJANGO_RETURN_TOKENS_IN_BODY', 'True')
+# cannot read them from a parseable response. Prod default False.
+RETURN_TOKENS_IN_BODY = env_bool('DJANGO_RETURN_TOKENS_IN_BODY', 'False')
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -266,3 +270,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 FINANCE_DEFAULT_USD_TO_TOMAN_RATE = Decimal(
     os.environ.get('FINANCE_DEFAULT_USD_TO_TOMAN_RATE', '100000')
 )
+
+# --- Exchange-rate provider --------------------------------------------------
+# Provider abstraction: 'database' (default, DB-cached) or 'external' (HTTP fetch + DB cache).
+# External provider uses standard library urllib; no extra deps.
+EXCHANGE_RATE_PROVIDER = os.environ.get('EXCHANGE_RATE_PROVIDER', 'database')
+EXCHANGE_RATE_API_URL = os.environ.get('EXCHANGE_RATE_API_URL', '')
+EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
+EXCHANGE_RATE_TIMEOUT = int(os.environ.get('EXCHANGE_RATE_TIMEOUT', '5') or 5)
+EXCHANGE_RATE_CACHE_TTL = int(os.environ.get('EXCHANGE_RATE_CACHE_TTL', '3600') or 3600)

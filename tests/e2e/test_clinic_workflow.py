@@ -105,6 +105,55 @@ class AuditTrailIntegrityE2ETests(TestCase):
         self.assertEqual(entry.user.username, ADMIN_USERNAME)
 
 
+class ServiceCategoryProductPricingE2ETests(TestCase):
+    def test_full_category_product_pricing_workflow(self):
+        client = admin_client()
+        # 1. Create category
+        cat = client.post('/api/service-categories/', {'name': 'E2E Laser', 'slug': 'e2e-laser', 'sort_order': 1}, format='json')
+        self.assertEqual(cat.status_code, 201)
+        cat_id = cat.data['id']
+        # 2. Create products
+        p1 = client.post('/api/inventory/products/', {'name': 'E2E Gel', 'sku': 'E2E-001', 'unit_price': '100', 'cost_usd': '0.20', 'count': 100}, format='json')
+        p2 = client.post('/api/inventory/products/', {'name': 'E2E Cream', 'sku': 'E2E-002', 'unit_price': '100', 'cost_usd': '0.50', 'count': 100}, format='json')
+        self.assertEqual(p1.status_code, 201)
+        # 3. Create service with category
+        svc = client.post('/api/services/', {'name': 'E2E Laser Svc', 'price_usd': '100.00', 'price': '100', 'time': 30, 'category_id': cat_id}, format='json')
+        self.assertEqual(svc.status_code, 201)
+        svc_id = svc.data['id']
+        self.assertEqual(svc.data['category']['slug'], 'e2e-laser')
+        # 4. Link products
+        link1 = client.post('/api/finance/service-items/', {'service': svc_id, 'product': p1.data['id'], 'quantity': '50'}, format='json')
+        link2 = client.post('/api/finance/service-items/', {'service': svc_id, 'product': p2.data['id'], 'quantity': '10'}, format='json')
+        self.assertEqual(link1.status_code, 201)
+        self.assertEqual(link2.status_code, 201)
+        # 5. Verify pricing via API (cost 15, gross 85, margin 85)
+        detail = client.get(f'/api/services/{svc_id}/')
+        self.assertEqual(detail.data['estimated_cost_usd'], '15.00')
+        self.assertEqual(detail.data['estimated_gross_profit_usd'], '85.00')
+        self.assertEqual(detail.data['estimated_margin_percent'], '85.00')
+        self.assertEqual(len(detail.data['products']), 2)
+        # 6. Filter by category
+        filtered = client.get(f'/api/services/?category={cat_id}')
+        self.assertEqual(filtered.status_code, 200)
+        self.assertTrue(any(r['id'] == svc_id for r in filtered.data['results']))
+        # 7. Deactivation instead of delete when referenced
+        del_resp = client.delete(f'/api/service-categories/{cat_id}/')
+        self.assertEqual(del_resp.status_code, 400)
+        patch = client.patch(f'/api/service-categories/{cat_id}/', {'is_active': False}, format='json')
+        self.assertEqual(patch.status_code, 200)
+        self.assertFalse(patch.data['is_active'])
+        # 8. Continue lifecycle: customer → visit → payment with new service
+        cust = client.post('/api/customers/', {'first_name': 'E2E', 'last_name': 'User', 'mobile_number': '09129990001', 'national_id': '099-0000001'}, format='json')
+        cust_id = cust.data['id']
+        reserve = client.post('/api/visits/reserve/', {'customer': cust_id, 'services': [svc_id], 'date': '1404-06-15', 'time': '10:30'}, format='json')
+        self.assertEqual(reserve.status_code, 201)
+        visit_id = reserve.data['id']
+        client.post(f'/api/visits/{visit_id}/confirm/')
+        client.post(f'/api/visits/{visit_id}/complete/')
+        pay = client.post('/api/payments/', {'customer': cust_id, 'visit': visit_id, 'amount': '500000', 'payment_method': 'card', 'paid_at': '1404-06-15 11:30'}, format='json')
+        self.assertEqual(pay.status_code, 201)
+
+
 class AnonymousSurfaceTests(TestCase):
     def test_every_api_route_requires_authentication(self):
         from rest_framework.test import APIClient

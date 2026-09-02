@@ -93,9 +93,26 @@ class PackageSerializer(serializers.ModelSerializer):
 
 
 class ServiceItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = ServiceItem
-        fields = ['id', 'service', 'product', 'quantity']
+        fields = ['id', 'service', 'product', 'product_name', 'quantity']
+
+    def get_product_name(self, obj):
+        return str(obj.product) if obj.product else ''
+
+    def validate_quantity(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('Quantity must be greater than zero.')
+        return value
+
+    def validate(self, attrs):
+        product = attrs.get('product') or getattr(self.instance, 'product', None)
+        if product is not None and hasattr(product, 'status'):
+            if product.status == product.StatusChoices.FINISHED:
+                raise serializers.ValidationError({'product': 'Cannot assign a finished/inactive product.'})
+        return attrs
 
 
 class PackageItemSerializer(serializers.ModelSerializer):
