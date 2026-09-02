@@ -139,9 +139,13 @@ class ExternalExchangeRateProvider:
     def get_usd_to_toman_rate(self) -> Optional[Decimal]:
         api_url = self.api_url
         if not api_url:
-            api_url = getattr(settings, 'EXCHANGE_RATE_API_URL', None)
+            # Only use default if setting doesn't exist at all (not just empty string)
+            if hasattr(settings, 'EXCHANGE_RATE_API_URL'):
+                api_url = getattr(settings, 'EXCHANGE_RATE_API_URL', '')
+            else:
+                api_url = self.DEFAULT_URL
         if not api_url:
-            api_url = self.DEFAULT_URL
+            return None
         api_key = self.api_key or getattr(settings, 'EXCHANGE_RATE_API_KEY', '')
         timeout = self.timeout or int(getattr(settings, 'EXCHANGE_RATE_TIMEOUT', 5))
         headers = {
@@ -269,7 +273,8 @@ class BrsApiExchangeRateProvider:
         url = f'{api_url}?key={api_key}'
         headers = {
             'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (SefroClinic/1.0)',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://brsapi.ir/',
         }
         req = urllib.request.Request(url, headers=headers, method='GET')
         try:
@@ -295,19 +300,20 @@ class BrsApiExchangeRateProvider:
             logger.warning('BrsApi backup: %s', exc.__class__.__name__)
             return None
 
-        # BrsApi response: {"GoldCurrency": [{"name":"...","price":"925000",...},...]}
+        # BrsApi response: {"currency": [{"name":"دلار","name_en":"US Dollar","symbol":"USD","price":"220300",...},...]}
         candidates = []
         try:
             if isinstance(data, dict):
-                # Look for USD in GoldCurrency list
-                for key in ('GoldCurrency', 'gold_currency', 'data', 'result'):
+                for key in ('currency', 'Currency', 'gold', 'Gold', 'data', 'result'):
                     items = data.get(key, [])
                     if isinstance(items, list):
                         for item in items:
                             if isinstance(item, dict):
-                                name = str(item.get('name', '')).upper()
-                                if 'USD' in name or 'DOLLAR' in name or 'دلار' in str(item.get('name', '')):
-                                    for price_key in ('price', 'rate', 'value', 'best_buy', 'best_sell', 'price_best_buy', 'price_best_sell'):
+                                name_en = str(item.get('name_en', '')).upper()
+                                symbol = str(item.get('symbol', '')).upper()
+                                name = str(item.get('name', ''))
+                                if 'USD' in symbol or 'USD' in name_en or 'DOLLAR' in name_en:
+                                    for price_key in ('price', 'rate', 'value', 'best_buy', 'best_sell'):
                                         candidates.append(item.get(price_key))
                     elif isinstance(items, dict):
                         for k in ('price', 'rate', 'value', 'USD', 'usd'):
