@@ -53,9 +53,10 @@ class CookieSecurityTests(TestCase):
             self.assertEqual(cookie['samesite'], 'Lax', name)
 
     def test_access_cookie_lifetime_matches_token_lifetime(self):
+        from django.conf import settings
         response = self._login()
-        self.assertEqual(int(response.cookies['access_token']['max-age']), 86400)
-        self.assertEqual(int(response.cookies['refresh_token']['max-age']), 7 * 24 * 3600)
+        self.assertEqual(int(response.cookies['access_token']['max-age']), int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds()))
+        self.assertEqual(int(response.cookies['refresh_token']['max-age']), int(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'].total_seconds()))
 
     def test_cookies_not_secure_in_local_http_mode(self):
         response = self._login()

@@ -60,6 +60,7 @@ class Customer(models.Model):
     mobile_number = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
     national_id = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
     bitmoji_code = models.CharField(max_length=50, unique=True, null=True, blank=True, validators=TEXT_SANITIZERS)
+    birthday = models.DateField(null=True, blank=True, help_text='Customer birthday (Shamsi YYYY-MM-DD via API)')
     created_at = models.DateTimeField(auto_now_add=True)
     satisfaction = models.PositiveSmallIntegerField(null=True, blank=True, help_text='Customer satisfaction rating 1-5')
     notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)

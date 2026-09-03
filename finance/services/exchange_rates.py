@@ -311,7 +311,6 @@ class BrsApiExchangeRateProvider:
                             if isinstance(item, dict):
                                 name_en = str(item.get('name_en', '')).upper()
                                 symbol = str(item.get('symbol', '')).upper()
-                                name = str(item.get('name', ''))
                                 if 'USD' in symbol or 'USD' in name_en or 'DOLLAR' in name_en:
                                     for price_key in ('price', 'rate', 'value', 'best_buy', 'best_sell'):
                                         candidates.append(item.get(price_key))

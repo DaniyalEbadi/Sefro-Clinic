@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from Sefro_Clinic.fields import ShamsiDateTimeField
+from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
 from .models import Customer, Payment, Service, ServiceCategory, Visit
 
@@ -173,6 +173,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     total_payments = serializers.SerializerMethodField()
     created_at = ShamsiDateTimeField(read_only=True)
     last_visit_date = serializers.SerializerMethodField()
+    birthday = ShamsiDateField(required=False, allow_null=True)
     bitmoji_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     satisfaction = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5)
 
@@ -184,6 +185,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             'last_name',
             'mobile_number',
             'national_id',
+            'birthday',
             'bitmoji_code',
             'satisfaction',
             'notes',

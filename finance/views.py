@@ -573,3 +573,61 @@ class ExchangeRateReportView(APIView):
             data['amount_usd'] = str(amt.quantize(Decimal('0.01')))
             data['amount_toman'] = str(convert_usd_to_toman(amt, rate))
         return Response(data)
+
+
+@extend_schema(tags=['Reports'])
+class BackupExchangeRateReportView(APIView):
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('usd', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Optional USD amount to convert to Toman (via backup provider)'),
+            OpenApiParameter('amount', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Alias for usd'),
+            OpenApiParameter('amount_usd', OpenApiTypes.NUMBER, OpenApiParameter.QUERY, description='Alias for usd'),
+        ],
+        responses=inline_serializer(
+            name='BackupExchangeRateReport',
+            fields={
+                'currency_from': serializers.CharField(),
+                'currency_to': serializers.CharField(),
+                'rate': serializers.CharField(),
+                'rate_toman_per_usd': serializers.CharField(),
+                'effective_at': serializers.CharField(allow_null=True),
+                'source': serializers.CharField(),
+                'provider': serializers.CharField(),
+                'amount_usd': serializers.CharField(required=False),
+                'amount_toman': serializers.CharField(required=False),
+            },
+        ),
+    )
+    def get(self, request):
+        from .services.exchange_rates import BrsApiExchangeRateProvider, convert_usd_to_toman
+
+        provider = BrsApiExchangeRateProvider()
+        rate = provider.get_usd_to_toman_rate()
+        if rate is None:
+            return Response(
+                {'detail': 'Backup exchange rate unavailable. Configure EXCHANGE_RATE_BACKUP_API_KEY and check BrsApi connectivity.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        data = {
+            'currency_from': 'USD',
+            'currency_to': 'TOMAN',
+            'rate': str(rate),
+            'rate_toman_per_usd': str(rate),
+            'effective_at': timezone.now().isoformat(),
+            'source': 'brsapi',
+            'provider': 'BrsApi.ir',
+        }
+        raw_amount = request.query_params.get('usd') or request.query_params.get('amount') or request.query_params.get('amount_usd')
+        if raw_amount is not None:
+            try:
+                amt = Decimal(str(raw_amount))
+            except Exception:
+                return Response({'detail': 'Invalid amount. Must be numeric.'}, status=status.HTTP_400_BAD_REQUEST)
+            if amt < 0:
+                return Response({'detail': 'Amount must be non-negative.'}, status=status.HTTP_400_BAD_REQUEST)
+            data['amount_usd'] = str(amt.quantize(Decimal('0.01')))
+            data['amount_toman'] = str(convert_usd_to_toman(amt, rate))
+        return Response(data)
