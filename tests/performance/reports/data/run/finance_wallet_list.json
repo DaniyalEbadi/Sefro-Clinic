@@ -1,0 +1,19 @@
+{
+  "n": 20,
+  "min_ms": 3.17,
+  "p50_ms": 4.34,
+  "p75_ms": 4.79,
+  "p90_ms": 6.72,
+  "p95_ms": 9.23,
+  "p99_ms": 15.35,
+  "max_ms": 15.35,
+  "mean_ms": 5.26,
+  "url": "/api/finance/wallets/",
+  "method": "GET",
+  "iterations": 20,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 190.2,
+  "avg_response_bytes": 239,
+  "max_response_bytes": 239
+}

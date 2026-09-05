@@ -43,7 +43,7 @@ class ReportGenerationTests(TestCase):
         ]
 
         # Endpoint benchmarks
-        endpoint_keys = [k for k in metrics if k.startswith(('crud_', 'auth_', 'dashboard', 'reports_', 'inventory_'))]
+        endpoint_keys = [k for k in metrics if k.startswith(('crud_', 'auth_', 'dashboard', 'reports_', 'inventory_', 'finance_'))]
         if endpoint_keys:
             lines.append('## Endpoint Benchmarks')
             lines.append('')

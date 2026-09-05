@@ -1,0 +1,19 @@
+{
+  "n": 20,
+  "min_ms": 2.59,
+  "p50_ms": 3.0,
+  "p75_ms": 3.87,
+  "p90_ms": 4.29,
+  "p95_ms": 4.5,
+  "p99_ms": 19.66,
+  "max_ms": 19.66,
+  "mean_ms": 4.06,
+  "url": "/api/finance/expenses/",
+  "method": "GET",
+  "iterations": 20,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 246.5,
+  "avg_response_bytes": 52,
+  "max_response_bytes": 52
+}

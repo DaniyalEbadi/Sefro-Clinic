@@ -135,6 +135,92 @@ jobs:
       - name: Run role-based logic tests
         run: python manage.py test tests.logic --parallel 1 --noinput -v 0
 
+  integration:
+    name: Integration tests (wallet/checkout/customer/visit/expense/exchange)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: sefro_admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run integration suite (112 tests, incl. new wallet/checkout/customer/birthday/expense/exchange)
+        run: python manage.py test tests.integration --parallel 1 --noinput -v 1
+
+  e2e:
+    name: E2E critical journeys (API E2E)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sefro_clinic
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sefro_clinic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DJANGO_SECRET_KEY: ci-only-test-key-not-used-in-production
+      CLINIC_ADMIN_USERNAME: sefro_admin
+      CLINIC_ADMIN_PASSWORD: ci-only-password-not-used-in-production
+      POSTGRES_DB: sefro_clinic
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST: 127.0.0.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run E2E suite (18 tests, incl. new critical journeys)
+        run: python manage.py test tests.e2e --parallel 1 --noinput -v 1
+
   performance:
     name: Performance regression checks
     runs-on: ubuntu-latest
@@ -175,7 +261,7 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      - name: Run performance regression tests (fast mode)
+      - name: Run performance regression tests (fast mode, now incl. finance benchmarks)
         run: python manage.py test tests.performance --parallel 1 --noinput -v 0
 
       - name: Collect performance artifacts
@@ -187,7 +273,7 @@ jobs:
 
   build:
     name: Build Docker image
-    needs: [lint, test, logic, performance]
+    needs: [lint, test, logic, integration, e2e, performance]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     env:

@@ -1,0 +1,19 @@
+{
+  "n": 20,
+  "min_ms": 2.42,
+  "p50_ms": 3.25,
+  "p75_ms": 3.53,
+  "p90_ms": 5.14,
+  "p95_ms": 6.07,
+  "p99_ms": 9.66,
+  "max_ms": 9.66,
+  "mean_ms": 3.79,
+  "url": "/api/reports/exchange-dollar/?usd=10",
+  "method": "GET",
+  "iterations": 20,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 263.6,
+  "avg_response_bytes": 228,
+  "max_response_bytes": 228
+}

@@ -44,8 +44,12 @@ def login(client, username, password):
         'username': username,
         'password': password,
     }, format='json')
-    assert response.status_code == 200, f'login failed for {username}: {response.status_code}'
-    client.credentials(HTTP_AUTHORIZATION=f'Bearer {response.data["access"]}')
+    assert response.status_code == 200, f'login failed for {username}: {response.status_code} {response.data}'
+    access = response.data.get('access')
+    if not access and 'access_token' in response.cookies:
+        access = response.cookies['access_token'].value
+    assert access, f'no access token in response for {username}: data={response.data} cookies={list(response.cookies.keys())}'
+    client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
     return response
 
 

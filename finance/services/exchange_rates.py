@@ -106,6 +106,13 @@ def get_current_usd_to_toman_rate() -> Optional[Decimal]:
                         logger.exception('Failed to cache external rate')
                     return fetched
                 # on fetch failure, fall through to cached
+            else:
+                # Cache is fresh — return it directly without second query (perf)
+                if latest is not None:
+                    validated = _validate_rate(latest.rate)
+                    if validated is not None:
+                        return validated
+                # if invalid, fall through to _get_cached_rate/fallback
     rate = _get_cached_rate('USD', 'TOMAN')
     validated = _validate_rate(rate) if rate is not None else None
     if validated is not None:

@@ -18,7 +18,7 @@ class ReportPerformanceSmokeTests(TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        cls.client = admin_client()
+        # Dataset only; client is per-test to avoid TestCase client shadowing
         customer = Customer.objects.create(
             first_name='Bulk', last_name='Buyer',
             mobile_number='09130000000', national_id='100-0000100',
@@ -34,6 +34,10 @@ class ReportPerformanceSmokeTests(TestCase):
             )
             for index in range(500)
         ])
+
+    def setUp(self):
+        # Per-test authenticated client (avoids class-level client shadowing by TestCase)
+        self.client = admin_client()
 
     def _timed_get(self, url):
         started = time.perf_counter()

@@ -230,6 +230,67 @@ class DashboardAndReportsBenchmarkTests(TestCase):
         save_result('reports_referral', result)
 
 
+class FinanceBenchmarkTests(TestCase):
+    """Finance domain: checkout, wallet, exchange, expense, reporting."""
+
+    @classmethod
+    def setUpTestData(cls):
+        from decimal import Decimal
+        from django.utils import timezone
+        from finance.services.exchange_rates import set_rate
+        from inventory.models import Product
+        from customers.models import Customer
+        from finance.models import Wallet
+        set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='perf-finance')
+        # Seed one customer with wallet for checkout benchmarks
+        cust = Customer.objects.create(first_name='Perf', last_name='Finance', mobile_number='09129990000', national_id='990-0000099')
+        Wallet.objects.create(customer=cust, balance=Decimal('1000.00'))
+        # Seed product for cost snapshot
+        prod = Product.objects.create(name='PerfProd', unit_price=Decimal('10'), cost_usd=Decimal('5'), count=1000)
+
+    def setUp(self):
+        self.client = _auth_client()
+        self.meter = EndpointMeter(self.client)
+
+    def test_checkout_cash_latency(self):
+        from customers.models import Customer
+        cid = Customer.objects.order_by('pk').values_list('pk', flat=True).first()
+        latencies = []
+        for i in range(10):
+            start = time.perf_counter()
+            resp = self.client.post('/api/finance/checkout/', {
+                'customer': cid,
+                'amount_usd': '10.00',
+                'components': [{'method': 'cash', 'amount_usd': '10.00'}],
+                'idempotency_key': f'perf-checkout-{i}-{time.time_ns()}',
+            }, format='json')
+            latencies.append((time.perf_counter() - start) * 1000)
+            self.assertEqual(resp.status_code, 201)
+        stats = summarize_latencies(latencies)
+        save_result('finance_checkout', stats)
+        self.assertLess(stats['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
+    def test_wallet_list_latency(self):
+        result = self.meter.run('get', '/api/finance/wallets/', iterations=20)
+        save_result('finance_wallet_list', result)
+        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
+    def test_exchange_dollar_report_latency(self):
+        result = self.meter.run('get', '/api/reports/exchange-dollar/?usd=10', iterations=20)
+        save_result('finance_exchange_dollar', result)
+        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
+    def test_financial_summary_latency(self):
+        result = self.meter.run('get', '/api/finance/reports/financial-summary/', iterations=15)
+        save_result('finance_financial_summary', result)
+        self.assertLess(result['p95_ms'], BUDGETS['reports_heavy_p95_ms_fast_mode'])
+
+    def test_expense_list_latency(self):
+        result = self.meter.run('get', '/api/finance/expenses/', iterations=20)
+        save_result('finance_expense_list', result)
+        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
+
 class PaginationBenchmarkTests(TestCase):
     """Pagination performance at various page depths."""
 
