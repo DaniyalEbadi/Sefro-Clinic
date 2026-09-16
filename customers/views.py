@@ -12,7 +12,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdminOrReadOnly
+from accounts.permissions import IsAdminOrEmployee, IsAdminOrReadOnly
 from Sefro_Clinic.fields import shamsi_to_greg_date
 
 from .models import Customer, Payment, Service, ServiceCategory, Visit
@@ -415,9 +415,9 @@ class ReferralReportView(APIView):
 @extend_schema(tags=['Customers'])
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAdminOrEmployee]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['first_name', 'last_name', 'mobile_number', 'national_id', 'bitmoji_code']
+    search_fields = ['first_name', 'last_name', 'mobile_number', 'national_id', 'bitmoji_code', 'file_sys_id']
     ordering_fields = ['first_name', 'last_name', 'created_at', 'num_visits']
     ordering = ['first_name', 'last_name']
 

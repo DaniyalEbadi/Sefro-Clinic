@@ -22,6 +22,8 @@ from .models import (
     ProductUsage,
     Sale,
     ServiceItem,
+    StaffCompensationRule,
+    StaffPayout,
     Wallet,
     WalletRewardRule,
     WalletTransaction,
@@ -41,12 +43,15 @@ from .serializers import (
     RefundSerializer,
     SaleSerializer,
     ServiceItemSerializer,
+    StaffCompensationRuleSerializer,
+    StaffPayoutSerializer,
     WalletRewardRuleSerializer,
     WalletSerializer,
     WalletTransactionSerializer,
 )
 from .services import accounting, payments, reporting
 from .services import expenses as expense_svc
+from .services import staff_compensation
 from .services.wallet import InsufficientFunds
 
 
@@ -631,3 +636,304 @@ class BackupExchangeRateReportView(APIView):
             data['amount_usd'] = str(amt.quantize(Decimal('0.01')))
             data['amount_toman'] = str(convert_usd_to_toman(amt, rate))
         return Response(data)
+
+
+def calculate_service_profit(service, rate):
+    revenue_usd = service.price_usd or Decimal('0')
+    cost_usd = Decimal('0')
+    for item in service.items.select_related('product').all():
+        qty = item.quantity
+        cost = item.product.cost_usd if item.product else Decimal('0')
+        cost_usd += (Decimal(str(qty)) * Decimal(str(cost))).quantize(Decimal('0.01'))
+    revenue_toman = (revenue_usd * rate).quantize(Decimal('0.01'))
+    cost_toman = (cost_usd * rate).quantize(Decimal('0.01'))
+    return {
+        'revenue_usd': revenue_usd,
+        'revenue_toman': revenue_toman,
+        'product_cost_usd': cost_usd,
+        'product_cost_toman': cost_toman,
+        'profit_usd': (revenue_usd - cost_usd).quantize(Decimal('0.01')),
+        'profit_toman': (revenue_toman - cost_toman).quantize(Decimal('0.01')),
+    }
+
+
+@extend_schema(tags=['Staff Compensation'])
+class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
+    queryset = StaffCompensationRule.objects.all()
+    serializer_class = StaffCompensationRuleSerializer
+    permission_classes = [IsAdmin]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ['role']
+
+
+@extend_schema(tags=['Staff Compensation'])
+class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = StaffPayout.objects.select_related('staff', 'visit', 'service', 'payout_product')
+    serializer_class = StaffPayoutSerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.OrderingFilter, filters.SearchFilter]
+    ordering = ['-created_at']
+    search_fields = ['staff__username', 'staff__first_name', 'staff__last_name', 'service__name']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        if params.get('staff'):
+            qs = qs.filter(staff_id=params['staff'])
+        if params.get('role'):
+            qs = qs.filter(role=params['role'])
+        if params.get('status'):
+            qs = qs.filter(status=params['status'])
+        if params.get('visit'):
+            qs = qs.filter(visit_id=params['visit'])
+        return qs
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
+            OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+        responses=inline_serializer(
+            name='StaffPayoutSummary',
+            fields={
+                'period': inline_serializer('Period', fields={'start': OpenApiTypes.DATETIME, 'end': OpenApiTypes.DATETIME}),
+                'total_cash_usd': serializers.CharField(),
+                'total_cash_toman': serializers.CharField(),
+                'total_product_value_usd': serializers.CharField(),
+                'total_product_value_toman': serializers.CharField(),
+                'total_payout_usd': serializers.CharField(),
+                'total_payout_toman': serializers.CharField(),
+                'payout_count': serializers.IntegerField(),
+            },
+        ),
+    )
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        start, end = _resolve_range(request)
+        params = request.query_params
+        result = staff_compensation.staff_payout_summary(
+            start, end,
+            staff_id=params.get('staff'),
+            role=params.get('role'),
+        )
+        return Response(_stringify(result))
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    @action(detail=False, methods=['get'])
+    def detail_report(self, request):
+        start, end = _resolve_range(request)
+        params = request.query_params
+        data = staff_compensation.staff_payout_detail(
+            start, end,
+            staff_id=params.get('staff'),
+        )
+        return Response(_stringify(data))
+
+
+@extend_schema(tags=['Reports'])
+class StaffPayoutSummaryView(APIView):
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
+            OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    def get(self, request):
+        start, end = _resolve_range(request)
+        params = request.query_params
+        result = staff_compensation.staff_payout_summary(
+            start, end,
+            staff_id=params.get('staff'),
+            role=params.get('role'),
+        )
+        return Response(_stringify(result))
+
+
+@extend_schema(tags=['Reports'])
+class ProfitByStaffView(APIView):
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    def get(self, request):
+        from customers.models import Visit
+        from django.db.models import Sum
+        start, end = _resolve_range(request)
+
+        visits = Visit.objects.filter(
+            start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
+        ).select_related('staff').prefetch_related('services__items__product')
+
+        rate = get_rate()
+        staff_data = {}
+
+        for visit in visits:
+            if not visit.staff:
+                continue
+            staff_id = visit.staff.id
+            staff_name = f"{visit.staff.first_name} {visit.staff.last_name}".strip() or visit.staff.username
+
+            for svc in visit.services.all():
+                profit = calculate_service_profit(svc, rate)
+                if staff_id not in staff_data:
+                    staff_data[staff_id] = {
+                        'staff_id': staff_id,
+                        'staff_name': staff_name,
+                        'revenue_usd': Decimal('0'),
+                        'revenue_toman': Decimal('0'),
+                        'product_cost_usd': Decimal('0'),
+                        'product_cost_toman': Decimal('0'),
+                        'profit_usd': Decimal('0'),
+                        'profit_toman': Decimal('0'),
+                        'visit_count': 0,
+                    }
+                staff_data[staff_id]['revenue_usd'] += profit['revenue_usd']
+                staff_data[staff_id]['revenue_toman'] += profit['revenue_toman']
+                staff_data[staff_id]['product_cost_usd'] += profit['product_cost_usd']
+                staff_data[staff_id]['product_cost_toman'] += profit['product_cost_toman']
+                staff_data[staff_id]['profit_usd'] += profit['profit_usd']
+                staff_data[staff_id]['profit_toman'] += profit['profit_toman']
+                staff_data[staff_id]['visit_count'] += 1
+
+        for data in staff_data.values():
+            data['revenue_usd'] = str(data['revenue_usd'].quantize(Decimal('0.01')))
+            data['revenue_toman'] = str(data['revenue_toman'].quantize(Decimal('0.01')))
+            data['product_cost_usd'] = str(data['product_cost_usd'].quantize(Decimal('0.01')))
+            data['product_cost_toman'] = str(data['product_cost_toman'].quantize(Decimal('0.01')))
+            data['profit_usd'] = str(data['profit_usd'].quantize(Decimal('0.01')))
+            data['profit_toman'] = str(data['profit_toman'].quantize(Decimal('0.01')))
+
+        return Response(_stringify(sorted(staff_data.values(), key=lambda x: x['staff_name'])))
+
+
+@extend_schema(tags=['Reports'])
+class DashboardView(APIView):
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    def get(self, request):
+        start, end = _resolve_range(request)
+
+        from customers.models import Customer, Visit
+        from finance.models import Expense, Wallet
+
+        # Sales Summary
+        sales = Sale.objects.filter(created_at__gte=start, created_at__lte=end)
+        revenue_usd = sales.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
+        revenue_toman = sales.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
+        paid_sales = sales.filter(status=Sale.Status.PAID)
+        sale_count = paid_sales.count()
+
+        # Product Costs
+        usages = ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
+        product_cost_usd = usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
+        product_cost_toman = Decimal('0')
+        for u in usages.only('total_cost_usd_snapshot', 'exchange_rate_snapshot'):
+            product_cost_toman += (u.total_cost_usd_snapshot or Decimal('0')) * (u.exchange_rate_snapshot or get_rate())
+        product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
+
+        # Gross Profit
+        gross_profit_usd = (revenue_usd - product_cost_usd).quantize(Decimal('0.01'))
+        gross_profit_toman = (revenue_toman - product_cost_toman).quantize(Decimal('0.01'))
+
+        # Expenses
+        expenses = Expense.objects.filter(
+            expense_date__gte=start.date(), expense_date__lte=end.date(),
+            status__in=[Expense.Status.APPROVED, Expense.Status.PAID],
+        )
+        expenses_usd = expenses.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
+        expenses_toman = expenses.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
+
+        # Net Profit
+        net_profit_usd = (gross_profit_usd - expenses_usd).quantize(Decimal('0.01'))
+        net_profit_toman = (gross_profit_toman - expenses_toman).quantize(Decimal('0.01'))
+
+        # Staff Payouts
+        payouts = StaffPayout.objects.filter(created_at__gte=start, created_at__lte=end)
+        payout_cash_usd = payouts.aggregate(total=Sum('payout_cash_usd'))['total'] or Decimal('0')
+        payout_cash_toman = payouts.aggregate(total=Sum('payout_cash_toman'))['total'] or Decimal('0')
+        payout_product_usd = payouts.aggregate(total=Sum('payout_product_value_usd'))['total'] or Decimal('0')
+        payout_product_toman = payouts.aggregate(total=Sum('payout_product_value_toman'))['total'] or Decimal('0')
+        total_payout_usd = (payout_cash_usd + payout_product_usd).quantize(Decimal('0.01'))
+        total_payout_toman = (payout_cash_toman + payout_product_toman).quantize(Decimal('0.01'))
+
+        # Wallet Summary
+        wallet_liability = Wallet.objects.aggregate(total=Sum('balance'))['total'] or Decimal('0')
+        wallet_rewards = WalletTransaction.objects.filter(
+            transaction_type=WalletTransaction.Type.REWARD,
+            created_at__gte=start, created_at__lte=end,
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        wallet_payments = WalletTransaction.objects.filter(
+            transaction_type=WalletTransaction.Type.PAYMENT,
+            created_at__gte=start, created_at__lte=end,
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        # Operational Metrics
+        visits_completed = Visit.objects.filter(
+            start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
+        ).count()
+        new_customers = Customer.objects.filter(
+            created_at__gte=start, created_at__lte=end,
+        ).count()
+        avg_ticket = (revenue_usd / sale_count).quantize(Decimal('0.01')) if sale_count else Decimal('0')
+
+        # Payment Method Breakdown
+        comps = PaymentComponent.objects.filter(sale__in=sales)
+        method_breakdown = {}
+        for method in (PaymentComponent.Method.CASH, PaymentComponent.Method.CARD, PaymentComponent.Method.WALLET):
+            method_breakdown[method] = comps.filter(method=method).aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
+
+        return Response(_stringify({
+            'period': {'start': start, 'end': end},
+            'sales_summary': {
+                'revenue_usd': str(revenue_usd),
+                'revenue_toman': str(revenue_toman),
+                'gross_profit_usd': str(gross_profit_usd),
+                'gross_profit_toman': str(gross_profit_toman),
+                'expenses_usd': str(expenses_usd),
+                'expenses_toman': str(expenses_toman),
+                'net_profit_usd': str(net_profit_usd),
+                'net_profit_toman': str(net_profit_toman),
+                'total_payout_usd': str(total_payout_usd),
+                'total_payout_toman': str(total_payout_toman),
+                'sale_count': sale_count,
+                'avg_ticket_usd': str(avg_ticket),
+                'payment_methods': {k: str(v) for k, v in method_breakdown.items()},
+            },
+            'wallet_summary': {
+                'total_liability_usd': str(wallet_liability),
+                'rewards_issued_usd': str(wallet_rewards),
+                'wallet_payments_usd': str(abs(wallet_payments)),
+            },
+            'operational': {
+                'visits_completed': visits_completed,
+                'new_customers': new_customers,
+                'staff_payout_count': payouts.count(),
+            },
+        }))

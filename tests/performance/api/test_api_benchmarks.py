@@ -236,11 +236,13 @@ class FinanceBenchmarkTests(TestCase):
     @classmethod
     def setUpTestData(cls):
         from decimal import Decimal
+
         from django.utils import timezone
-        from finance.services.exchange_rates import set_rate
-        from inventory.models import Product
+
         from customers.models import Customer
         from finance.models import Wallet
+        from finance.services.exchange_rates import set_rate
+        from inventory.models import Product
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='perf-finance')
         # Seed one customer with wallet for checkout benchmarks
         cust = Customer.objects.create(first_name='Perf', last_name='Finance', mobile_number='09129990000', national_id='990-0000099')

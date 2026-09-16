@@ -15,6 +15,8 @@ from .models import (
     ProductUsage,
     Sale,
     ServiceItem,
+    StaffCompensationRule,
+    StaffPayout,
     Wallet,
     WalletRewardRule,
     WalletTransaction,
@@ -230,3 +232,56 @@ class CheckoutSerializer(serializers.Serializer):
 class RefundSerializer(serializers.Serializer):
     refund_amount_usd = serializers.DecimalField(max_digits=14, decimal_places=2, required=False, allow_null=True)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
+
+
+class StaffCompensationRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StaffCompensationRule
+        fields = [
+            'id', 'role', 'payout_type', 'calculation_type',
+            'percent_profit', 'fixed_amount_usd', 'fixed_amount_toman',
+            'transport_usd', 'transport_toman',
+            'product', 'product_qty',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class StaffPayoutSerializer(serializers.ModelSerializer):
+    staff_name = serializers.SerializerMethodField()
+    service_name = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
+    total_payout_usd = serializers.SerializerMethodField()
+    total_payout_toman = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StaffPayout
+        fields = [
+            'id', 'staff', 'staff_name', 'visit', 'service', 'service_name', 'role',
+            'revenue_usd', 'revenue_toman',
+            'product_cost_usd', 'product_cost_toman',
+            'profit_usd', 'profit_toman',
+            'payout_cash_usd', 'payout_cash_toman',
+            'payout_product', 'product_name', 'payout_product_qty',
+            'payout_product_value_usd', 'payout_product_value_toman',
+            'total_payout_usd', 'total_payout_toman',
+            'exchange_rate', 'status', 'payout_mode', 'notes',
+            'approved_by', 'approved_at', 'paid_at',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['created_at', 'updated_at']
+
+    def get_staff_name(self, obj):
+        return f"{obj.staff.first_name} {obj.staff.last_name}".strip() or obj.staff.username
+
+    def get_service_name(self, obj):
+        return obj.service.name if obj.service else None
+
+    def get_product_name(self, obj):
+        return obj.payout_product.name if obj.payout_product else None
+
+    def get_total_payout_usd(self, obj):
+        return str((obj.payout_cash_usd or Decimal('0')) + (obj.payout_product_value_usd or Decimal('0')))
+
+    def get_total_payout_toman(self, obj):
+        return str((obj.payout_cash_toman or Decimal('0')) + (obj.payout_product_value_toman or Decimal('0')))

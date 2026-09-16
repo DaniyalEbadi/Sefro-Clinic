@@ -15,6 +15,13 @@ class IsAdminOrReadOnly(permissions.BasePermission):
         return request.user.is_admin_user
 
 
+class IsAdminOrEmployee(permissions.BasePermission):
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return request.user.is_admin_user or request.user.role == 'employee'
+
+
 class CanManageVisits(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user.is_authenticated:

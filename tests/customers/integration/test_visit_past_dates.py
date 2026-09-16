@@ -19,9 +19,10 @@ class VisitUnrestrictedTimeTest(TestCase):
             role=ClinicUser.Role.EMPLOYEE,
         )
         self.customer = Customer.objects.create(
-            first_name='Ali', last_name='Rezaei',
+            first_name='Test', last_name='Customer',
             mobile_number='09121111111', national_id='001-0000001',
             bitmoji_code='B001',
+            file_sys_id='FS00123456789012345678901234567890',
         )
         self.service = Service.objects.create(name='Consultation')
 

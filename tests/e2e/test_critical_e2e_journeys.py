@@ -3,19 +3,19 @@ E2E Critical Journeys — covers skill §101 checklist & §75 critical suite
 Uses real HTTP API via APIClient (API E2E) as frontend is API-only.
 Verifies user-visible result + API + DB + financial invariants per §35, §58.
 """
+from datetime import timedelta
 from decimal import Decimal
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
-import jdatetime
 
+import jdatetime
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from customers.models import Customer, Service, Visit
-from finance.models import ExpenseCategory, ExchangeRate, Sale, Wallet, WalletRewardRule, WalletTransaction
+from finance.models import ExchangeRate, ExpenseCategory, Sale, Wallet, WalletRewardRule, WalletTransaction
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, admin_client, employee_client, make_admin, make_employee
+from tests.helpers import admin_client, employee_client, make_admin
 
 
 def _unique_customer(suffix, birthday=None):
@@ -222,8 +222,8 @@ class ExpenseWorkflowE2ETests(TestCase):
         submit = emp.post(f'/api/finance/expenses/{eid}/submit/', {}, format='json')
         self.assertEqual(submit.status_code, 200)
         # self-approval via direct service must be forbidden — but via API employee cannot approve (403) ; test service layer directly for business rule
-        from finance.services import expenses as exp_svc
         from finance.models import Expense
+        from finance.services import expenses as exp_svc
         exp = Expense.objects.get(id=eid)
         with self.assertRaises(exp_svc.ExpenseError):
             exp_svc.approve_expense(exp, exp.created_by)
@@ -328,9 +328,9 @@ class SecurityBypassE2ETests(TestCase):
         bad.credentials(HTTP_AUTHORIZATION='Bearer invalid.token.here')
         self.assertEqual(bad.get('/api/customers/').status_code, 401)
         # expired token via tampered exp
-        from tests.helpers import make_admin
-        from rest_framework_simplejwt.tokens import AccessToken
         import time
+
+        from rest_framework_simplejwt.tokens import AccessToken
         user = make_admin()
         token = AccessToken.for_user(user)
         token.payload['exp'] = int(time.time()) - 3600

@@ -401,3 +401,99 @@ class ProductPurchase(models.Model):
 
     def __str__(self):
         return f'Purchase {self.quantity} x {self.product} @ {self.unit_cost_usd}'
+
+
+class StaffCompensationRule(models.Model):
+    class Role(models.TextChoices):
+        DOCTOR = 'doctor', 'Doctor (Injections)'
+        FACIAL = 'facial', 'Facial Worker'
+        LASER = 'laser', 'Laser Tech'
+
+    class PayoutType(models.TextChoices):
+        CASH = 'cash', 'Cash Only'
+        PRODUCT = 'product', 'Product Only'
+        HYBRID = 'hybrid', 'Cash + Product'
+
+    class CalculationType(models.TextChoices):
+        PERCENT_PROFIT = 'percent_profit', '% of Profit'
+        FIXED_PER_SESSION = 'fixed_per_session', 'Fixed per Session'
+        MONTHLY_SALARY = 'monthly_salary', 'Monthly Salary'
+
+    role = models.CharField(max_length=20, choices=Role.choices, unique=True)
+    payout_type = models.CharField(max_length=20, choices=PayoutType.choices, default=PayoutType.CASH)
+    calculation_type = models.CharField(max_length=20, choices=CalculationType.choices, default=CalculationType.PERCENT_PROFIT)
+
+    percent_profit = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Percentage of profit (e.g., 50.00 for 50%)')
+    fixed_amount_usd = usd_field(null=True, blank=True, help_text='Fixed USD amount per session')
+    fixed_amount_toman = toman_field(null=True, blank=True, help_text='Fixed Toman amount per session (alternative to USD)')
+    transport_usd = usd_field(default=Decimal('0'), help_text='Transport allowance per session (USD)')
+    transport_toman = toman_field(default=Decimal('0'), help_text='Transport allowance per session (Toman)')
+
+    product = models.ForeignKey('inventory.Product', on_delete=models.SET_NULL, null=True, blank=True, related_name='compensation_rules')
+    product_qty = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('1'), validators=[MinValueValidator(Decimal('0'))])
+
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['role']
+
+    def __str__(self):
+        return f'{self.get_role_display()} - {self.get_calculation_type_display()}'
+
+
+class StaffPayout(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
+        APPROVED = 'approved', 'Approved'
+        PAID = 'paid', 'Paid'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    class PayoutMode(models.TextChoices):
+        CASH = 'cash', 'Cash'
+        PRODUCT = 'product', 'Product'
+
+    staff = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payouts')
+    visit = models.ForeignKey('customers.Visit', on_delete=models.PROTECT, related_name='staff_payouts')
+    service = models.ForeignKey('customers.Service', on_delete=models.PROTECT, related_name='staff_payouts')
+    role = models.CharField(max_length=20, choices=StaffCompensationRule.Role.choices)
+
+    revenue_usd = usd_field(default=Decimal('0'))
+    revenue_toman = toman_field(default=Decimal('0'))
+    product_cost_usd = usd_field(default=Decimal('0'))
+    product_cost_toman = toman_field(default=Decimal('0'))
+    profit_usd = usd_field(default=Decimal('0'))
+    profit_toman = toman_field(default=Decimal('0'))
+
+    payout_cash_usd = usd_field(default=Decimal('0'))
+    payout_cash_toman = toman_field(default=Decimal('0'))
+    payout_product = models.ForeignKey('inventory.Product', on_delete=models.SET_NULL, null=True, blank=True, related_name='staff_payouts')
+    payout_product_qty = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0'))
+    payout_product_value_usd = usd_field(default=Decimal('0'))
+    payout_product_value_toman = toman_field(default=Decimal('0'))
+
+    exchange_rate = rate_field()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    payout_mode = models.CharField(max_length=10, choices=PayoutMode.choices, default=PayoutMode.CASH)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_payouts')
+    approved_at = models.DateTimeField(null=True, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['staff', '-created_at']),
+            models.Index(fields=['visit', 'staff']),
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['role', '-created_at']),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=['visit', 'staff', 'service'], name='uniq_payout_per_visit_staff_service'),
+        ]
+
+    def __str__(self):
+        return f'Payout {self.staff} - {self.service} ({self.status})'

@@ -11,6 +11,7 @@ class CustomerModelTest(TestCase):
             first_name='Ali', last_name='Rezaei',
             mobile_number='09121111111', national_id='001-0000001',
             bitmoji_code='B001',
+            file_sys_id='FS00123456789012345678901234567890',
         )
 
     def test_full_name(self):

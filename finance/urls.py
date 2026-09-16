@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CheckoutView,
+    DashboardView,
     ExchangeRateViewSet,
     ExpenseCategoryViewSet,
     ExpenseViewSet,
@@ -15,9 +16,13 @@ from .views import (
     ProductUsageViewSet,
     ProfitByPackageView,
     ProfitByServiceView,
+    ProfitByStaffView,
     RecordConsumptionView,
     SaleViewSet,
     ServiceItemViewSet,
+    StaffCompensationRuleViewSet,
+    StaffPayoutSummaryView,
+    StaffPayoutViewSet,
     WalletRewardRuleViewSet,
     WalletSummaryView,
     WalletTransactionViewSet,
@@ -39,6 +44,8 @@ router.register('sales', SaleViewSet, basename='sale')
 router.register('expense-categories', ExpenseCategoryViewSet, basename='expense-category')
 router.register('expenses', ExpenseViewSet, basename='expense')
 router.register('product-purchases', ProductPurchaseViewSet, basename='product-purchase')
+router.register('staff-compensation-rules', StaffCompensationRuleViewSet, basename='staff-compensation-rule')
+router.register('staff-payouts', StaffPayoutViewSet, basename='staff-payout')
 
 urlpatterns = [
     path('checkout/', CheckoutView.as_view(), name='checkout'),
@@ -46,6 +53,9 @@ urlpatterns = [
     path('reports/financial-summary/', FinancialSummaryView.as_view(), name='financial-summary'),
     path('reports/profit-by-service/', ProfitByServiceView.as_view(), name='profit-by-service'),
     path('reports/profit-by-package/', ProfitByPackageView.as_view(), name='profit-by-package'),
+    path('reports/profit-by-staff/', ProfitByStaffView.as_view(), name='profit-by-staff'),
     path('reports/wallet-summary/', WalletSummaryView.as_view(), name='wallet-summary'),
+    path('reports/staff-payout-summary/', StaffPayoutSummaryView.as_view(), name='staff-payout-summary'),
+    path('reports/dashboard/', DashboardView.as_view(), name='dashboard'),
     path('', include(router.urls)),
 ]

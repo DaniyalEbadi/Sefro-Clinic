@@ -25,6 +25,12 @@ class ServiceCategory(models.Model):
 
 
 class Service(models.Model):
+    class CompensationRole(models.TextChoices):
+        NONE = 'none', 'No Commission'
+        DOCTOR = 'doctor', 'Doctor (Injections)'
+        FACIAL = 'facial', 'Facial Worker'
+        LASER = 'laser', 'Laser Tech'
+
     name = models.CharField(max_length=100, unique=True, validators=TEXT_SANITIZERS)
     description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0'))], default=Decimal('0'))
@@ -41,6 +47,12 @@ class Service(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name='services',
+    )
+    compensation_role = models.CharField(
+        max_length=20,
+        choices=CompensationRole.choices,
+        default=CompensationRole.NONE,
+        help_text='Determines which staff role receives commission for this service',
     )
 
     class Meta:
@@ -60,6 +72,7 @@ class Customer(models.Model):
     mobile_number = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
     national_id = models.CharField(max_length=20, unique=True, validators=TEXT_SANITIZERS)
     bitmoji_code = models.CharField(max_length=50, unique=True, null=True, blank=True, validators=TEXT_SANITIZERS)
+    file_sys_id = models.CharField(max_length=40, unique=True, null=True, blank=True, validators=TEXT_SANITIZERS)
     birthday = models.DateField(null=True, blank=True, help_text='Customer birthday (Shamsi YYYY-MM-DD via API)')
     created_at = models.DateTimeField(auto_now_add=True)
     satisfaction = models.PositiveSmallIntegerField(null=True, blank=True, help_text='Customer satisfaction rating 1-5')

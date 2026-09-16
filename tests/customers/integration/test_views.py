@@ -19,11 +19,13 @@ class CustomerSearchTest(TestCase):
             first_name='John', last_name='Doe',
             mobile_number='09120000001', national_id='001-0000001',
             bitmoji_code='B001',
+            file_sys_id='FS00123456789012345678901234567890',
         )
         Customer.objects.create(
             first_name='Jane', last_name='Smith',
             mobile_number='09120000002', national_id='002-0000002',
             bitmoji_code='B002',
+            file_sys_id='FS00223456789012345678901234567890',
         )
 
     def test_search_by_name(self):

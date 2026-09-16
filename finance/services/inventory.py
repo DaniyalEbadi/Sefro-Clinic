@@ -89,12 +89,18 @@ def record_product_usage(
     package_sale=None,
     at: Optional[object] = None,
     rate: Optional[Decimal] = None,
+    is_commission: bool = False,
 ):
     at = at or timezone.now()
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
     quantity = Decimal(quantity)
     unit_cost = current_cost(product, at=at)
     total_cost = (unit_cost * quantity).quantize(Decimal('0.01'))
+
+    if is_commission:
+        product.count = max((product.count or 0) - int(quantity), 0)
+        product.save(update_fields=['count'])
+
     usage = ProductUsage.objects.create(
         product=product,
         visit=visit,

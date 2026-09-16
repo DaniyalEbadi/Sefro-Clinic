@@ -22,6 +22,7 @@ class CustomersE2ETest(TestCase):
             first_name='Ali', last_name='Rezaei',
             mobile_number='09121111111', national_id='001-0000001',
             bitmoji_code='B001',
+            file_sys_id='FS00123456789012345678901234567890',
         )
 
     def test_01_dashboard(self):
@@ -38,6 +39,7 @@ class CustomersE2ETest(TestCase):
             'first_name': 'Sara', 'last_name': 'Mohammadi',
             'mobile_number': '09122222222', 'national_id': '002-0000002',
             'bitmoji_code': 'B002',
+            'file_sys_id': 'FS00323456789012345678901234567890',
         }, format='json')
         self.assertEqual(create_resp.status_code, status.HTTP_201_CREATED)
         cid = create_resp.data['id']
@@ -50,6 +52,7 @@ class CustomersE2ETest(TestCase):
             'first_name': 'Sara Updated', 'last_name': 'Mohammadi',
             'mobile_number': '09122222222', 'national_id': '002-0000002',
             'bitmoji_code': 'B002',
+            'file_sys_id': 'FS00323456789012345678901234567890',
         }, format='json')
         self.assertEqual(update_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(update_resp.data['first_name'], 'Sara Updated')

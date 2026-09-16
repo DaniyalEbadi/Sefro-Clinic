@@ -77,10 +77,12 @@ class CustomerSerializerTest(TestCase):
         serializer = CustomerSerializer(data={
             'first_name': 'Test', 'last_name': 'Customer',
             'mobile_number': '09120000003', 'national_id': '003-0000003',
+            'file_sys_id': 'FS00123456789012345678901234567890',
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         customer = serializer.save()
         self.assertEqual(customer.first_name, 'Test')
+        self.assertEqual(customer.file_sys_id, 'FS00123456789012345678901234567890')
 
     def test_customer_serializer_invalid_missing_first_name(self):
         serializer = CustomerSerializer(data={
@@ -88,3 +90,12 @@ class CustomerSerializerTest(TestCase):
         })
         self.assertFalse(serializer.is_valid())
         self.assertIn('first_name', serializer.errors)
+
+    def test_customer_serializer_file_sys_id_optional(self):
+        serializer = CustomerSerializer(data={
+            'first_name': 'Test', 'last_name': 'Customer',
+            'mobile_number': '09120000004', 'national_id': '004-0000004',
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        customer = serializer.save()
+        self.assertIsNone(customer.file_sys_id)

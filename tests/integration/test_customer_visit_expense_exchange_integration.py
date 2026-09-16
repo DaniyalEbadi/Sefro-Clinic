@@ -3,8 +3,8 @@ Integration tests for Customers (birthday Shamsi), Visits, Expenses, Exchange Ra
 Covers skill checklist: Customer Integration, Visit, Expense, Exchange Rate, Reporting,
 Inventory, Date/Time (Shamsi), Filtering/Ordering, Pagination, Query N+1, Transaction
 """
+from datetime import timedelta
 from decimal import Decimal
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import jdatetime
@@ -13,18 +13,20 @@ from django.utils import timezone
 from rest_framework import status
 
 from customers.models import Customer, Service, Visit
-from finance.models import ExpenseCategory, ExchangeRate, WalletRewardRule
+from finance.models import ExchangeRate, ExpenseCategory, WalletRewardRule
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin
 
 
 def _make_customer(**overrides):
+    import uuid
     base = {
         'first_name': 'Cust',
         'last_name': 'Test',
         'mobile_number': '09120002000',
         'national_id': '800-0000000',
+        'file_sys_id': f'FS{uuid.uuid4().hex[:36]}',
     }
     base.update(overrides)
     return Customer.objects.create(**base)
@@ -335,7 +337,7 @@ class ReportingIntegrationTests(TestCase):
         from finance.services import expenses as expense_svc
         cat = ExpenseCategory.objects.create(name='Rent-Rep')
         # Need distinct users for expense approval
-        from tests.helpers import make_admin, make_employee
+        from tests.helpers import make_employee
         creator = make_admin()
         approver = make_employee(username='emp_rep')
         exp = expense_svc.create_expense(created_by=creator, category=cat, amount_usd=Decimal('30'), expense_date=timezone.now().date())

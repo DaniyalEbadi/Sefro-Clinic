@@ -5,18 +5,17 @@ Product Cost History, Decimal Precision, Package Completion, PostgreSQL constrai
 Transaction Boundaries, Critical Business Invariants
 """
 from decimal import Decimal
-from unittest.mock import patch
 
 from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Customer, Service, Visit
 from finance.models import ProductUsage, Sale, Wallet, WalletRewardRule, WalletTransaction
 from finance.services.exchange_rates import set_rate
-from finance.services.wallet import InsufficientFunds, credit, current_balance, debit
+from finance.services.wallet import InsufficientFunds, credit, debit
 from inventory.models import Product
-from tests.helpers import admin_client, employee_client, make_admin
+from tests.helpers import admin_client, employee_client
 
 
 def _make_customer(**overrides):
@@ -220,8 +219,8 @@ class CheckoutIntegrationTests(TestCase):
 
     def test_checkout_idempotency_second_request_does_not_create_duplicate_product_usage_via_service(self):
         # This verifies transaction rollback + product usage dedup
-        from finance.services.inventory import record_product_purchase
         from finance.services import accounting
+        from finance.services.inventory import record_product_purchase
         customer = _make_customer(mobile_number='09120001113', national_id='913-0000013')
         product = Product.objects.create(name='P-Idem', unit_price=Decimal('10'), cost_usd=Decimal('5'), count=100)
         record_product_purchase(product=product, quantity=Decimal('10'), unit_cost_usd=Decimal('5'), purchase_date=timezone.now().date())

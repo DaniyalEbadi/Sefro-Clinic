@@ -26,6 +26,7 @@ class ServiceSerializer(serializers.ModelSerializer):
     estimated_gross_profit_usd = serializers.SerializerMethodField()
     estimated_gross_profit_toman = serializers.SerializerMethodField()
     estimated_margin_percent = serializers.SerializerMethodField()
+    compensation_role = serializers.ChoiceField(choices=Service.CompensationRole.choices, required=False)
 
     class Meta:
         model = Service
@@ -35,6 +36,7 @@ class ServiceSerializer(serializers.ModelSerializer):
             'products', 'estimated_cost_usd', 'estimated_cost_toman',
             'estimated_gross_profit_usd', 'estimated_gross_profit_toman',
             'estimated_margin_percent',
+            'compensation_role',
         ]
 
     def _get_exchange_rate(self):
@@ -175,6 +177,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     last_visit_date = serializers.SerializerMethodField()
     birthday = ShamsiDateField(required=False, allow_null=True)
     bitmoji_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+    file_sys_id = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     satisfaction = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=5)
 
     class Meta:
@@ -187,6 +190,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             'national_id',
             'birthday',
             'bitmoji_code',
+            'file_sys_id',
             'satisfaction',
             'notes',
             'created_at',

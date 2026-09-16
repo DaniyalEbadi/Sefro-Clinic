@@ -1,10 +1,25 @@
+import uuid
+
 from rest_framework.test import APIClient
 
 from accounts.models import ClinicUser
+from customers.models import Customer
 
 ADMIN_USERNAME = 'sefro_admin'
 ADMIN_PASSWORD = 'SefroAdmin-Test-2026!'
 EMPLOYEE_PASSWORD = 'Employee-Test-2026!'
+
+
+def make_customer(**overrides):
+    base = {
+        'first_name': 'Test',
+        'last_name': 'Customer',
+        'mobile_number': '09120000000',
+        'national_id': '000-0000000',
+        'file_sys_id': f'FS{uuid.uuid4().hex[:36]}',
+    }
+    base.update(overrides)
+    return Customer.objects.create(**base)
 
 
 def make_admin(username=ADMIN_USERNAME, password=ADMIN_PASSWORD):
