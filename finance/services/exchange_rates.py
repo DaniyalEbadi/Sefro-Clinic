@@ -285,7 +285,7 @@ class BrsApiExchangeRateProvider:
         }
         req = urllib.request.Request(url, headers=headers, method='GET')
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
                 if resp.status != 200:
                     logger.warning('BrsApi backup: HTTP %s', resp.status)
                     return None
