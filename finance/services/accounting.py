@@ -21,6 +21,14 @@ def record_visit_consumption(visit, *, selected_products=None, at: Optional[obje
     from customers.models import Service
     from inventory.models import Product
 
+    if selected_products:
+        # JSON object keys are always strings, but service ids are integers.
+        # Normalise so `service.id in selected_products` actually matches.
+        try:
+            selected_products = {int(key): value for key, value in selected_products.items()}
+        except (TypeError, ValueError):
+            selected_products = None
+
     consumed = []
     service_ids = list(visit.services.values_list('id', flat=True))
     services = Service.objects.filter(id__in=service_ids)

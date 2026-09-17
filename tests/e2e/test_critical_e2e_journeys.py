@@ -303,7 +303,7 @@ class SecurityBypassE2ETests(TestCase):
         else:
             self.assertIn(resp.status_code, (403, 400, 401))
         # attempt restricted logs
-        logs = emp.get('/api/logs/')
+        emp.get('/api/logs/')
         # employee may be forbidden or empty depending on impl — but anon is 401
         from rest_framework.test import APIClient
         anon = APIClient()

@@ -121,8 +121,12 @@ def checkout(
 
 @transaction.atomic
 def refund_sale(sale: Sale, *, refund_amount_usd: Optional[Decimal] = None, reason: str = ''):
-    if sale.status in (Sale.Status.REFUNDED, Sale.Status.CANCELLED):
-        raise PaymentError('Sale is already refunded or cancelled.')
+    if sale.status != Sale.Status.PAID:
+        # Refund sales carry no back-reference to the original sale, so the
+        # already-refunded total cannot be recomputed. Allowing a second refund
+        # from a PARTIALLY_REFUNDED sale would let cumulative refunds exceed the
+        # amount actually paid, so exactly one refund is permitted.
+        raise PaymentError('Only paid sales can be refunded.')
     refund_amount_usd = Decimal(refund_amount_usd if refund_amount_usd is not None else sale.amount_usd).quantize(
         Decimal('0.01')
     )

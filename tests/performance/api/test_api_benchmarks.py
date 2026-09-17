@@ -248,7 +248,7 @@ class FinanceBenchmarkTests(TestCase):
         cust = Customer.objects.create(first_name='Perf', last_name='Finance', mobile_number='09129990000', national_id='990-0000099')
         Wallet.objects.create(customer=cust, balance=Decimal('1000.00'))
         # Seed product for cost snapshot
-        prod = Product.objects.create(name='PerfProd', unit_price=Decimal('10'), cost_usd=Decimal('5'), count=1000)
+        Product.objects.create(name='PerfProd', unit_price=Decimal('10'), cost_usd=Decimal('5'), count=1000)
 
     def setUp(self):
         self.client = _auth_client()

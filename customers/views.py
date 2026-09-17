@@ -570,6 +570,11 @@ class VisitViewSet(viewsets.ModelViewSet):
         visit = self.get_object()
         visit.status = Visit.Status.COMPLETED
         visit.save(update_fields=['status'])
+        # Generate staff commission payouts for the services performed. The
+        # service is idempotent (update_or_create per visit/staff/service) and
+        # no-ops when the visit has no staff or no matching compensation rule.
+        from finance.services import staff_compensation
+        staff_compensation.generate_visit_payouts(visit, actor=request.user)
         return Response(self.get_serializer(visit).data)
 
     @action(detail=True, methods=['post'])

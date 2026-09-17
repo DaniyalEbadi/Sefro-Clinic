@@ -1,6 +1,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 
+from django.db.models import Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, serializers, status, viewsets
@@ -17,6 +18,7 @@ from .models import (
     Package,
     PackageItem,
     PackageService,
+    PaymentComponent,
     ProductCostHistory,
     ProductPurchase,
     ProductUsage,
@@ -49,9 +51,9 @@ from .serializers import (
     WalletSerializer,
     WalletTransactionSerializer,
 )
-from .services import accounting, payments, reporting
+from .services import accounting, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
-from .services import staff_compensation
+from .services.exchange_rates import get_rate
 from .services.wallet import InsufficientFunds
 
 
@@ -107,6 +109,16 @@ def _resolve_range(request):
     end_dt = _parse(end)
     if end_dt:
         end_dt = timezone.make_aware(datetime.combine(end_dt.date(), time.max))
+
+    # Fall back to today when no usable range was supplied. This mirrors the
+    # service-layer convention (services/reporting.py::_range and
+    # services/staff_compensation.py::staff_payout_summary). Returning None here
+    # made the views that filter inline raise "Cannot use None as a query value".
+    if not start_dt or not end_dt:
+        today = timezone.localtime(timezone.now()).date()
+        start_dt = start_dt or timezone.make_aware(datetime.combine(today, time.min))
+        end_dt = end_dt or timezone.make_aware(datetime.combine(today, time.max))
+
     return start_dt, end_dt
 
 
@@ -777,7 +789,6 @@ class ProfitByStaffView(APIView):
     )
     def get(self, request):
         from customers.models import Visit
-        from django.db.models import Sum
         start, end = _resolve_range(request)
 
         visits = Visit.objects.filter(

@@ -5,8 +5,6 @@ from django.db.models import Sum
 from django.utils import timezone
 
 from ..models import (
-    ProductUsage,
-    Sale,
     StaffCompensationRule,
     StaffPayout,
 )

@@ -11,7 +11,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Customer, Service, Visit
-from finance.models import ProductUsage, Sale, Wallet, WalletRewardRule, WalletTransaction
+from finance.models import Sale, Wallet, WalletRewardRule, WalletTransaction
 from finance.services.exchange_rates import set_rate
 from finance.services.wallet import InsufficientFunds, credit, debit
 from inventory.models import Product
@@ -231,7 +231,6 @@ class CheckoutIntegrationTests(TestCase):
         visit.services.add(service)
         # First consumption
         usages1 = accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
-        count1 = ProductUsage.objects.count()
         # Second call with same visit should create another set? but idempotency via checkout prevents duplicate sale; here we test historical cost not duplicated incorrectly
         # For this service, usages are deterministic - we just verify snapshot preserved
         self.assertEqual(usages1[0].unit_cost_usd_snapshot, Decimal('5.00'))
@@ -278,7 +277,7 @@ class ProductCostHistoryIntegrationTests(TestCase):
 
     def test_historical_cost_snapshot_preserved_after_product_cost_change(self):
         from finance.services.inventory import current_cost, record_product_purchase, record_product_usage
-        customer = _make_customer(mobile_number='09120001114', national_id='914-0000014')
+        _make_customer(mobile_number='09120001114', national_id='914-0000014')
         product = Product.objects.create(name='Serum-Hist', unit_price=Decimal('100'), cost_usd=Decimal('10'), count=50)
         record_product_purchase(product=product, quantity=Decimal('10'), unit_cost_usd=Decimal('10'), purchase_date=timezone.now().date())
         self.assertEqual(current_cost(product), Decimal('10.00'))
