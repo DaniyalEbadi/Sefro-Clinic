@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -220,3 +221,106 @@ class ServiceCategoryInputValidationTests(TestCase):
             self.assertEqual(resp.status_code, 200)
             body = str(resp.data)
             self.assertNotIn('super-secret-key', body)
+
+
+class OperatingExpenseInputValidationTests(TestCase):
+    """Input validation and boundary tests for OperatingExpense endpoints."""
+
+    def setUp(self):
+        from finance.services.exchange_rates import set_rate
+        from finance.models import OperatingExpenseCategory
+        set_rate('USD', 'TOMAN', Decimal('100000'))
+        self.category = OperatingExpenseCategory.objects.create(name='Val Test', slug='val-test')
+        self.client = admin_client()
+
+    def _payload(self, **overrides):
+        from datetime import date
+        base = {
+            'category': self.category.id,
+            'title': 'Test',
+            'amount_usd': '25.00',
+            'expense_date': date.today().isoformat(),
+        }
+        base.update(overrides)
+        return base
+
+    def test_negative_amount_rejected(self):
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(amount_usd='-1.00'), format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_zero_amount_allowed(self):
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(amount_usd='0'), format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_large_amount_accepted(self):
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(amount_usd='99999999.99'), format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+
+    def test_missing_required_fields_rejected(self):
+        for field in ['category', 'title', 'amount_usd', 'expense_date']:
+            payload = self._payload()
+            del payload[field]
+            resp = self.client.post('/api/finance/operating-expenses/', payload, format='json')
+            self.assertEqual(resp.status_code, 400, f'missing {field}')
+            self.assertIn(field, resp.data)
+
+    def test_wrong_field_types_rejected(self):
+        for field, bad_value in [
+            ('amount_usd', 'not-a-decimal'),
+            ('expense_date', 'not-a-date'),
+            ('category', 'not-an-int'),
+            ('title', ['array-not-string']),
+            ('description', {'dict': 'not-string'}),
+        ]:
+            resp = self.client.post('/api/finance/operating-expenses/', self._payload(**{field: bad_value}), format='json')
+            self.assertEqual(resp.status_code, 400, f'{field}={bad_value}')
+
+    def test_invalid_payment_method_rejected(self):
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(payment_method='wallet'), format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('payment_method', resp.data)
+
+    def test_inactive_category_rejected(self):
+        from finance.models import OperatingExpenseCategory
+        inactive = OperatingExpenseCategory.objects.create(name='Inactive', slug='inactive', is_active=False)
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(category=inactive.id), format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_search_sql_injection_safe(self):
+        self.client.post('/api/finance/operating-expenses/', self._payload(), format='json')
+        for payload in ["' OR 1=1 --", "'; DROP TABLE finance_operatingexpense; --"]:
+            resp = self.client.get(f'/api/finance/operating-expenses/?search={payload}')
+            self.assertEqual(resp.status_code, 200, payload)
+            self.assertEqual(resp.data['count'], 0, payload)
+
+    def test_xss_stored_as_plain_text(self):
+        create = self.client.post('/api/finance/operating-expenses/', self._payload(
+            title='<script>alert(1)</script>',
+            description='<img src=x onerror=alert(2)>',
+        ), format='json')
+        self.assertEqual(create.status_code, 201)
+        detail = self.client.get(f"/api/finance/operating-expenses/{create.data['id']}/")
+        self.assertEqual(detail.data['title'], '<script>alert(1)</script>')
+        self.assertEqual(detail.data['description'], '<img src=x onerror=alert(2)>')
+
+    def test_category_name_xss_stored_as_plain_text(self):
+        create = self.client.post('/api/finance/operating-expense-categories/', {
+            'name': '<script>alert(1)</script>', 'slug': 'xss-opex-cat',
+        }, format='json')
+        self.assertEqual(create.status_code, 201)
+        detail = self.client.get(f"/api/finance/operating-expense-categories/{create.data['id']}/")
+        self.assertEqual(detail.data['name'], '<script>alert(1)</script>')
+
+    def test_category_slug_uniqueness_enforced(self):
+        self.client.post('/api/finance/operating-expense-categories/', {'name': 'Cat1', 'slug': 'dup-slug'}, format='json')
+        dup = self.client.post('/api/finance/operating-expense-categories/', {'name': 'Cat2', 'slug': 'dup-slug'}, format='json')
+        self.assertEqual(dup.status_code, 400)
+
+    def test_category_name_uniqueness_enforced(self):
+        self.client.post('/api/finance/operating-expense-categories/', {'name': 'Unique', 'slug': 'unique-1'}, format='json')
+        dup = self.client.post('/api/finance/operating-expense-categories/', {'name': 'Unique', 'slug': 'unique-2'}, format='json')
+        self.assertEqual(dup.status_code, 400)
+
+    def test_idempotency_key_length_validation(self):
+        resp = self.client.post('/api/finance/operating-expenses/', self._payload(idempotency_key='x' * 65), format='json')
+        self.assertEqual(resp.status_code, 400)

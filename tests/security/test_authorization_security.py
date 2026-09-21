@@ -1,7 +1,10 @@
+from decimal import Decimal
 from django.test import TestCase
 
 from accounts.models import ClinicUser
 from customers.models import Customer, Service
+from finance.models import OperatingExpenseCategory
+from finance.services.exchange_rates import set_rate
 from tests.helpers import admin_client, employee_client, make_admin
 
 
@@ -130,3 +133,122 @@ class ServiceCategoryIdorTests(TestCase):
         client.post('/api/service-categories/', {'name': 'Dup', 'slug': 'dup'}, format='json')
         dup = client.post('/api/service-categories/', {'name': 'Dup2', 'slug': 'dup'}, format='json')
         self.assertEqual(dup.status_code, 400)
+
+
+class OperatingExpenseSecurityTests(TestCase):
+    """Security tests for OperatingExpense endpoints."""
+
+    def setUp(self):
+        set_rate('USD', 'TOMAN', Decimal('100000'))
+        self.category = OperatingExpenseCategory.objects.create(name='Sec Test', slug='sec-test')
+        self.emp = employee_client()
+        self.admin = admin_client()
+
+    def test_anonymous_rejected(self):
+        from rest_framework.test import APIClient
+        anon = APIClient()
+        self.assertEqual(anon.get('/api/finance/operating-expenses/').status_code, 401)
+        self.assertEqual(anon.post('/api/finance/operating-expenses/', {}, format='json').status_code, 401)
+        self.assertEqual(anon.get('/api/finance/operating-expense-categories/').status_code, 401)
+
+    def test_not_exposed_on_public_v2(self):
+        from rest_framework.test import APIClient
+        anon = APIClient()
+        self.assertEqual(anon.get('/api/v2/operating-expenses/').status_code, 404)
+
+    def test_employee_full_crud_opex(self):
+        # Create
+        create = self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Coffee', 'amount_usd': '25.00',
+            'expense_date': '2025-06-01',
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        opex_id = create.data['id']
+
+        # Read
+        self.assertEqual(self.emp.get(f'/api/finance/operating-expenses/{opex_id}/').status_code, 200)
+
+        # Update
+        self.assertEqual(self.emp.patch(f'/api/finance/operating-expenses/{opex_id}/', {'title': 'Tea'}, format='json').status_code, 200)
+
+        # Delete
+        self.assertEqual(self.emp.delete(f'/api/finance/operating-expenses/{opex_id}/').status_code, 204)
+
+    def test_employee_full_crud_opex_category(self):
+        # Create
+        create = self.emp.post('/api/finance/operating-expense-categories/', {
+            'name': 'Emp Category', 'slug': 'emp-category',
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        cat_id = create.data['id']
+
+        # Read
+        self.assertEqual(self.emp.get(f'/api/finance/operating-expense-categories/{cat_id}/').status_code, 200)
+
+        # Update
+        self.assertEqual(self.emp.patch(f'/api/finance/operating-expense-categories/{cat_id}/', {'is_active': False}, format='json').status_code, 200)
+
+        # Delete
+        self.assertEqual(self.emp.delete(f'/api/finance/operating-expense-categories/{cat_id}/').status_code, 204)
+
+    def test_created_by_cannot_be_spoofed(self):
+        admin_user = make_admin()
+        create = self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Spoof', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01', 'created_by': admin_user.id,
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        from finance.models import OperatingExpense
+        expense = OperatingExpense.objects.get(pk=create.data['id'])
+        self.assertEqual(expense.created_by.username, 'emp_user')
+
+    def test_server_owned_fields_ignored(self):
+        create = self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Server fields', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01', 'exchange_rate': '1', 'amount_toman': '1',
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        from finance.models import OperatingExpense
+        expense = OperatingExpense.objects.get(pk=create.data['id'])
+        self.assertEqual(expense.exchange_rate, Decimal('100000'))
+        self.assertEqual(expense.amount_toman, Decimal('1000000.00'))
+
+    def test_inactive_category_rejected(self):
+        inactive = OperatingExpenseCategory.objects.create(name='Inactive', slug='inactive', is_active=False)
+        resp = self.emp.post('/api/finance/operating-expenses/', {
+            'category': inactive.id, 'title': 'Test', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_negative_amount_rejected(self):
+        resp = self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Negative', 'amount_usd': '-5.00',
+            'expense_date': '2025-06-01',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_invalid_payment_method_rejected(self):
+        resp = self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Invalid', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01', 'payment_method': 'wallet',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_sql_injection_in_search_safe(self):
+        self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Test', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01',
+        }, format='json')
+        resp = self.emp.get("/api/finance/operating-expenses/?search=' OR 1=1--")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['count'], 0)
+
+    def test_category_delete_blocked_when_used(self):
+        self.emp.post('/api/finance/operating-expenses/', {
+            'category': self.category.id, 'title': 'Test', 'amount_usd': '10.00',
+            'expense_date': '2025-06-01',
+        }, format='json')
+        resp = self.emp.delete(f'/api/finance/operating-expense-categories/{self.category.id}/')
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(OperatingExpenseCategory.objects.filter(pk=self.category.id).exists())

@@ -292,6 +292,21 @@ class FinanceBenchmarkTests(TestCase):
         save_result('finance_expense_list', result)
         self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
 
+    def test_operating_expense_list_latency(self):
+        result = self.meter.run('get', '/api/finance/operating-expenses/', iterations=20)
+        save_result('finance_operating_expense_list', result)
+        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
+    def test_operating_expense_summary_latency(self):
+        result = self.meter.run('get', '/api/finance/operating-expenses/summary/', iterations=15)
+        save_result('finance_operating_expense_summary', result)
+        self.assertLess(result['p95_ms'], BUDGETS['reports_heavy_p95_ms_fast_mode'])
+
+    def test_operating_expense_category_list_latency(self):
+        result = self.meter.run('get', '/api/finance/operating-expense-categories/', iterations=20)
+        save_result('finance_operating_expense_category_list', result)
+        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
+
 
 class PaginationBenchmarkTests(TestCase):
     """Pagination performance at various page depths."""
@@ -341,6 +356,9 @@ class ResponseSizeTests(TestCase):
             '/api/inventory/products/',
             '/api/dashboard/',
             '/api/reports/',
+            '/api/finance/operating-expenses/',
+            '/api/finance/operating-expenses/summary/',
+            '/api/finance/operating-expense-categories/',
         ]
         sizes = {url: self._measure_size(url) for url in endpoints}
         save_result('response_sizes', sizes)

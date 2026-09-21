@@ -12,7 +12,16 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from customers.models import Customer, Service, Visit
-from finance.models import ExchangeRate, ExpenseCategory, Sale, Wallet, WalletRewardRule, WalletTransaction
+from finance.models import (
+    ExchangeRate,
+    ExpenseCategory,
+    OperatingExpense,
+    OperatingExpenseCategory,
+    Sale,
+    Wallet,
+    WalletRewardRule,
+    WalletTransaction,
+)
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin
@@ -337,3 +346,132 @@ class SecurityBypassE2ETests(TestCase):
         exp_client = APIClient()
         exp_client.credentials(HTTP_AUTHORIZATION=f'Bearer {str(token)}')
         self.assertEqual(exp_client.get('/api/customers/').status_code, 401)
+
+
+class OperatingExpenseE2ETests(TestCase):
+    """P1 OperatingExpense full workflow: create → list → filter → summary → audit."""
+
+    def setUp(self):
+        set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='e2e-opex')
+
+    def test_employee_full_opex_cycle_e2e(self):
+        emp = employee_client(username='emp_opex_e2e')
+        admin = admin_client()
+
+        # 1. Create category (employee can)
+        cat_resp = emp.post('/api/finance/operating-expense-categories/', {
+            'name': 'E2E Coffee', 'slug': 'e2e-coffee',
+        }, format='json')
+        self.assertEqual(cat_resp.status_code, 201, cat_resp.data)
+        cat_id = cat_resp.data['id']
+
+        # 2. Create operating expense (employee can)
+        today = timezone.now().date().isoformat()
+        create = emp.post('/api/finance/operating-expenses/', {
+            'category': cat_id,
+            'title': 'Monthly coffee supply',
+            'amount_usd': '150.00',
+            'expense_date': today,
+            'payment_method': 'cash',
+            'vendor': 'Coffee Co',
+            'notes': 'Monthly restock',
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        opex_id = create.data['id']
+        self.assertEqual(create.data['category_name'], 'E2E Coffee')
+        self.assertEqual(Decimal(create.data['amount_toman']), Decimal('15000000.00'))
+        self.assertEqual(create.data['created_by_name'], 'emp_opex_e2e')
+
+        # 3. List and filter
+        listing = emp.get('/api/finance/operating-expenses/')
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.data['count'], 1)
+
+        by_cat = emp.get(f'/api/finance/operating-expenses/?category={cat_id}')
+        self.assertEqual(by_cat.data['count'], 1)
+
+        by_method = emp.get('/api/finance/operating-expenses/?payment_method=cash')
+        self.assertEqual(by_method.data['count'], 1)
+
+        search = emp.get('/api/finance/operating-expenses/?search=coffee')
+        self.assertEqual(search.data['count'], 1)
+
+        # 4. Summary endpoint
+        summary = emp.get('/api/finance/operating-expenses/summary/')
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(Decimal(summary.data['total_usd']), Decimal('150.00'))
+        self.assertEqual(summary.data['count'], 1)
+
+        # 5. Admin can also create
+        admin_create = admin.post('/api/finance/operating-expenses/', {
+            'category': cat_id,
+            'title': 'Admin rent',
+            'amount_usd': '2000.00',
+            'expense_date': today,
+            'payment_method': 'bank_transfer',
+            'vendor': 'Landlord',
+        }, format='json')
+        self.assertEqual(admin_create.status_code, 201, admin_create.data)
+
+        # 6. Summary now includes both
+        summary2 = emp.get('/api/finance/operating-expenses/summary/')
+        self.assertEqual(Decimal(summary2.data['total_usd']), Decimal('2150.00'))
+        self.assertEqual(summary2.data['count'], 2)
+        methods = {row['payment_method']: Decimal(row['total_usd']) for row in summary2.data['by_payment_method']}
+        self.assertEqual(methods['cash'], Decimal('150.00'))
+        self.assertEqual(methods['bank_transfer'], Decimal('2000.00'))
+
+    def test_opex_idempotency_via_api_e2e(self):
+        emp = employee_client(username='emp_idem')
+        cat = OperatingExpenseCategory.objects.create(name='Idem Cat', slug='idem-cat')
+        today = timezone.now().date().isoformat()
+        payload = {
+            'category': cat.id, 'title': 'Idempotent', 'amount_usd': '50.00',
+            'expense_date': today, 'idempotency_key': 'e2e-idem-opex-1',
+        }
+        r1 = emp.post('/api/finance/operating-expenses/', payload, format='json')
+        r2 = emp.post('/api/finance/operating-expenses/', payload, format='json')
+        self.assertEqual(r1.status_code, 201)
+        self.assertEqual(r2.status_code, 201)
+        self.assertEqual(r1.data['id'], r2.data['id'])
+        self.assertEqual(OperatingExpense.objects.filter(idempotency_key='e2e-idem-opex-1').count(), 1)
+
+    def test_opex_rate_snapshot_not_repriced_e2e(self):
+        emp = employee_client(username='emp_rate')
+        cat = OperatingExpenseCategory.objects.create(name='Rate Cat', slug='rate-cat')
+        today = timezone.now().date().isoformat()
+
+        # Create at rate 100000 (set in class setUp)
+        create = emp.post('/api/finance/operating-expenses/', {
+            'category': cat.id, 'title': 'Rate test', 'amount_usd': '10.00',
+            'expense_date': today,
+        }, format='json')
+        self.assertEqual(create.status_code, 201)
+        opex_id = create.data['id']
+        original_rate = Decimal(create.data['exchange_rate'])
+        original_toman = Decimal(create.data['amount_toman'])
+
+        # Change rate to 200000
+        set_rate('USD', 'TOMAN', Decimal('200000'), effective_at=timezone.now(), source='e2e-new-rate')
+
+        # Update amount — should use original rate
+        updated = emp.patch(f'/api/finance/operating-expenses/{opex_id}/', {'amount_usd': '20.00'}, format='json')
+        self.assertEqual(updated.status_code, 200)
+        # 20 USD * original 100000 = 2000000
+        self.assertEqual(Decimal(updated.data['amount_toman']), Decimal('2000000.00'))
+        self.assertEqual(Decimal(updated.data['exchange_rate']), original_rate)
+
+    def test_opex_isolation_from_wallet_and_sale_e2e(self):
+        emp = employee_client(username='emp_isolation')
+        cat = OperatingExpenseCategory.objects.create(name='Isolation', slug='isolation')
+        today = timezone.now().date().isoformat()
+
+        emp.post('/api/finance/operating-expenses/', {
+            'category': cat.id, 'title': 'Test', 'amount_usd': '100.00',
+            'expense_date': today,
+        }, format='json')
+
+        self.assertEqual(Wallet.objects.count(), 0)
+        self.assertEqual(WalletTransaction.objects.count(), 0)
+        self.assertEqual(Sale.objects.count(), 0)
+        self.assertEqual(OperatingExpense.objects.count(), 1)

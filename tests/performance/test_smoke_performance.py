@@ -54,3 +54,9 @@ class ReportPerformanceSmokeTests(TestCase):
 
     def test_all_reports_under_threshold(self):
         self.assertLess(self._timed_get('/api/reports/all/'), self.THRESHOLD_SECONDS)
+
+    def test_operating_expenses_under_threshold(self):
+        self.assertLess(self._timed_get('/api/finance/operating-expenses/'), self.THRESHOLD_SECONDS)
+
+    def test_operating_expense_summary_under_threshold(self):
+        self.assertLess(self._timed_get('/api/finance/operating-expenses/summary/'), self.THRESHOLD_SECONDS)
