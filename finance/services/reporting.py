@@ -1,11 +1,12 @@
 from datetime import datetime, time
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.utils import timezone
 
 from ..models import (
     Expense,
+    OperatingExpense,
     PaymentComponent,
     ProductUsage,
     Sale,
@@ -207,4 +208,41 @@ def wallet_summary():
         'reward_reversals_usd': reward_reverses,
         'wallet_payments_usd': abs(payments),
         'wallet_refunds_usd': refunds,
+    }
+
+
+def operating_expense_summary(start=None, end=None):
+    """Totals for direct clinic operating costs (OperatingExpense).
+
+    Kept deliberately separate from ``financial_summary``'s Expense
+    aggregation (employee-submitted claims). Combine both upstream for a
+    total-clinic-cost view; neither query is duplicated or mixed here.
+    """
+    start, end = _range(start, end)
+    qs = OperatingExpense.objects.filter(
+        expense_date__gte=start.date(), expense_date__lte=end.date(),
+    )
+    total_usd = qs.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
+    total_toman = qs.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
+    by_category = list(
+        qs.values('category_id', 'category__name')
+        .annotate(
+            total_usd=Sum('amount_usd'),
+            total_toman=Sum('amount_toman'),
+            count=Count('id'),
+        )
+        .order_by('-total_usd')
+    )
+    by_method = list(
+        qs.values('payment_method')
+        .annotate(total_usd=Sum('amount_usd'), count=Count('id'))
+        .order_by('payment_method')
+    )
+    return {
+        'period': {'start': start, 'end': end},
+        'total_usd': total_usd,
+        'total_toman': total_toman,
+        'count': qs.count(),
+        'by_category': by_category,
+        'by_payment_method': by_method,
     }

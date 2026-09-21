@@ -6,6 +6,8 @@ from .models import (
     ExchangeRate,
     Expense,
     ExpenseCategory,
+    OperatingExpense,
+    OperatingExpenseCategory,
     Package,
     PackageItem,
     PackageService,
@@ -285,3 +287,52 @@ class StaffPayoutSerializer(serializers.ModelSerializer):
 
     def get_total_payout_toman(self, obj):
         return str((obj.payout_cash_toman or Decimal('0')) + (obj.payout_product_value_toman or Decimal('0')))
+
+
+class OperatingExpenseCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = OperatingExpenseCategory
+        fields = ['id', 'name', 'slug', 'description', 'is_active', 'sort_order', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
+
+
+class OperatingExpenseSerializer(serializers.ModelSerializer):
+    category_name = serializers.SerializerMethodField()
+    created_by_name = serializers.SerializerMethodField()
+    # Declared explicitly (no UniqueValidator) so a retried create reaches the
+    # service layer, which returns the original record for the same key —
+    # mirroring the checkout/Sale idempotency pattern.
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=64)
+
+    class Meta:
+        model = OperatingExpense
+        fields = [
+            'id', 'category', 'category_name', 'title', 'description',
+            'amount_usd', 'exchange_rate', 'amount_toman', 'expense_date',
+            'payment_method', 'vendor', 'receipt', 'notes',
+            'created_by', 'created_by_name', 'idempotency_key',
+            'created_at', 'updated_at',
+        ]
+        # Server-owned fields: the rate/Toman snapshots are taken at write time
+        # by the service layer, and the creator always comes from the request.
+        read_only_fields = ['exchange_rate', 'amount_toman', 'created_by', 'created_at', 'updated_at']
+
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category else None
+
+    def get_created_by_name(self, obj):
+        user = obj.created_by
+        if user is None:
+            return None
+        full = f'{user.first_name} {user.last_name}'.strip()
+        return full or user.username
+
+    def validate_category(self, value):
+        if value is not None and not value.is_active:
+            raise serializers.ValidationError('Category is inactive.')
+        return value
+
+    def validate_amount_usd(self, value):
+        if value is not None and value < Decimal('0'):
+            raise serializers.ValidationError('Amount must be non-negative.')
+        return value

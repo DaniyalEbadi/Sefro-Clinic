@@ -4,6 +4,8 @@ from .models import (
     ExchangeRate,
     Expense,
     ExpenseCategory,
+    OperatingExpense,
+    OperatingExpenseCategory,
     Package,
     PackageItem,
     PackageService,
@@ -105,3 +107,17 @@ class ExpenseAdmin(admin.ModelAdmin):
 class ProductPurchaseAdmin(admin.ModelAdmin):
     list_display = ['product', 'quantity', 'unit_cost_usd', 'total_cost_usd', 'purchase_date']
     list_filter = ['product']
+
+
+@admin.register(OperatingExpenseCategory)
+class OperatingExpenseCategoryAdmin(admin.ModelAdmin):
+    list_display = ['id', 'name', 'slug', 'is_active', 'sort_order', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['name', 'slug', 'description']
+
+
+@admin.register(OperatingExpense)
+class OperatingExpenseAdmin(admin.ModelAdmin):
+    list_display = ['id', 'title', 'category', 'amount_usd', 'amount_toman', 'expense_date', 'payment_method', 'created_by']
+    list_filter = ['category', 'payment_method', 'expense_date']
+    search_fields = ['title', 'vendor', 'description', 'notes']

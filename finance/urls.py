@@ -8,6 +8,8 @@ from .views import (
     ExpenseCategoryViewSet,
     ExpenseViewSet,
     FinancialSummaryView,
+    OperatingExpenseCategoryViewSet,
+    OperatingExpenseViewSet,
     PackageItemViewSet,
     PackageServiceViewSet,
     PackageViewSet,
@@ -43,6 +45,8 @@ router.register('wallet-transactions', WalletTransactionViewSet, basename='walle
 router.register('sales', SaleViewSet, basename='sale')
 router.register('expense-categories', ExpenseCategoryViewSet, basename='expense-category')
 router.register('expenses', ExpenseViewSet, basename='expense')
+router.register('operating-expense-categories', OperatingExpenseCategoryViewSet, basename='operating-expense-category')
+router.register('operating-expenses', OperatingExpenseViewSet, basename='operating-expense')
 router.register('product-purchases', ProductPurchaseViewSet, basename='product-purchase')
 router.register('staff-compensation-rules', StaffCompensationRuleViewSet, basename='staff-compensation-rule')
 router.register('staff-payouts', StaffPayoutViewSet, basename='staff-payout')

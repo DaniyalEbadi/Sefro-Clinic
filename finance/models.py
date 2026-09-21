@@ -497,3 +497,97 @@ class StaffPayout(models.Model):
 
     def __str__(self):
         return f'Payout {self.staff} - {self.service} ({self.status})'
+
+
+class OperatingExpenseCategory(models.Model):
+    """Category for direct clinic operating costs (هزینه‌های جاری).
+
+    Distinct from ExpenseCategory, which belongs to the employee-submitted
+    expense/reimbursement workflow. Database-backed so admins can add
+    categories without a deployment.
+    """
+
+    name = models.CharField(max_length=120, unique=True, validators=TEXT_SANITIZERS)
+    slug = models.SlugField(max_length=120, unique=True)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['sort_order', 'name']
+        verbose_name_plural = 'operating expense categories'
+        indexes = [
+            models.Index(fields=['sort_order', 'name'], name='opex_cat_sort_idx'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class OperatingExpense(models.Model):
+    """A direct clinic operating expenditure paid with clinic money.
+
+    Distinct domain from:
+    - Expense: employee-submitted claim with draft→submitted→approved→paid workflow.
+    - Wallet/WalletTransaction: customer credit ledger.
+    - Sale/PaymentComponent: customer revenue.
+
+    Money convention: amount_usd is authoritative; exchange_rate and
+    amount_toman are snapshots taken at creation time and never recomputed
+    with a newer rate.
+    """
+
+    class PaymentMethod(models.TextChoices):
+        CASH = 'cash', 'Cash'
+        CARD = 'card', 'Card'
+        BANK_TRANSFER = 'bank_transfer', 'Bank Transfer'
+        OTHER = 'other', 'Other'
+
+    category = models.ForeignKey(
+        OperatingExpenseCategory, on_delete=models.PROTECT, related_name='operating_expenses',
+    )
+    title = models.CharField(max_length=200, validators=TEXT_SANITIZERS)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    amount_usd = usd_field()
+    exchange_rate = rate_field(
+        null=True, blank=True,
+        help_text='Toman-per-USD snapshot captured at creation; never recalculated.',
+    )
+    amount_toman = toman_field(
+        default=Decimal('0'),
+        help_text='Toman snapshot derived from amount_usd and the creation-time rate.',
+    )
+    expense_date = models.DateField(help_text='Business date of the expenditure (Gregorian, finance convention).')
+    payment_method = models.CharField(max_length=20, choices=PaymentMethod.choices, default=PaymentMethod.CASH)
+    vendor = models.CharField(max_length=200, blank=True, validators=TEXT_SANITIZERS)
+    receipt = models.FileField(upload_to='operating_expenses/%Y/%m/', null=True, blank=True)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='operating_expenses',
+    )
+    idempotency_key = models.CharField(
+        max_length=64, unique=True, null=True, blank=True,
+        help_text='Client-supplied key; repeat submissions return the original record.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-expense_date', '-created_at']
+        indexes = [
+            models.Index(fields=['expense_date'], name='opex_date_idx'),
+            models.Index(fields=['category', 'expense_date'], name='opex_cat_date_idx'),
+            models.Index(fields=['payment_method', 'expense_date'], name='opex_method_date_idx'),
+            models.Index(fields=['created_by', 'expense_date'], name='opex_creator_date_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(amount_usd__gte=Decimal('0')),
+                name='opex_amount_non_negative',
+            ),
+        ]
+
+    def __str__(self):
+        return f'OperatingExpense {self.id} {self.title} {self.amount_usd}'

@@ -17,6 +17,12 @@ from .inventory import (
     record_product_purchase,
     record_product_usage,
 )
+from .operating_expenses import (
+    OperatingExpenseError,
+    create_operating_expense,
+    delete_operating_expense,
+    update_operating_expense,
+)
 from .payments import checkout
 from .pricing import service_pricing_payload as service_pricing_breakdown
 from .reporting import (
@@ -61,6 +67,10 @@ __all__ = [
     'pay_expense',
     'cancel_expense',
     'ExpenseError',
+    'create_operating_expense',
+    'update_operating_expense',
+    'delete_operating_expense',
+    'OperatingExpenseError',
     'get_current_usd_to_toman_rate',
     'set_rate',
     'convert_usd_to_toman',

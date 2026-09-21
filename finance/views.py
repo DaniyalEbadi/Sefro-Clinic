@@ -15,6 +15,8 @@ from .models import (
     ExchangeRate,
     Expense,
     ExpenseCategory,
+    OperatingExpense,
+    OperatingExpenseCategory,
     Package,
     PackageItem,
     PackageService,
@@ -36,6 +38,8 @@ from .serializers import (
     ExchangeRateSerializer,
     ExpenseCategorySerializer,
     ExpenseSerializer,
+    OperatingExpenseCategorySerializer,
+    OperatingExpenseSerializer,
     PackageItemSerializer,
     PackageSerializer,
     PackageServiceSerializer,
@@ -53,6 +57,7 @@ from .serializers import (
 )
 from .services import accounting, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
+from .services import operating_expenses as opex_svc
 from .services.exchange_rates import get_rate
 from .services.wallet import InsufficientFunds
 
@@ -948,3 +953,126 @@ class DashboardView(APIView):
                 'staff_payout_count': payouts.count(),
             },
         }))
+
+@extend_schema(tags=['Operating Expenses'])
+class OperatingExpenseCategoryViewSet(viewsets.ModelViewSet):
+    """Direct clinic operating-cost categories (هزینه‌های جاری).
+
+    Owner decision: both admin and employee staff have full CRUD access
+    (IsEmployeeOrAdmin = any authenticated staff). Distinct from
+    ExpenseCategory, which belongs to the employee expense-claim workflow.
+    """
+    queryset = OperatingExpenseCategory.objects.all()
+    serializer_class = OperatingExpenseCategorySerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'slug', 'description']
+    ordering_fields = ['name', 'slug', 'sort_order', 'is_active']
+    ordering = ['sort_order', 'name']
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.operating_expenses.exists():
+            return Response(
+                {'detail': 'Cannot delete category with existing operating expenses. Deactivate it instead.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+
+@extend_schema(
+    tags=['Operating Expenses'],
+    parameters=[
+        OpenApiParameter('category', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Filter by category id'),
+        OpenApiParameter('payment_method', OpenApiTypes.STR, OpenApiParameter.QUERY, description='cash | card | bank_transfer | other'),
+        OpenApiParameter('created_by', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Filter by staff user id'),
+        OpenApiParameter('date_from', OpenApiTypes.DATE, OpenApiParameter.QUERY, description='Gregorian YYYY-MM-DD (finance convention)'),
+        OpenApiParameter('date_to', OpenApiTypes.DATE, OpenApiParameter.QUERY, description='Gregorian YYYY-MM-DD (finance convention)'),
+    ],
+)
+class OperatingExpenseViewSet(viewsets.ModelViewSet):
+    """Direct clinic operating expenditures paid with clinic money.
+
+    Full CRUD for any authenticated staff (admin and employee alike, per
+    owner decision). Never touches Wallet, Sale, or PaymentComponent.
+    """
+    serializer_class = OperatingExpenseSerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['title', 'description', 'vendor', 'notes', 'category__name']
+    ordering_fields = ['expense_date', 'amount_usd', 'created_at']
+    ordering = ['-expense_date', '-created_at']
+
+    def get_queryset(self):
+        qs = OperatingExpense.objects.select_related('category', 'created_by')
+        params = self.request.query_params
+        if params.get('category'):
+            qs = qs.filter(category_id=params['category'])
+        if params.get('payment_method'):
+            qs = qs.filter(payment_method=params['payment_method'])
+        if params.get('created_by'):
+            qs = qs.filter(created_by_id=params['created_by'])
+        date_from = params.get('date_from')
+        if date_from:
+            try:
+                qs = qs.filter(expense_date__gte=datetime.strptime(date_from, '%Y-%m-%d').date())
+            except (ValueError, TypeError):
+                pass
+        date_to = params.get('date_to')
+        if date_to:
+            try:
+                qs = qs.filter(expense_date__lte=datetime.strptime(date_to, '%Y-%m-%d').date())
+            except (ValueError, TypeError):
+                pass
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            expense = opex_svc.create_operating_expense(
+                created_by=request.user,
+                category=data['category'],
+                title=data['title'],
+                amount_usd=data['amount_usd'],
+                expense_date=data['expense_date'],
+                payment_method=data.get('payment_method', OperatingExpense.PaymentMethod.CASH),
+                description=data.get('description', ''),
+                vendor=data.get('vendor', ''),
+                receipt=data.get('receipt'),
+                notes=data.get('notes', ''),
+                idempotency_key=data.get('idempotency_key') or None,
+            )
+        except opex_svc.OperatingExpenseError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            OperatingExpenseSerializer(expense, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    def perform_update(self, serializer):
+        data = serializer.validated_data
+        try:
+            expense = opex_svc.update_operating_expense(self.get_object(), **data)
+        except opex_svc.OperatingExpenseError as exc:
+            raise serializers.ValidationError({'error': str(exc)})
+        serializer.instance = expense
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Totals for direct clinic operating costs over a period.
+
+        Reported separately from the employee-expense (Expense) figures so the
+        two domains can be combined explicitly upstream:
+        total clinic operating expenses = employee expenses + operating expenses.
+        """
+        start, end = _resolve_range(request)
+        return Response(_stringify(reporting.operating_expense_summary(start, end)))
