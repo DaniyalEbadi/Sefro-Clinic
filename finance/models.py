@@ -183,12 +183,16 @@ class ServiceItem(models.Model):
         max_digits=12, decimal_places=3, default=Decimal('1'),
         validators=[MinValueValidator(Decimal('0'))],
     )
+    selection_group = models.CharField(max_length=100, blank=True, null=True)
 
     class Meta:
         ordering = ['service', 'product']
         constraints = [
             models.UniqueConstraint(fields=['service', 'product'], name='uniq_service_item'),
             models.CheckConstraint(condition=models.Q(quantity__gt=0), name='service_product_quantity_positive'),
+        ]
+        indexes = [
+            models.Index(fields=['service', 'selection_group']),
         ]
 
     def __str__(self):
@@ -239,6 +243,94 @@ class PackageItem(models.Model):
         return f'{self.package} uses {self.quantity} x {self.product}'
 
 
+class WelcomePack(models.Model):
+    """A predefined collection of products given to customers as a welcome gift.
+
+    Creating a WelcomePack definition does NOT create any financial transaction.
+    Financial impact occurs only when the pack is actually issued via WelcomePackUsage.
+    """
+    name = models.CharField(max_length=120, unique=True, validators=TEXT_SANITIZERS)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='welcome_packs_created',
+    )
+
+    class Meta:
+        ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'name'], name='welcomepack_active_name_idx'),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class WelcomePackItem(models.Model):
+    """Product line item within a WelcomePack."""
+    welcome_pack = models.ForeignKey(WelcomePack, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='welcome_pack_usages')
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=3, default=Decimal('1'),
+        validators=[MinValueValidator(Decimal('0.001'))],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['welcome_pack', 'product'], name='uniq_welcomepack_item'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='welcomepack_item_quantity_positive'),
+        ]
+        indexes = [
+            models.Index(fields=['welcome_pack', 'product'], name='welcomepack_item_pack_prod_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.welcome_pack} contains {self.quantity} x {self.product}'
+
+
+class WelcomePackUsage(models.Model):
+    """Historical record of a WelcomePack being issued to a customer.
+
+    This is the financial event — creating a WelcomePackUsage snapshots the
+    USD cost, exchange rate, and Toman cost at issuance time. Historical
+    reports must NOT depend on current product costs or exchange rates.
+    """
+    welcome_pack = models.ForeignKey(WelcomePack, on_delete=models.PROTECT, related_name='usages')
+    customer = models.ForeignKey('customers.Customer', on_delete=models.PROTECT, related_name='welcome_pack_usages')
+    visit = models.ForeignKey(
+        'customers.Visit', on_delete=models.SET_NULL, null=True, blank=True, related_name='welcome_pack_usages',
+    )
+    issued_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='welcome_pack_usages_issued',
+    )
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=3, default=Decimal('1'),
+        validators=[MinValueValidator(Decimal('0.001'))],
+    )
+    total_cost_usd_snapshot = usd_field(default=Decimal('0'))
+    exchange_rate_snapshot = rate_field()
+    total_cost_toman_snapshot = toman_field(default=Decimal('0'))
+    issued_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-issued_at']
+        indexes = [
+            models.Index(fields=['issued_at'], name='wp_usage_issued_idx'),
+            models.Index(fields=['customer', 'issued_at'], name='wp_usage_cust_date_idx'),
+            models.Index(fields=['welcome_pack', 'issued_at'], name='wp_usage_pack_date_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.quantity} x {self.welcome_pack} for {self.customer} @ {self.issued_at:%Y-%m-%d}'
+
+
 class ProductUsage(models.Model):
     product = models.ForeignKey('inventory.Product', on_delete=models.CASCADE, related_name='usages')
     visit = models.ForeignKey(
@@ -257,6 +349,7 @@ class ProductUsage(models.Model):
     unit_cost_usd_snapshot = usd_field(default=Decimal('0'))
     total_cost_usd_snapshot = usd_field(default=Decimal('0'))
     exchange_rate_snapshot = rate_field(null=True, blank=True)
+    is_commission = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -312,7 +405,9 @@ class Sale(models.Model):
 
 class PaymentComponent(models.Model):
     class Method(models.TextChoices):
-        CASH = 'cash', 'Cash'
+        CASH = 'cash', 'Cash (USD)'
+        CASH_TOMAN = 'cash_toman', 'Cash (Toman)'
+        CASH_USD = 'cash_usd', 'Cash (USD)'
         CARD = 'card', 'Card'
         WALLET = 'wallet', 'Wallet'
 

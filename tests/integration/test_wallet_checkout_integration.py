@@ -270,6 +270,204 @@ class CheckoutIntegrationTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(Sale.objects.filter(customer=customer, amount_usd=Decimal('100.00')).exists())
 
+    def test_checkout_cash_toman_only_via_api(self):
+        """Test checkout with only cash_toman payment method via API."""
+        customer = _make_customer(mobile_number='09120001120', national_id='920-0000020')
+        client = admin_client()
+        # 100 USD = 10,000,000 Toman at rate 100,000
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'cash_toman', 'amount_usd': '10000000'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(Decimal(resp.data['amount_usd']), Decimal('100.00'))
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_toman')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_cash_usd_only_via_api(self):
+        """Test checkout with only cash_usd payment method via API."""
+        customer = _make_customer(mobile_number='09120001121', national_id='921-0000021')
+        client = admin_client()
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'cash_usd', 'amount_usd': '100.00'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(Decimal(resp.data['amount_usd']), Decimal('100.00'))
+        sale = Sale.objects.get(id=resp.data['id'])
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_usd')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_cash_legacy_still_works_via_api(self):
+        """Test that legacy 'cash' method still works via API."""
+        customer = _make_customer(mobile_number='09120001122', national_id='922-0000022')
+        client = admin_client()
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'cash', 'amount_usd': '100.00'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_mixed_cash_toman_card_via_api(self):
+        """Test checkout with cash_toman and card combination via API."""
+        customer = _make_customer(mobile_number='09120001123', national_id='923-0000023')
+        client = admin_client()
+        # 50 USD from card + 50 USD from cash_toman (5,000,000 Toman)
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [
+                {'method': 'card', 'amount_usd': '50.00'},
+                {'method': 'cash_toman', 'amount_usd': '5000000'},
+            ],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['card'], Decimal('50.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('50.00'))
+
+    def test_checkout_mixed_cash_usd_cash_toman_card_via_api(self):
+        """Test checkout with cash_usd, cash_toman, and card combination via API."""
+        customer = _make_customer(mobile_number='09120001124', national_id='924-0000024')
+        client = admin_client()
+        # 30 USD cash_usd + 40 USD cash_toman (4,000,000 Toman) + 30 USD card = 100 USD
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [
+                {'method': 'cash_usd', 'amount_usd': '30.00'},
+                {'method': 'cash_toman', 'amount_usd': '4000000'},
+                {'method': 'card', 'amount_usd': '30.00'},
+            ],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['cash_usd'], Decimal('30.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('40.00'))
+        self.assertEqual(methods['card'], Decimal('30.00'))
+
+    def test_checkout_mixed_all_methods_including_wallet_via_api(self):
+        """Test checkout with all payment methods including wallet via API."""
+        customer = self._make_customer_with_balance('50.00', '125')
+        client = admin_client()
+        # 20 wallet + 30 cash_usd + 25 cash_toman (2,500,000 Toman) + 25 card = 100 USD
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [
+                {'method': 'wallet', 'amount_usd': '20.00'},
+                {'method': 'cash_usd', 'amount_usd': '30.00'},
+                {'method': 'cash_toman', 'amount_usd': '2500000'},
+                {'method': 'card', 'amount_usd': '25.00'},
+            ],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['wallet'], Decimal('20.00'))
+        self.assertEqual(methods['cash_usd'], Decimal('30.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('25.00'))
+        self.assertEqual(methods['card'], Decimal('25.00'))
+        wallet = Wallet.objects.get(customer=customer)
+        self.assertEqual(wallet.balance, Decimal('35.00'))
+
+    def test_checkout_cash_toman_validation_fails_wrong_sum_via_api(self):
+        """Test that checkout fails when cash_toman components don't sum to amount_usd."""
+        customer = _make_customer(mobile_number='09120001126', national_id='926-0000026')
+        client = admin_client()
+        # 100 USD expected but components sum to 90 USD (9,000,000 Toman at 100,000 rate)
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'cash_toman', 'amount_usd': '9000000'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('must sum to the sale amount', str(resp.data))
+
+    def test_checkout_cash_toman_with_different_rate_via_api(self):
+        """Test cash_toman conversion with different exchange rate via API."""
+        from finance.services.exchange_rates import set_rate
+        customer = _make_customer(mobile_number='09120001127', national_id='927-0000027')
+        client = admin_client()
+        # Set rate to 200,000 (1 USD = 200,000 Toman)
+        set_rate('USD', 'TOMAN', Decimal('200000'), effective_at=timezone.now(), source='test-rate')
+        # 100 USD = 20,000,000 Toman at new rate
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'cash_toman', 'amount_usd': '20000000'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.exchange_rate, Decimal('200000'))
+        comp = sale.components.first()
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_single_cash_toman_component_via_api(self):
+        """Test checkout with single cash_toman component via API."""
+        customer = _make_customer(mobile_number='09120001128', national_id='928-0000028')
+        client = admin_client()
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '75.50',
+            'components': [{'method': 'cash_toman', 'amount_usd': '7550000'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_toman')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
+    def test_checkout_single_cash_usd_component_via_api(self):
+        """Test checkout with single cash_usd component via API."""
+        customer = _make_customer(mobile_number='09120001129', national_id='929-0000029')
+        client = admin_client()
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '75.50',
+            'components': [{'method': 'cash_usd', 'amount_usd': '75.50'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_usd')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
+    def test_checkout_single_card_component_via_api(self):
+        """Test checkout with single card component via API."""
+        customer = _make_customer(mobile_number='09120001130', national_id='930-0000030')
+        client = admin_client()
+        resp = client.post('/api/finance/checkout/', {
+            'customer': customer.id,
+            'amount_usd': '75.50',
+            'components': [{'method': 'card', 'amount_usd': '75.50'}],
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        sale = Sale.objects.get(id=resp.data['id'])
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'card')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
 
 class ProductCostHistoryIntegrationTests(TestCase):
     def setUp(self):

@@ -5,7 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import PaymentComponent, Sale, WalletTransaction
-from .exchange_rates import get_rate, to_toman
+from .exchange_rates import get_rate, to_toman, to_usd as from_toman
 from .wallet import InsufficientFunds, debit, grant_reward, reverse_reward
 
 
@@ -18,6 +18,19 @@ def _wallet_portion(components) -> Decimal:
         (Decimal(c['amount_usd']) for c in components if c['method'] == 'wallet'),
         Decimal('0'),
     ).quantize(Decimal('0.01'))
+
+
+def _components_sum_usd(components, rate: Decimal) -> Decimal:
+    """Calculate the sum of components in USD, converting cash_toman from Toman to USD."""
+    total = Decimal('0')
+    for c in components:
+        method = c['method']
+        amt = Decimal(c['amount_usd'])
+        if method == 'cash_toman':
+            total += from_toman(amt, rate)
+        else:
+            total += amt
+    return total.quantize(Decimal('0.01'))
 
 
 @transaction.atomic
@@ -40,11 +53,11 @@ def checkout(
     if not components:
         raise PaymentError('At least one payment component is required.')
 
-    component_sum = sum((Decimal(c['amount_usd']) for c in components), Decimal('0')).quantize(Decimal('0.01'))
-    if component_sum != amount_usd:
-        raise PaymentError('Payment components must sum to the sale amount.')
-
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
+
+    component_sum_usd = _components_sum_usd(components, rate)
+    if component_sum_usd != amount_usd:
+        raise PaymentError('Payment components must sum to the sale amount (after currency conversion).')
 
     if idempotency_key:
         existing = Sale.objects.filter(idempotency_key=idempotency_key).first()
@@ -79,6 +92,9 @@ def checkout(
         if amt == 0:
             continue
         wallet_txn = None
+        amt_usd = amt
+        amount_toman = to_toman(amt, rate)
+        
         if method == 'wallet':
             wallet_txn = debit(
                 customer,
@@ -91,11 +107,17 @@ def checkout(
             )
         else:
             from customers.models import Payment
+            if method == 'cash_toman':
+                amt_usd = from_toman(amt, rate)
+                amount_toman = amt
+            else:
+                amt_usd = amt
+                amount_toman = to_toman(amt, rate)
             Payment.objects.create(
                 customer=customer,
                 visit=visit,
-                amount=to_toman(amt, rate),
-                amount_usd=amt,
+                amount=amount_toman,
+                amount_usd=amt_usd,
                 exchange_rate=rate,
                 payment_method=method,
                 paid_at=timezone.now(),
@@ -104,7 +126,7 @@ def checkout(
         PaymentComponent.objects.create(
             sale=sale,
             method=method,
-            amount_usd=amt,
+            amount_usd=amt_usd,
             wallet_transaction=wallet_txn,
         )
 

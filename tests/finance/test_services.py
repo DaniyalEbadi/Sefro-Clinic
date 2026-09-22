@@ -168,6 +168,193 @@ class PaymentsServiceTests(TestCase):
         self.assertEqual(after, Decimal('100.00'))
         self.assertEqual(refund.status, Sale.Status.REFUNDED)
 
+    def test_checkout_cash_toman_only(self):
+        """Test checkout with only cash_toman payment method."""
+        from finance.services import payments
+        customer = make_customer()
+        # 100 USD = 10,000,000 Toman at rate 100,000
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[{'method': 'cash_toman', 'amount_usd': Decimal('10000000')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.amount_toman, Decimal('10000000.00'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_toman')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+        # Legacy Payment record should have correct Toman amount
+        from customers.models import Payment
+        legacy = Payment.objects.get(customer=customer)
+        self.assertEqual(legacy.amount, Decimal('10000000.00'))
+        self.assertEqual(legacy.amount_usd, Decimal('100.00'))
+
+    def test_checkout_cash_usd_only(self):
+        """Test checkout with only cash_usd payment method."""
+        from finance.services import payments
+        customer = make_customer()
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[{'method': 'cash_usd', 'amount_usd': Decimal('100')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_usd')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_cash_legacy_still_works(self):
+        """Test that legacy 'cash' method still works (treated as USD)."""
+        from finance.services import payments
+        customer = make_customer()
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[{'method': 'cash', 'amount_usd': Decimal('100')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash')
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_mixed_cash_toman_card(self):
+        """Test checkout with cash_toman and card combination."""
+        from finance.services import payments
+        customer = make_customer()
+        # 50 USD from card + 50 USD from cash_toman (5,000,000 Toman)
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[
+                {'method': 'card', 'amount_usd': Decimal('50')},
+                {'method': 'cash_toman', 'amount_usd': Decimal('5000000')},
+            ],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.components.count(), 2)
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['card'], Decimal('50.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('50.00'))
+
+    def test_checkout_mixed_cash_usd_cash_toman_card(self):
+        """Test checkout with cash_usd, cash_toman, and card combination."""
+        from finance.services import payments
+        customer = make_customer()
+        # 30 USD cash_usd + 40 USD cash_toman (4,000,000 Toman) + 30 USD card = 100 USD
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[
+                {'method': 'cash_usd', 'amount_usd': Decimal('30')},
+                {'method': 'cash_toman', 'amount_usd': Decimal('4000000')},
+                {'method': 'card', 'amount_usd': Decimal('30')},
+            ],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.components.count(), 3)
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['cash_usd'], Decimal('30.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('40.00'))
+        self.assertEqual(methods['card'], Decimal('30.00'))
+
+    def test_checkout_mixed_all_methods(self):
+        """Test checkout with all payment methods including wallet."""
+        from finance.services import payments
+        customer = self._make_customer_with_wallet(Decimal('50'))
+        # 20 wallet + 30 cash_usd + 25 cash_toman (2,500,000 Toman) + 25 card = 100 USD
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[
+                {'method': 'wallet', 'amount_usd': Decimal('20')},
+                {'method': 'cash_usd', 'amount_usd': Decimal('30')},
+                {'method': 'cash_toman', 'amount_usd': Decimal('2500000')},
+                {'method': 'card', 'amount_usd': Decimal('25')},
+            ],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.components.count(), 4)
+        methods = {c.method: c.amount_usd for c in sale.components.all()}
+        self.assertEqual(methods['wallet'], Decimal('20.00'))
+        self.assertEqual(methods['cash_usd'], Decimal('30.00'))
+        self.assertEqual(methods['cash_toman'], Decimal('25.00'))
+        self.assertEqual(methods['card'], Decimal('25.00'))
+        # Wallet balance: 50 - 20 + 5 (reward) = 35
+        wallet = Wallet.objects.get(customer=customer)
+        self.assertEqual(wallet.balance, Decimal('35.00'))
+
+    def test_checkout_cash_toman_validation_fails_wrong_sum(self):
+        """Test that checkout fails when cash_toman components don't sum to amount_usd."""
+        from finance.services import payments
+        customer = make_customer()
+        # 100 USD expected but components sum to 90 USD (9,000,000 Toman at 100,000 rate)
+        with self.assertRaisesMessage(payments.PaymentError, 'must sum to the sale amount'):
+            payments.checkout(
+                customer=customer,
+                amount_usd=Decimal('100'),
+                components=[{'method': 'cash_toman', 'amount_usd': Decimal('9000000')}],
+            )
+
+    def test_checkout_cash_toman_with_different_rate(self):
+        """Test cash_toman conversion with different exchange rate."""
+        from finance.services import payments
+        from finance.services.exchange_rates import set_rate
+        customer = make_customer()
+        # Set rate to 200,000 (1 USD = 200,000 Toman)
+        set_rate('USD', 'TOMAN', Decimal('200000'), effective_at=timezone.now(), source='test')
+        # 100 USD = 20,000,000 Toman at new rate
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('100'),
+            components=[{'method': 'cash_toman', 'amount_usd': Decimal('20000000')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('100.00'))
+        self.assertEqual(sale.exchange_rate, Decimal('200000'))
+        comp = sale.components.first()
+        self.assertEqual(comp.amount_usd, Decimal('100.00'))
+
+    def test_checkout_single_cash_toman_component(self):
+        """Test checkout with single cash_toman component."""
+        from finance.services import payments
+        customer = make_customer()
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('75.50'),
+            components=[{'method': 'cash_toman', 'amount_usd': Decimal('7550000')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_toman')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
+    def test_checkout_single_cash_usd_component(self):
+        """Test checkout with single cash_usd component."""
+        from finance.services import payments
+        customer = make_customer()
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('75.50'),
+            components=[{'method': 'cash_usd', 'amount_usd': Decimal('75.50')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'cash_usd')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
+    def test_checkout_single_card_component(self):
+        """Test checkout with single card component."""
+        from finance.services import payments
+        customer = make_customer()
+        sale = payments.checkout(
+            customer=customer,
+            amount_usd=Decimal('75.50'),
+            components=[{'method': 'card', 'amount_usd': Decimal('75.50')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('75.50'))
+        comp = sale.components.first()
+        self.assertEqual(comp.method, 'card')
+        self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
 
 class ReportingServiceTests(TestCase):
     def setUp(self):
@@ -326,6 +513,7 @@ class InventoryServiceTests(TestCase):
         alt = InvProduct.objects.create(name='Alt', unit_price=Decimal('100'), cost_usd=Decimal('7'), count=10)
         from finance.services.inventory import record_product_purchase
         record_product_purchase(product=alt, quantity=Decimal('5'), unit_cost_usd=Decimal('7'), purchase_date=timezone.now().date())
+        ServiceItem.objects.create(service=self.service, product=alt, quantity=Decimal('1'), selection_group='alternative')
         visit = Visit.objects.create(
             customer=self.customer, start_at=timezone.now(), end_at=timezone.now() + timezone.timedelta(minutes=30),
             status=Visit.Status.COMPLETED,

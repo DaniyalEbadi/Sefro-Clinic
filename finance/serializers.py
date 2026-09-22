@@ -22,6 +22,9 @@ from .models import (
     Wallet,
     WalletRewardRule,
     WalletTransaction,
+    WelcomePack,
+    WelcomePackItem,
+    WelcomePackUsage,
 )
 
 
@@ -101,7 +104,49 @@ class ServiceItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ServiceItem
-        fields = ['id', 'service', 'product', 'product_name', 'quantity']
+        fields = ['id', 'service', 'product', 'product_name', 'quantity', 'selection_group']
+
+    def get_product_name(self, obj):
+        return str(obj.product) if obj.product else ''
+
+    def validate_quantity(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('Quantity must be greater than zero.')
+        return value
+
+    def validate(self, attrs):
+        product = attrs.get('product') or getattr(self.instance, 'product', None)
+        if product is not None and hasattr(product, 'status'):
+            if product.status == product.StatusChoices.FINISHED:
+                raise serializers.ValidationError({'product': 'Cannot assign a finished/inactive product.'})
+        return attrs
+
+    def validate_selection_group(self, value):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class PackageItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PackageItem
+        fields = ['id', 'package', 'product', 'quantity']
+
+
+class PackageServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PackageService
+        fields = ['id', 'package', 'service']
+
+
+class WelcomePackItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = WelcomePackItem
+        fields = ['id', 'welcome_pack', 'product', 'product_name', 'quantity', 'created_at', 'updated_at']
+        read_only_fields = ['created_at', 'updated_at']
 
     def get_product_name(self, obj):
         return str(obj.product) if obj.product else ''
@@ -119,16 +164,74 @@ class ServiceItemSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class PackageItemSerializer(serializers.ModelSerializer):
+class WelcomePackSerializer(serializers.ModelSerializer):
+    total_cost_usd = serializers.SerializerMethodField()
+    total_cost_toman = serializers.SerializerMethodField()
+    exchange_rate = serializers.SerializerMethodField()
+    items = WelcomePackItemSerializer(many=True, read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+
     class Meta:
-        model = PackageItem
-        fields = ['id', 'package', 'product', 'quantity']
+        model = WelcomePack
+        fields = [
+            'id', 'name', 'description', 'is_active', 'created_at', 'updated_at',
+            'created_by', 'created_by_name',
+            'total_cost_usd', 'total_cost_toman', 'exchange_rate',
+            'items',
+        ]
+        read_only_fields = ['created_by', 'created_at', 'updated_at']
+
+    def _get_exchange_rate(self):
+        if not hasattr(self, '_exchange_rate'):
+            from .services.exchange_rates import get_current_usd_to_toman_rate
+            self._exchange_rate = get_current_usd_to_toman_rate()
+        return self._exchange_rate
+
+    def get_exchange_rate(self, obj):
+        rate = self._get_exchange_rate()
+        return str(rate) if rate is not None else None
+
+    def get_total_cost_usd(self, obj):
+        from .services.welcome_pack import calculate_welcome_pack_cost_usd
+        cost = calculate_welcome_pack_cost_usd(obj)
+        return str(cost)
+
+    def get_total_cost_toman(self, obj):
+        from .services.welcome_pack import calculate_welcome_pack_cost_toman
+        cost = calculate_welcome_pack_cost_toman(obj)
+        return str(cost) if cost is not None else None
+
+    def get_created_by_name(self, obj):
+        return str(obj.created_by) if obj.created_by else None
+
+    def create(self, validated_data):
+        validated_data['created_by'] = self.context['request'].user
+        return super().create(validated_data)
 
 
-class PackageServiceSerializer(serializers.ModelSerializer):
+class WelcomePackUsageSerializer(serializers.ModelSerializer):
+    welcome_pack_name = serializers.SerializerMethodField()
+    customer_name = serializers.SerializerMethodField()
+    issued_by_name = serializers.SerializerMethodField()
+
     class Meta:
-        model = PackageService
-        fields = ['id', 'package', 'service']
+        model = WelcomePackUsage
+        fields = [
+            'id', 'welcome_pack', 'welcome_pack_name', 'customer', 'customer_name',
+            'visit', 'issued_by', 'issued_by_name', 'quantity',
+            'total_cost_usd_snapshot', 'exchange_rate_snapshot', 'total_cost_toman_snapshot',
+            'issued_at', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_welcome_pack_name(self, obj):
+        return str(obj.welcome_pack)
+
+    def get_customer_name(self, obj):
+        return str(obj.customer) if obj.customer else None
+
+    def get_issued_by_name(self, obj):
+        return str(obj.issued_by) if obj.issued_by else None
 
 
 class ProductCostHistorySerializer(serializers.ModelSerializer):
@@ -143,7 +246,7 @@ class ProductUsageSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'visit', 'service', 'package_sale',
             'quantity', 'unit_cost_usd_snapshot', 'total_cost_usd_snapshot',
-            'exchange_rate_snapshot', 'created_at',
+            'exchange_rate_snapshot', 'is_commission', 'created_at',
         ]
 
 
@@ -213,13 +316,12 @@ class CheckoutSerializer(serializers.Serializer):
     description = serializers.CharField(required=False, allow_blank=True, max_length=500)
 
     def validate_components(self, value):
-        valid = {'cash', 'card', 'wallet'}
-        total = Decimal('0')
+        valid_methods = {'cash', 'cash_usd', 'cash_toman', 'card', 'wallet'}
         for comp in value:
             method = comp.get('method')
             amt = comp.get('amount_usd')
-            if method not in valid:
-                raise serializers.ValidationError(f'Invalid payment method: {method}')
+            if method not in valid_methods:
+                raise serializers.ValidationError(f'Invalid payment method: {method}. Valid methods: {", ".join(valid_methods)}')
             try:
                 amt = Decimal(str(amt))
             except Exception:
@@ -227,7 +329,6 @@ class CheckoutSerializer(serializers.Serializer):
             if amt < 0:
                 raise serializers.ValidationError('Component amount cannot be negative.')
             comp['amount_usd'] = amt
-            total += amt
         return value
 
 
