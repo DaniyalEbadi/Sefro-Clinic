@@ -395,17 +395,118 @@ class RecordConsumptionAPITests(TestCase):
         self.assertEqual(len(response.data), 1)
         self.assertEqual(Decimal(response.data[0]['total_cost_usd_snapshot']), Decimal('40.00'))
         self.assertEqual(ProductUsage.objects.count(), 1)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.count, Decimal('3.000'))
 
     def test_unknown_visit_returns_404(self):
         self.assertEqual(self._post(999999).status_code, 404)
 
-    def test_selected_products_override_is_honoured(self):
+    def test_selected_products_override_is_honoured_for_a_configured_product(self):
         other = make_product(name='Premium Serum', sku='SKU-2', cost_usd=Decimal('50.00'))
+        ServiceItem.objects.create(
+            service=self.service, product=other, quantity=Decimal('1'), selection_group='serum',
+        )
         payload = {'selected_products': {str(self.service.id): [[other.id, '1']]}}
         response = self._post(self.visit.id, payload)
         self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(ProductUsage.objects.get().product, other)
-        self.assertEqual(Decimal(ProductUsage.objects.get().total_cost_usd_snapshot), Decimal('50.00'))
+        usage = ProductUsage.objects.get(product=other)
+        self.assertEqual(usage.product, other)
+        self.assertEqual(Decimal(usage.total_cost_usd_snapshot), Decimal('50.00'))
+
+    def test_selection_group_requires_one_and_consumes_mandatory_items(self):
+        alternative = make_product(name='Alternative Serum', sku='SKU-3', count=10)
+        ServiceItem.objects.create(
+            service=self.service, product=alternative, quantity=Decimal('1'), selection_group='serum',
+        )
+        missing = self._post(self.visit.id)
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn('Missing required selection group', missing.data['error'])
+
+        response = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[alternative.id, '1.000']]},
+        })
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(ProductUsage.objects.filter(product=self.product).count(), 1)
+        self.assertEqual(ProductUsage.objects.filter(product=alternative).count(), 1)
+
+    def test_multiple_group_selections_and_unconfigured_product_are_rejected(self):
+        alternative = make_product(name='Alternative Serum', sku='SKU-4')
+        second_alternative = make_product(name='Second Alternative Serum', sku='SKU-6')
+        unrelated = make_product(name='Unrelated', sku='SKU-5')
+        ServiceItem.objects.create(
+            service=self.service, product=alternative, quantity=Decimal('1'), selection_group='serum',
+        )
+        ServiceItem.objects.create(
+            service=self.service, product=second_alternative, quantity=Decimal('1'), selection_group='serum',
+        )
+        multiple = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[alternative.id, '1'], [second_alternative.id, '1']]},
+        })
+        self.assertEqual(multiple.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        rejected = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[unrelated.id, '1']]},
+        })
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn('not configured', rejected.data['error'])
+
+    def test_invalid_quantity_insufficient_stock_and_duplicate_retry_are_safe(self):
+        invalid = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[self.product.id, '0']]},
+        })
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        negative = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[self.product.id, '-1']]},
+        })
+        self.assertEqual(negative.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        self.product.count = Decimal('1.000')
+        self.product.save(update_fields=['count'])
+        insufficient = self._post(self.visit.id)
+        self.assertEqual(insufficient.status_code, 400)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.count, Decimal('1.000'))
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        self.product.count = Decimal('5.000')
+        self.product.save(update_fields=['count'])
+        accepted = self._post(self.visit.id)
+        self.assertEqual(accepted.status_code, 201, accepted.data)
+        retry = self._post(self.visit.id)
+        self.assertEqual(retry.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 1)
+
+    def test_insufficient_product_rolls_back_all_recipe_stock_and_usage(self):
+        second = make_product(name='Needle', sku='NEEDLE-1', count=Decimal('0.500'))
+        ServiceItem.objects.create(service=self.service, product=second, quantity=Decimal('1'))
+        starting_stock = self.product.count
+
+        response = self._post(self.visit.id)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+        self.product.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(self.product.count, starting_stock)
+        self.assertEqual(second.count, Decimal('0.500'))
+
+
+class ServiceItemSelectionGroupAPITests(TestCase):
+    def test_admin_can_configure_multiple_items_in_one_group(self):
+        client = admin_client()
+        service = Service.objects.create(name='Filler', price_usd=Decimal('100'))
+        first = make_product(name='Filler A', sku='FILLER-A')
+        second = make_product(name='Filler B', sku='FILLER-B')
+        for product in (first, second):
+            response = client.post('/api/finance/service-items/', {
+                'service': service.id, 'product': product.id, 'quantity': '1', 'selection_group': 'filler',
+            }, format='json')
+            self.assertEqual(response.status_code, 201, response.data)
+            self.assertEqual(response.data['selection_group'], 'filler')
 
 
 class FinanceProfitReportAPITests(TestCase):

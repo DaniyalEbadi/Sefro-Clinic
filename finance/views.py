@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.db.models import Sum
 from django.utils import timezone
-from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
+from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -31,6 +31,9 @@ from .models import (
     Wallet,
     WalletRewardRule,
     WalletTransaction,
+    WelcomePack,
+    WelcomePackItem,
+    WelcomePackUsage,
 )
 from .permissions import IsEmployeeOrAdmin
 from .serializers import (
@@ -54,10 +57,14 @@ from .serializers import (
     WalletRewardRuleSerializer,
     WalletSerializer,
     WalletTransactionSerializer,
+    WelcomePackItemSerializer,
+    WelcomePackSerializer,
+    WelcomePackUsageSerializer,
 )
 from .services import accounting, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
 from .services import operating_expenses as opex_svc
+from .services import welcome_pack as welcome_pack_svc
 from .services.exchange_rates import get_rate
 from .services.wallet import InsufficientFunds
 
@@ -461,7 +468,26 @@ class RecordConsumptionView(APIView):
 
     @extend_schema(
         parameters=[OpenApiParameter('pk', OpenApiTypes.INT, OpenApiParameter.PATH)],
+        request=inline_serializer(
+            name='RecordConsumptionRequest',
+            fields={
+                'selected_products': serializers.DictField(
+                    required=False,
+                    help_text=(
+                        'Optional mapping of service ID to [product ID, quantity] pairs. '
+                        'Mandatory products are automatic; choose exactly one product from each selection group.'
+                    ),
+                ),
+            },
+        ),
         responses=ProductUsageSerializer(many=True),
+        examples=[
+            OpenApiExample(
+                'Alternative selections',
+                value={'selected_products': {'10': [[21, '1.000'], [35, '1.000']]}},
+                request_only=True,
+            ),
+        ],
     )
     def post(self, request, pk):
         from customers.models import Visit
@@ -857,7 +883,7 @@ class DashboardView(APIView):
         start, end = _resolve_range(request)
 
         from customers.models import Customer, Visit
-        from finance.models import Expense, Wallet
+        from finance.models import Expense, Wallet, WelcomePackUsage
 
         # Sales Summary
         sales = Sale.objects.filter(created_at__gte=start, created_at__lte=end)
@@ -874,9 +900,14 @@ class DashboardView(APIView):
             product_cost_toman += (u.total_cost_usd_snapshot or Decimal('0')) * (u.exchange_rate_snapshot or get_rate())
         product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
 
+        # Welcome Pack Costs (from immutable usage snapshots)
+        wp_usages = WelcomePackUsage.objects.filter(issued_at__gte=start, issued_at__lte=end)
+        welcome_pack_cost_usd = wp_usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
+        welcome_pack_cost_toman = wp_usages.aggregate(total=Sum('total_cost_toman_snapshot'))['total'] or Decimal('0')
+
         # Gross Profit
-        gross_profit_usd = (revenue_usd - product_cost_usd).quantize(Decimal('0.01'))
-        gross_profit_toman = (revenue_toman - product_cost_toman).quantize(Decimal('0.01'))
+        gross_profit_usd = (revenue_usd - product_cost_usd - welcome_pack_cost_usd).quantize(Decimal('0.01'))
+        gross_profit_toman = (revenue_toman - product_cost_toman - welcome_pack_cost_toman).quantize(Decimal('0.01'))
 
         # Expenses
         expenses = Expense.objects.filter(
@@ -930,6 +961,10 @@ class DashboardView(APIView):
             'sales_summary': {
                 'revenue_usd': str(revenue_usd),
                 'revenue_toman': str(revenue_toman),
+                'product_cost_usd': str(product_cost_usd),
+                'product_cost_toman': str(product_cost_toman),
+                'welcome_pack_cost_usd': str(welcome_pack_cost_usd),
+                'welcome_pack_cost_toman': str(welcome_pack_cost_toman),
                 'gross_profit_usd': str(gross_profit_usd),
                 'gross_profit_toman': str(gross_profit_toman),
                 'expenses_usd': str(expenses_usd),
@@ -1076,3 +1111,206 @@ class OperatingExpenseViewSet(viewsets.ModelViewSet):
         """
         start, end = _resolve_range(request)
         return Response(_stringify(reporting.operating_expense_summary(start, end)))
+
+
+@extend_schema(tags=['Welcome Packs'])
+class WelcomePackViewSet(viewsets.ModelViewSet):
+    """CRUD for Welcome Pack definitions.
+
+    Both admin and employee have full access (create, read, update, delete).
+    Creating a pack definition does NOT create financial transactions.
+    Financial impact occurs only when a pack is issued via the issue endpoint.
+    """
+    queryset = WelcomePack.objects.prefetch_related('items__product').all()
+    serializer_class = WelcomePackSerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'is_active', 'created_at']
+    ordering = ['name']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        if params.get('is_active') is not None:
+            is_active = params['is_active'].lower() == 'true'
+            qs = qs.filter(is_active=is_active)
+        return qs
+
+    def perform_create(self, serializer):
+        items_data = self.request.data.get('items', [])
+        try:
+            pack = welcome_pack_svc.create_welcome_pack_with_items(
+                name=serializer.validated_data['name'],
+                description=serializer.validated_data.get('description', ''),
+                is_active=serializer.validated_data.get('is_active', True),
+                items_data=items_data,
+                created_by=self.request.user,
+            )
+        except welcome_pack_svc.WelcomePackError as exc:
+            raise serializers.ValidationError({'error': str(exc)})
+        serializer.instance = pack
+
+    def perform_update(self, serializer):
+        items_data = self.request.data.get('items')
+        try:
+            pack = welcome_pack_svc.update_welcome_pack_with_items(
+                self.get_object(),
+                name=serializer.validated_data.get('name'),
+                description=serializer.validated_data.get('description'),
+                is_active=serializer.validated_data.get('is_active'),
+                items_data=items_data,
+                updated_by=self.request.user,
+            )
+        except welcome_pack_svc.WelcomePackError as exc:
+            raise serializers.ValidationError({'error': str(exc)})
+        serializer.instance = pack
+
+    @extend_schema(
+        request=inline_serializer(
+            name='WelcomePackIssueRequest',
+            fields={
+                'customer': serializers.IntegerField(),
+                'quantity': serializers.DecimalField(max_digits=10, decimal_places=3, default='1'),
+                'visit': serializers.IntegerField(required=False, allow_null=True),
+            },
+        ),
+        responses=WelcomePackUsageSerializer,
+    )
+    @action(detail=True, methods=['post'], permission_classes=[IsEmployeeOrAdmin])
+    def issue(self, request, pk=None):
+        """Issue this welcome pack to a customer (creates financial event)."""
+        pack = self.get_object()
+        customer_id = request.data.get('customer')
+        quantity = request.data.get('quantity', '1')
+        visit_id = request.data.get('visit')
+
+        if not customer_id:
+            return Response({'error': 'customer is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        from customers.models import Customer, Visit
+
+        try:
+            customer = Customer.objects.get(id=customer_id)
+        except Customer.DoesNotExist:
+            return Response({'error': 'Customer not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        visit = None
+        if visit_id:
+            visit = Visit.objects.filter(id=visit_id).first()
+            if not visit:
+                return Response({'error': 'Visit not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if visit is not None and visit.customer_id != customer.id:
+            return Response(
+                {'error': 'Visit does not belong to the specified customer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            usage = welcome_pack_svc.issue_welcome_pack(
+                welcome_pack=pack,
+                customer=customer,
+                quantity=quantity,
+                visit=visit,
+                issued_by=request.user,
+            )
+        except welcome_pack_svc.WelcomePackError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(WelcomePackUsageSerializer(usage).data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(tags=['Welcome Packs'])
+class WelcomePackItemViewSet(viewsets.ModelViewSet):
+    """Manage individual items within welcome packs.
+
+    Typically managed via nested operations on WelcomePackViewSet,
+    but exposed separately for granular access if needed.
+    """
+    queryset = WelcomePackItem.objects.select_related('welcome_pack', 'product').all()
+    serializer_class = WelcomePackItemSerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ['welcome_pack', 'product']
+
+
+@extend_schema(tags=['Welcome Packs'])
+class WelcomePackUsageViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only view of Welcome Pack issuance history (financial events).
+
+    Used for reporting and audit. Creating/editing/deleting usages
+    is not allowed — they are immutable historical snapshots.
+    """
+    queryset = WelcomePackUsage.objects.select_related('welcome_pack', 'customer', 'visit', 'issued_by').all()
+    serializer_class = WelcomePackUsageSerializer
+    permission_classes = [IsEmployeeOrAdmin]
+    filter_backends = [filters.OrderingFilter, filters.SearchFilter]
+    ordering = ['-issued_at']
+    search_fields = ['welcome_pack__name', 'customer__first_name', 'customer__last_name']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        if params.get('welcome_pack'):
+            qs = qs.filter(welcome_pack_id=params['welcome_pack'])
+        if params.get('customer'):
+            qs = qs.filter(customer_id=params['customer'])
+        if params.get('visit'):
+            qs = qs.filter(visit_id=params['visit'])
+        if params.get('date_from'):
+            try:
+                from datetime import datetime
+                date_from = datetime.strptime(params['date_from'], '%Y-%m-%d').date()
+                qs = qs.filter(issued_at__date__gte=date_from)
+            except (ValueError, TypeError):
+                pass
+        if params.get('date_to'):
+            try:
+                from datetime import datetime
+                date_to = datetime.strptime(params['date_to'], '%Y-%m-%d').date()
+                qs = qs.filter(issued_at__date__lte=date_to)
+            except (ValueError, TypeError):
+                pass
+        return qs
+
+
+@extend_schema(tags=['Reports'])
+class WelcomePackReportView(APIView):
+    """Welcome Pack usage and cost summary for a period."""
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+        responses=inline_serializer(
+            name='WelcomePackReport',
+            fields={
+                'period': inline_serializer('Period', fields={'start': OpenApiTypes.DATETIME, 'end': OpenApiTypes.DATETIME}),
+                'total_usage_count': serializers.IntegerField(),
+                'total_packs_issued': serializers.CharField(),
+                'total_cost_usd': serializers.CharField(),
+                'total_cost_toman': serializers.CharField(),
+                'by_pack': serializers.ListField(
+                    child=inline_serializer(
+                        name='WelcomePackReportItem',
+                        fields={
+                            'welcome_pack_id': serializers.IntegerField(),
+                            'welcome_pack__name': serializers.CharField(),
+                            'count': serializers.CharField(),
+                            'cost_usd': serializers.CharField(),
+                            'cost_toman': serializers.CharField(),
+                            'usage_count': serializers.IntegerField(),
+                        }
+                    )
+                ),
+            },
+        ),
+    )
+    def get(self, request):
+        start, end = _resolve_range(request)
+        result = welcome_pack_svc.get_welcome_pack_usage_summary(start, end)
+        return Response(_stringify(result))

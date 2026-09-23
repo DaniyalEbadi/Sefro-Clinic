@@ -43,6 +43,17 @@ from .wallet import (
     current_balance,
     debit,
 )
+from .welcome_pack import (
+    calculate_welcome_pack_cost_toman,
+    calculate_welcome_pack_cost_usd,
+    create_welcome_pack_with_items,
+    get_welcome_pack_usage_summary,
+    get_welcome_pack_items,
+    issue_welcome_pack,
+    update_welcome_pack_with_items,
+    validate_welcome_pack_items,
+    WelcomePackError,
+)
 
 __all__ = [
     'calculate_visit_profit',
@@ -76,4 +87,13 @@ __all__ = [
     'convert_usd_to_toman',
     'service_pricing_breakdown',
     'record_visit_consumption',
+    'calculate_welcome_pack_cost_usd',
+    'calculate_welcome_pack_cost_toman',
+    'create_welcome_pack_with_items',
+    'update_welcome_pack_with_items',
+    'get_welcome_pack_items',
+    'validate_welcome_pack_items',
+    'issue_welcome_pack',
+    'get_welcome_pack_usage_summary',
+    'WelcomePackError',
 ]

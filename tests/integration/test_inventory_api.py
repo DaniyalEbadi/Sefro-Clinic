@@ -29,6 +29,28 @@ class ProductCrudTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['name'], 'Sunscreen SPF50')
 
+    def test_brand_and_product_type_are_writable(self):
+        response = self.client.post('/api/inventory/products/', {
+            'name': 'Revolax Fine', 'sku': 'REVOLAX-FINE', 'unit_price': '320000.00',
+            'count': '25.500', 'brand': 'Across', 'product_type': 'treatment',
+        }, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['brand'], 'Across')
+        self.assertEqual(response.data['product_type'], 'treatment')
+
+        updated = self.client.patch(
+            f"/api/inventory/products/{response.data['id']}/",
+            {'brand': 'Revolax', 'product_type': 'consumable'}, format='json',
+        )
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        self.assertEqual(updated.data['brand'], 'Revolax')
+        self.assertEqual(updated.data['product_type'], 'consumable')
+
+    def test_product_metadata_defaults_are_safe(self):
+        product = make_product()
+        self.assertEqual(product.brand, '')
+        self.assertEqual(product.product_type, Product.ProductType.TREATMENT)
+
     def test_full_crud_cycle(self):
         make_product()
         listing = self.client.get('/api/inventory/products/')

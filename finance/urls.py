@@ -29,6 +29,10 @@ from .views import (
     WalletSummaryView,
     WalletTransactionViewSet,
     WalletViewSet,
+    WelcomePackItemViewSet,
+    WelcomePackUsageViewSet,
+    WelcomePackViewSet,
+    WelcomePackReportView,
 )
 
 router = DefaultRouter()
@@ -50,6 +54,9 @@ router.register('operating-expenses', OperatingExpenseViewSet, basename='operati
 router.register('product-purchases', ProductPurchaseViewSet, basename='product-purchase')
 router.register('staff-compensation-rules', StaffCompensationRuleViewSet, basename='staff-compensation-rule')
 router.register('staff-payouts', StaffPayoutViewSet, basename='staff-payout')
+router.register('welcome-packs', WelcomePackViewSet, basename='welcome-pack')
+router.register('welcome-pack-items', WelcomePackItemViewSet, basename='welcome-pack-item')
+router.register('welcome-pack-usages', WelcomePackUsageViewSet, basename='welcome-pack-usage')
 
 urlpatterns = [
     path('checkout/', CheckoutView.as_view(), name='checkout'),
@@ -61,5 +68,6 @@ urlpatterns = [
     path('reports/wallet-summary/', WalletSummaryView.as_view(), name='wallet-summary'),
     path('reports/staff-payout-summary/', StaffPayoutSummaryView.as_view(), name='staff-payout-summary'),
     path('reports/dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('reports/welcome-packs/', WelcomePackReportView.as_view(), name='welcome-pack-report'),
     path('', include(router.urls)),
 ]

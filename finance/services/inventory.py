@@ -9,6 +9,22 @@ from ..models import ProductCostHistory, ProductPurchase, ProductUsage
 from .exchange_rates import get_rate
 
 
+class InventoryError(ValueError):
+    """A user-correctable inventory validation failure."""
+
+
+def _valid_quantity(value: Decimal) -> Decimal:
+    try:
+        quantity = Decimal(str(value))
+    except Exception as exc:
+        raise InventoryError('Quantity must be a valid decimal.') from exc
+    if not quantity.is_finite() or quantity <= 0:
+        raise InventoryError('Quantity must be greater than zero.')
+    if quantity.as_tuple().exponent < -3:
+        raise InventoryError('Quantity cannot have more than three decimal places.')
+    return quantity
+
+
 def current_cost(product, at: Optional[object] = None) -> Decimal:
     when = at or timezone.now()
     if isinstance(when, str):
@@ -43,8 +59,12 @@ def record_product_purchase(
     purchase_date = purchase_date or timezone.now().date()
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
     unit_cost_usd = Decimal(unit_cost_usd).quantize(Decimal('0.01'))
-    quantity = Decimal(quantity)
+    quantity = _valid_quantity(quantity)
     total_cost_usd = (unit_cost_usd * quantity).quantize(Decimal('0.01'))
+
+    # Locking prevents a purchase and a consumption from losing each other's
+    # stock update when they happen at the same time.
+    product = product.__class__.objects.select_for_update().get(pk=product.pk)
 
     purchase = ProductPurchase.objects.create(
         product=product,
@@ -57,7 +77,7 @@ def record_product_purchase(
     )
 
     product.cost_usd = unit_cost_usd
-    product.count = (product.count or 0) + int(quantity)
+    product.count = Decimal(product.count or 0) + quantity
     product.save(update_fields=['cost_usd', 'count'])
 
     # Close the previously active cost history entry.
@@ -90,16 +110,22 @@ def record_product_usage(
     at: Optional[object] = None,
     rate: Optional[Decimal] = None,
     is_commission: bool = False,
+    decrement_stock: bool = False,
 ):
     at = at or timezone.now()
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
-    quantity = Decimal(quantity)
+    quantity = _valid_quantity(quantity)
+    if decrement_stock or is_commission:
+        product = product.__class__.objects.select_for_update().get(pk=product.pk)
+        stock = Decimal(product.count or 0)
+        if quantity > stock:
+            raise InventoryError(
+                f'Insufficient stock for product "{product.name}": available {stock}, requested {quantity}.'
+            )
+        product.count = stock - quantity
+        product.save(update_fields=['count'])
     unit_cost = current_cost(product, at=at)
     total_cost = (unit_cost * quantity).quantize(Decimal('0.01'))
-
-    if is_commission:
-        product.count = max((product.count or 0) - int(quantity), 0)
-        product.save(update_fields=['count'])
 
     usage = ProductUsage.objects.create(
         product=product,
@@ -110,6 +136,7 @@ def record_product_usage(
         unit_cost_usd_snapshot=unit_cost,
         total_cost_usd_snapshot=total_cost,
         exchange_rate_snapshot=rate,
+        is_commission=is_commission,
     )
     return usage
 

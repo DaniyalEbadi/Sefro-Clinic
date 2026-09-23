@@ -12,6 +12,7 @@ from ..models import (
     Sale,
     Wallet,
     WalletTransaction,
+    WelcomePackUsage,
 )
 from .exchange_rates import get_rate
 
@@ -56,8 +57,13 @@ def financial_summary(start=None, end=None, *, service_id=None, package_id=None,
         product_cost_toman += (u.total_cost_usd_snapshot or Decimal('0')) * (u.exchange_rate_snapshot or get_rate())
     product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
 
-    gross_profit_usd = (revenue_usd - product_cost_usd).quantize(Decimal('0.01'))
-    gross_profit_toman = (revenue_toman - product_cost_toman).quantize(Decimal('0.01'))
+    # Welcome Pack costs (from immutable usage snapshots)
+    wp_usages = WelcomePackUsage.objects.filter(issued_at__gte=start, issued_at__lte=end)
+    welcome_pack_cost_usd = wp_usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
+    welcome_pack_cost_toman = wp_usages.aggregate(total=Sum('total_cost_toman_snapshot'))['total'] or Decimal('0')
+
+    gross_profit_usd = (revenue_usd - product_cost_usd - welcome_pack_cost_usd).quantize(Decimal('0.01'))
+    gross_profit_toman = (revenue_toman - product_cost_toman - welcome_pack_cost_toman).quantize(Decimal('0.01'))
 
     expenses = Expense.objects.filter(
         expense_date__gte=start.date(), expense_date__lte=end.date(),
@@ -102,6 +108,7 @@ def financial_summary(start=None, end=None, *, service_id=None, package_id=None,
         'period': {'start': start, 'end': end},
         'revenue': {'usd': revenue_usd, 'toman': revenue_toman},
         'product_cost': {'usd': product_cost_usd, 'toman': product_cost_toman},
+        'welcome_pack_cost': {'usd': welcome_pack_cost_usd, 'toman': welcome_pack_cost_toman},
         'gross_profit': {'usd': gross_profit_usd, 'toman': gross_profit_toman},
         'expenses': {'usd': expenses_usd, 'toman': expenses_toman},
         'net_profit': {'usd': net_profit_usd, 'toman': net_profit_toman},

@@ -190,6 +190,7 @@ class ProductCostAndConsumptionTests(FinanceBase):
         alt = Product.objects.create(name='Alt', unit_price=Decimal('100'), cost_usd=Decimal('7'), count=10)
         from finance.services.inventory import record_product_purchase
         record_product_purchase(product=alt, quantity=Decimal('5'), unit_cost_usd=Decimal('7'), purchase_date=timezone.now().date())
+        ServiceItem.objects.create(service=self.service, product=alt, quantity=Decimal('1'), selection_group='alternative')
         visit = Visit.objects.create(
             customer=self.customer, start_at=timezone.now(), end_at=timezone.now() + timezone.timedelta(minutes=30),
             status=Visit.Status.COMPLETED,

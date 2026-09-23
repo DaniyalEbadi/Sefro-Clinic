@@ -214,6 +214,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Exchange Rates', 'description': 'USD/Toman exchange rate configuration.'},
         {'name': 'Packages', 'description': 'Service and product bundles.'},
         {'name': 'Expenses', 'description': 'Operational expense recording and approval.'},
+        {'name': 'Operating Expenses', 'description': 'Direct clinic operating costs (هزینه‌های جاری), distinct from employee expense claims.'},
         {'name': 'Reports', 'description': 'Profit, revenue, and wallet reporting.'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
