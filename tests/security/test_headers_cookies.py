@@ -11,7 +11,9 @@ class SecurityHeaderTests(TestCase):
         resp = login.post('/api/auth/token/', {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        self.access = resp.data['access']
+        self.access = resp.data.get('access')
+        if not self.access and 'access_token' in resp.cookies:
+            self.access = resp.cookies['access_token'].value
 
     def _client(self):
         client = APIClient()

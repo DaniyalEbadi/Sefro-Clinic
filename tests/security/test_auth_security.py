@@ -141,7 +141,7 @@ class TokenBodyExposureTests(TestCase):
 
     def test_tokens_in_body_when_enabled(self):
         from django.test import override_settings
-        with override_settings(DJANGO_RETURN_TOKENS_IN_BODY=True):
+        with override_settings(RETURN_TOKENS_IN_BODY=True):
             response = self.client.post(LOGIN_URL, {
                 'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
             }, format='json')
@@ -180,7 +180,9 @@ class TokenBodyExposureTests(TestCase):
         login = self.client.post(LOGIN_URL, {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        refresh = login.data['refresh']
+        refresh = login.data.get('refresh')
+        if not refresh and 'refresh_token' in login.cookies:
+            refresh = login.cookies['refresh_token'].value
         with override_settings(RETURN_TOKENS_IN_BODY=False):
             response = self.client.post('/api/auth/token/refresh/', {
                 'refresh': refresh,

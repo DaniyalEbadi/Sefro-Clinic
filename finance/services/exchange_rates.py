@@ -144,13 +144,7 @@ class ExternalExchangeRateProvider:
         self.timeout = timeout
 
     def get_usd_to_toman_rate(self) -> Optional[Decimal]:
-        api_url = self.api_url
-        if not api_url:
-            # Only use default if setting doesn't exist at all (not just empty string)
-            if hasattr(settings, 'EXCHANGE_RATE_API_URL'):
-                api_url = getattr(settings, 'EXCHANGE_RATE_API_URL', '')
-            else:
-                api_url = self.DEFAULT_URL
+        api_url = self.api_url or getattr(settings, 'EXCHANGE_RATE_API_URL', '') or self.DEFAULT_URL
         if not api_url:
             return None
         api_key = self.api_key or getattr(settings, 'EXCHANGE_RATE_API_KEY', '')

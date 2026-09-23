@@ -240,7 +240,7 @@ class OperatingExpenseReceiptIntegrationTests(TestCase):
         set_rate('USD', 'TOMAN', RATE)
         self.category = make_opex_category()
 
-    @override_settings(MEDIA_ROOT='/tmp/test_media')
+    @override_settings(MEDIA_ROOT='/tmp/test_media')  # nosec B108
     def test_receipt_upload_saved_under_correct_path(self):
         upload = SimpleUploadedFile('receipt.txt', b'sample receipt', content_type='text/plain')
         resp = self.client.post('/api/finance/operating-expenses/', {

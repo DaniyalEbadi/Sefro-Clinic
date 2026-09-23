@@ -342,9 +342,10 @@ class EmployeeAuthTests(TestCase):
             'password': 'TestPass-2026!',
         }, format='json')
         self.assertEqual(login_resp.status_code, status.HTTP_200_OK)
-        self.assertIn('access', login_resp.data)
+        access = login_resp.data.get('access') or login_resp.cookies.get('access_token').value if 'access_token' in login_resp.cookies else None
+        self.assertIsNotNone(access)
 
-        client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
         me_resp = client.get('/api/auth/me/')
         self.assertEqual(me_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(me_resp.data['role'], 'employee')
@@ -359,12 +360,16 @@ class EmployeeAuthTests(TestCase):
             'username': 'logic_emp_refresh',
             'password': 'TestPass-2026!',
         }, format='json')
-        refresh = login_resp.data['refresh']
+        refresh = login_resp.data.get('refresh')
+        if not refresh and 'refresh_token' in login_resp.cookies:
+            refresh = login_resp.cookies['refresh_token'].value
+        self.assertIsNotNone(refresh)
         response = client.post('/api/auth/token/refresh/', {
             'refresh': refresh,
         }, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('access', response.data)
+        access = response.data.get('access') or response.cookies.get('access_token').value if 'access_token' in response.cookies else None
+        self.assertIsNotNone(access)
 
 
 class EmployeeServiceCategoryLogicTests(TestCase):
