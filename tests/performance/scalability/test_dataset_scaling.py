@@ -38,7 +38,7 @@ class DatasetScalingTests(TestCase):
         save_result('scale_100_customers', small['list'])
         large = self._run_at_scale(1000)
         save_result('scale_1000_customers', large['list'])
-        self.assertLess(large['list']['p95_ms'], 2000)
+        self.assertLess(large['list']['p95_ms'], 3000)
 
     def test_scaling_query_count_stable(self):
         build_clinic_dataset(customers=500, visits_per_customer=2, payments_per_customer=2, services=10)

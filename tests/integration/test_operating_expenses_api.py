@@ -3,12 +3,11 @@
 Covers cross-cutting concerns: category linkage, filtering, search, ordering,
 idempotency, receipt upload, and isolation from Expense/Wallet/Sale domains.
 """
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
-from django.utils import timezone
 from rest_framework.test import APIClient
 
 from finance.models import (
@@ -364,7 +363,7 @@ class OperatingExpenseRateSnapshotTests(TestCase):
             'amount_usd': '10.00', 'expense_date': date.today().isoformat(),
         }, format='json')
         opex_id = created.data['id']
-        original_toman = Decimal(created.data['amount_toman'])
+        Decimal(created.data['amount_toman'])
         original_rate = Decimal(created.data['exchange_rate'])
 
         set_rate('USD', 'TOMAN', Decimal('200000'))

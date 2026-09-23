@@ -14,7 +14,6 @@ from finance.services.welcome_pack import WelcomePackError, issue_welcome_pack, 
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin, make_customer, make_employee
 
-
 RATE = Decimal('100000')
 
 

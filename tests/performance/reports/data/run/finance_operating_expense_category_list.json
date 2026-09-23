@@ -1,0 +1,19 @@
+{
+  "n": 20,
+  "min_ms": 4.26,
+  "p50_ms": 5.27,
+  "p75_ms": 6.72,
+  "p90_ms": 9.8,
+  "p95_ms": 17.09,
+  "p99_ms": 17.25,
+  "max_ms": 17.25,
+  "mean_ms": 6.81,
+  "url": "/api/finance/operating-expense-categories/",
+  "method": "GET",
+  "iterations": 20,
+  "errors": 0,
+  "error_rate": 0.0,
+  "throughput_rps": 146.7,
+  "avg_response_bytes": 2060,
+  "max_response_bytes": 2060
+}

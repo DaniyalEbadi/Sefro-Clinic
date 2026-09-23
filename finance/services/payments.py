@@ -5,7 +5,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import PaymentComponent, Sale, WalletTransaction
-from .exchange_rates import get_rate, to_toman, to_usd as from_toman
+from .exchange_rates import get_rate, to_toman
+from .exchange_rates import to_usd as from_toman
 from .wallet import InsufficientFunds, debit, grant_reward, reverse_reward
 
 
@@ -94,7 +95,7 @@ def checkout(
         wallet_txn = None
         amt_usd = amt
         amount_toman = to_toman(amt, rate)
-        
+
         if method == 'wallet':
             wallet_txn = debit(
                 customer,

@@ -1,22 +1,21 @@
 from decimal import Decimal
+
 from django.test import TestCase
 from django.utils import timezone
 
-from finance.models import WelcomePack, WelcomePackItem, WelcomePackUsage
+from accounts.models import ClinicUser
+from customers.models import Customer
+from finance.models import WelcomePack, WelcomePackItem
 from finance.services.welcome_pack import (
-    calculate_welcome_pack_cost_usd,
-    calculate_welcome_pack_cost_toman,
-    create_welcome_pack_with_items,
-    update_welcome_pack_with_items,
-    get_welcome_pack_items,
-    validate_welcome_pack_items,
-    issue_welcome_pack,
-    get_welcome_pack_usage_summary,
     WelcomePackError,
+    create_welcome_pack_with_items,
+    get_welcome_pack_items,
+    get_welcome_pack_usage_summary,
+    issue_welcome_pack,
+    update_welcome_pack_with_items,
+    validate_welcome_pack_items,
 )
 from inventory.models import Product
-from customers.models import Customer
-from accounts.models import ClinicUser
 from tests.helpers import make_admin
 
 
@@ -235,8 +234,9 @@ class WelcomePackServiceIssueTests(TestCase):
         self.assertEqual(usage.total_cost_toman_snapshot, Decimal('4500000.00'))
 
     def test_issue_welcome_pack_with_visit(self):
-        from customers.models import Visit
         from datetime import datetime
+
+        from customers.models import Visit
         visit = Visit.objects.create(
             customer=self.customer, staff=self.employee,
             start_at=timezone.make_aware(datetime(2026, 1, 1, 10, 0)),

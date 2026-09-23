@@ -377,7 +377,7 @@ class OperatingExpenseE2ETests(TestCase):
             'notes': 'Monthly restock',
         }, format='json')
         self.assertEqual(create.status_code, 201, create.data)
-        opex_id = create.data['id']
+        create.data['id']
         self.assertEqual(create.data['category_name'], 'E2E Coffee')
         self.assertEqual(Decimal(create.data['amount_toman']), Decimal('15000000.00'))
         self.assertEqual(create.data['created_by_name'], 'emp_opex_e2e')
@@ -449,7 +449,7 @@ class OperatingExpenseE2ETests(TestCase):
         self.assertEqual(create.status_code, 201)
         opex_id = create.data['id']
         original_rate = Decimal(create.data['exchange_rate'])
-        original_toman = Decimal(create.data['amount_toman'])
+        Decimal(create.data['amount_toman'])
 
         # Change rate to 200000
         set_rate('USD', 'TOMAN', Decimal('200000'), effective_at=timezone.now(), source='e2e-new-rate')

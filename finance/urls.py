@@ -30,9 +30,9 @@ from .views import (
     WalletTransactionViewSet,
     WalletViewSet,
     WelcomePackItemViewSet,
+    WelcomePackReportView,
     WelcomePackUsageViewSet,
     WelcomePackViewSet,
-    WelcomePackReportView,
 )
 
 router = DefaultRouter()

@@ -1,12 +1,13 @@
 from decimal import Decimal
+
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 
+from accounts.models import ClinicUser
+from customers.models import Customer
 from finance.models import WelcomePack, WelcomePackItem, WelcomePackUsage
 from inventory.models import Product
-from customers.models import Customer
-from accounts.models import ClinicUser
 from tests.helpers import make_admin
 
 
@@ -191,6 +192,7 @@ class WelcomePackCostCalculationTests(TestCase):
 
     def test_calculate_welcome_pack_cost_toman_none_without_rate(self):
         from unittest.mock import patch
+
         from finance.services.welcome_pack import calculate_welcome_pack_cost_toman
         with patch('finance.services.welcome_pack.get_current_usd_to_toman_rate', return_value=None):
             cost = calculate_welcome_pack_cost_toman(self.pack, rate=None)

@@ -1,4 +1,5 @@
 from decimal import Decimal
+
 from django.test import TestCase
 from rest_framework.test import APIClient
 
@@ -227,8 +228,8 @@ class OperatingExpenseInputValidationTests(TestCase):
     """Input validation and boundary tests for OperatingExpense endpoints."""
 
     def setUp(self):
-        from finance.services.exchange_rates import set_rate
         from finance.models import OperatingExpenseCategory
+        from finance.services.exchange_rates import set_rate
         set_rate('USD', 'TOMAN', Decimal('100000'))
         self.category = OperatingExpenseCategory.objects.create(name='Val Test', slug='val-test')
         self.client = admin_client()
