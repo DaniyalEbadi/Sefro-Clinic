@@ -1,5 +1,7 @@
 from django.urls import include, path
 
+from face_analyzer.docs import FaceAnalyzerSchemaView, FaceAnalyzerSwaggerView
+
 from .docs import EnUsJSONSchemaView, SwaggerUIView
 
 
@@ -32,4 +34,9 @@ urlpatterns = [
     path('api/v2/schema/', SiteSchemaView.as_view(), name='v2-schema'),
     path('api/v2/docs/', SwaggerUIView.as_view(url_name='v2-schema'), name='v2-swagger-ui'),
     path('', include('Sefro_Clinic.api_v2')),
+
+    # Face AI Analyzer API v3
+    path('api/v3/schema/', FaceAnalyzerSchemaView.as_view(), name='v3-schema'),
+    path('api/v3/docs/', FaceAnalyzerSwaggerView.as_view(url_name='v3-schema'), name='v3-swagger-ui'),
+    path('api/v3/', include('face_analyzer.urls', namespace='face_analyzer')),
 ]

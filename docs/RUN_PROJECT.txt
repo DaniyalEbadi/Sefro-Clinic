@@ -20,6 +20,10 @@ Sefro Clinic - Run Guide
    or run this in PowerShell:
    Start-Process "http://127.0.0.1:8000/api/docs/"
 
+   Face AI Analyzer v3 docs (schema + Swagger):
+   http://127.0.0.1:8000/api/v3/docs/
+   http://127.0.0.1:8000/api/v3/schema/
+
 7) Default admin login:
    username: sefro_admin
    password: <the CLINIC_ADMIN_PASSWORD value from your .env>
@@ -32,6 +36,11 @@ Sefro Clinic - Run Guide
    - Passwords are hashed with Argon2id.
    - Typing a URL directly in PowerShell does not open the browser.
    - If you want to stop the server, press Ctrl+C in PowerShell.
+   - Face AI Analyzer v3 (/api/v3/face/): public image upload (JPEG/PNG/WebP,
+     max FACE_ANALYZER_MAX_IMAGE_MB, default 5) throttled by
+     FACE_ANALYZER_THROTTLE_RATE (default 5/min). History endpoints require auth.
+   - Skin-care tips provider: FACE_ANALYZER_TIPS_PROVIDER=rule_based (default).
+     LLM mode falls back to rules on any error.
 
 10) If you change models later, run:
     py manage.py makemigrations

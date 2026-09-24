@@ -1,6 +1,6 @@
 [run]
 branch = True
-source = accounts, customers, finance, inventory, logs, Sefro_Clinic, website
+source = accounts, customers, face_analyzer, finance, inventory, logs, Sefro_Clinic, website
 omit =
     */migrations/*
     Sefro_Clinic/spectacular_fix.py

@@ -75,7 +75,7 @@ jobs:
         run: python manage.py makemigrations --check --dry-run
 
       - name: Run full test suite with coverage
-        run: coverage run --branch --source=accounts,customers,finance,inventory,logs,Sefro_Clinic,website manage.py test --parallel 1 --noinput
+        run: coverage run --branch --source=accounts,customers,face_analyzer,finance,inventory,logs,Sefro_Clinic,website manage.py test --parallel 1 --noinput
 
       - name: Enforce coverage threshold
         run: coverage report --fail-under=80

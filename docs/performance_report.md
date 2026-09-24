@@ -1,41 +1,44 @@
 # Sefro Clinic — Performance Report
 
 **Phase:** `run`
-**Metrics collected:** 45
+**Metrics collected:** 48
 **Data directory:** `C:\Users\Dani\Desktop\Sefro_Clinic\tests\performance\reports\data\run`
 
 ## Endpoint Benchmarks
 
 | Endpoint | p50 (ms) | p95 (ms) | p99 (ms) | RPS | Errors |
 |----------|----------|----------|----------|-----|--------|
-| auth_login | 144.21 | 236.15 | 245.84 | - | - |
-| auth_me | 1.36 | 2.27 | 9.18 | 574.6 | 0.0 |
-| auth_refresh | 5.79 | 8.36 | 25.6 | - | - |
-| crud_customer_detail | 4.41 | 5.41 | 12.08 | 210.8 | 0.0 |
-| crud_customer_list | 12.54 | 17.64 | 21.9 | 73.2 | 0.0 |
-| crud_customer_search | 18.82 | 23.91 | 24.92 | 51.9 | 0.0 |
-| crud_payment_by_service | 104.52 | 283.72 | 288.56 | 8.3 | 0.0 |
-| crud_payment_list | 8.0 | 9.08 | 13.77 | 120.7 | 0.0 |
-| crud_service_list | 9.98 | 14.35 | 27.41 | 93.1 | 0.0 |
-| crud_visit_list | 16.61 | 24.8 | 34.44 | 55.6 | 0.0 |
-| dashboard | 10.05 | 14.87 | 16.7 | 100.7 | 0.0 |
-| finance_checkout | 15.21 | 36.05 | 36.05 | - | - |
-| finance_exchange_dollar | 3.25 | 4.16 | 10.34 | 265.9 | 0.0 |
-| finance_expense_list | 3.56 | 8.05 | 15.95 | 213.8 | 0.0 |
-| finance_financial_summary | 20.36 | 31.94 | 59.43 | 42.7 | 0.0 |
-| finance_wallet_list | 5.25 | 12.87 | 26.86 | 148.4 | 0.0 |
-| inventory_product_create | 9.34 | 13.34 | 20.88 | - | - |
-| inventory_product_detail | 4.47 | 5.54 | 10.52 | 214.2 | 0.0 |
-| inventory_product_list | 8.17 | 14.39 | 23.39 | 107.0 | 0.0 |
+| auth_login | 102.34 | 149.41 | 199.81 | - | - |
+| auth_me | 1.09 | 2.02 | 7.8 | 662.6 | 0.0 |
+| auth_refresh | 3.1 | 6.83 | 19.64 | - | - |
+| crud_customer_detail | 5.25 | 6.99 | 13.26 | 179.5 | 0.0 |
+| crud_customer_list | 11.95 | 19.96 | 28.04 | 72.9 | 0.0 |
+| crud_customer_search | 18.21 | 21.55 | 22.44 | 53.3 | 0.0 |
+| crud_payment_by_service | 88.9 | 244.29 | 302.31 | 9.3 | 0.0 |
+| crud_payment_list | 8.99 | 15.08 | 27.62 | 98.7 | 0.0 |
+| crud_service_list | 11.59 | 20.92 | 112.41 | 63.3 | 0.0 |
+| crud_visit_list | 15.5 | 25.39 | 28.52 | 59.2 | 0.0 |
+| dashboard | 8.16 | 13.75 | 14.17 | 109.5 | 0.0 |
+| finance_checkout | 14.82 | 36.95 | 36.95 | - | - |
+| finance_exchange_dollar | 3.67 | 4.31 | 11.3 | 243.1 | 0.0 |
+| finance_expense_list | 4.31 | 7.64 | 19.5 | 187.3 | 0.0 |
+| finance_financial_summary | 23.25 | 33.87 | 55.51 | 38.0 | 0.0 |
+| finance_operating_expense_category_list | 4.36 | 5.21 | 16.17 | 199.1 | 0.0 |
+| finance_operating_expense_list | 3.61 | 7.02 | 18.07 | 223.5 | 0.0 |
+| finance_operating_expense_summary | 7.52 | 8.64 | 14.48 | 124.2 | 0.0 |
+| finance_wallet_list | 5.01 | 14.09 | 18.16 | 160.6 | 0.0 |
+| inventory_product_create | 5.63 | 6.38 | 14.46 | - | - |
+| inventory_product_detail | 3.25 | 6.4 | 10.1 | 257.5 | 0.0 |
+| inventory_product_list | 6.09 | 9.59 | 140.13 | 91.4 | 0.0 |
 | inventory_product_list_size | - | - | - | - | - |
-| inventory_product_search | 7.94 | 10.14 | 17.23 | 115.5 | 0.0 |
-| reports_all | 81.56 | 130.29 | 130.29 | 10.5 | 0.0 |
-| reports_customers | 8.08 | 9.87 | 13.63 | 118.1 | 0.0 |
-| reports_daily | 5.74 | 7.3 | 13.09 | 158.9 | 0.0 |
-| reports_monthly | 24.64 | 30.88 | 31.93 | 38.4 | 0.0 |
-| reports_referral | 5.1 | 7.07 | 14.51 | 171.9 | 0.0 |
-| reports_summary | 71.95 | 83.5 | 84.33 | 13.5 | 0.0 |
-| reports_weekly | 12.73 | 13.46 | 20.52 | 78.7 | 0.0 |
+| inventory_product_search | 8.89 | 15.23 | 16.94 | 104.0 | 0.0 |
+| reports_all | 108.94 | 122.2 | 122.2 | 9.3 | 0.0 |
+| reports_customers | 10.81 | 16.64 | 16.72 | 85.8 | 0.0 |
+| reports_daily | 6.83 | 11.54 | 20.61 | 117.8 | 0.0 |
+| reports_monthly | 7.51 | 12.63 | 14.55 | 109.6 | 0.0 |
+| reports_referral | 4.77 | 9.18 | 18.04 | 168.8 | 0.0 |
+| reports_summary | 93.49 | 121.18 | 149.79 | 10.3 | 0.0 |
+| reports_weekly | 6.31 | 9.45 | 13.4 | 147.3 | 0.0 |
 
 ## Database Performance
 
@@ -43,20 +46,20 @@
 ```json
 {
   "n": 15,
-  "min_ms": 15.64,
-  "p50_ms": 19.92,
-  "p75_ms": 20.79,
-  "p90_ms": 22.69,
-  "p95_ms": 22.69,
-  "p99_ms": 27.49,
-  "max_ms": 27.49,
-  "mean_ms": 19.73,
+  "min_ms": 21.07,
+  "p50_ms": 59.34,
+  "p75_ms": 77.31,
+  "p90_ms": 118.14,
+  "p95_ms": 118.14,
+  "p99_ms": 156.0,
+  "max_ms": 156.0,
+  "mean_ms": 63.89,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 50.7,
+  "throughput_rps": 15.7,
   "avg_response_bytes": 11346,
   "max_response_bytes": 11346
 }
@@ -66,22 +69,22 @@
 ```json
 {
   "n": 10,
-  "min_ms": 8.96,
-  "p50_ms": 10.48,
-  "p75_ms": 12.39,
-  "p90_ms": 12.69,
-  "p95_ms": 17.03,
-  "p99_ms": 17.03,
-  "max_ms": 17.03,
-  "mean_ms": 11.22,
+  "min_ms": 9.95,
+  "p50_ms": 11.18,
+  "p75_ms": 12.71,
+  "p90_ms": 13.89,
+  "p95_ms": 16.36,
+  "p99_ms": 16.36,
+  "max_ms": 16.36,
+  "mean_ms": 11.81,
   "url": "/api/inventory/products/?search=\u0645\u062d\u0635\u0648\u0644",
   "method": "GET",
   "iterations": 10,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 89.1,
-  "avg_response_bytes": 5001,
-  "max_response_bytes": 5001
+  "throughput_rps": 84.6,
+  "avg_response_bytes": 5825,
+  "max_response_bytes": 5825
 }
 ```
 
@@ -89,22 +92,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 5.51,
-  "p50_ms": 6.56,
-  "p75_ms": 7.1,
-  "p90_ms": 8.1,
-  "p95_ms": 8.1,
-  "p99_ms": 13.49,
-  "max_ms": 13.49,
-  "mean_ms": 7.15,
+  "min_ms": 5.64,
+  "p50_ms": 6.22,
+  "p75_ms": 7.21,
+  "p90_ms": 11.53,
+  "p95_ms": 11.53,
+  "p99_ms": 13.01,
+  "max_ms": 13.01,
+  "mean_ms": 7.27,
   "url": "/api/inventory/products/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 139.8,
-  "avg_response_bytes": 4914,
-  "max_response_bytes": 4914
+  "throughput_rps": 137.6,
+  "avg_response_bytes": 5700,
+  "max_response_bytes": 5700
 }
 ```
 
@@ -112,22 +115,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 9.58,
-  "p50_ms": 11.64,
-  "p75_ms": 12.79,
-  "p90_ms": 14.08,
-  "p95_ms": 14.08,
-  "p99_ms": 26.48,
-  "max_ms": 26.48,
-  "mean_ms": 12.63,
+  "min_ms": 10.38,
+  "p50_ms": 14.43,
+  "p75_ms": 30.76,
+  "p90_ms": 45.03,
+  "p95_ms": 45.03,
+  "p99_ms": 67.7,
+  "max_ms": 67.7,
+  "mean_ms": 22.92,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 79.2,
-  "avg_response_bytes": 11282,
-  "max_response_bytes": 11282
+  "throughput_rps": 43.6,
+  "avg_response_bytes": 11273,
+  "max_response_bytes": 11273
 }
 ```
 
@@ -144,8 +147,8 @@
 - Workers: 4
 - Requests executed: 20
 - Error rate: 0.0
-- P95: 48.2 ms
-- Aggregate RPS: 67.3
+- P95: 48.1 ms
+- Aggregate RPS: 52.4
 
 ## Database Plan Analysis
 
@@ -175,7 +178,7 @@
     "p90_ms": 0.01,
     "p95_ms": 0.01,
     "p99_ms": 0.02,
-    "max_ms": 0.05,
+    "max_ms": 0.06,
     "mean_ms": 0.01
   },
   "get": {
@@ -186,7 +189,7 @@
     "p90_ms": 0.01,
     "p95_ms": 0.01,
     "p99_ms": 0.02,
-    "max_ms": 0.02,
+    "max_ms": 0.03,
     "mean_ms": 0.01
   }
 }
@@ -196,38 +199,41 @@
 ```json
 {
   "n": 20,
-  "min_ms": 0.07,
-  "p50_ms": 0.08,
-  "p75_ms": 0.09,
-  "p90_ms": 0.1,
-  "p95_ms": 0.11,
+  "min_ms": 0.06,
+  "p50_ms": 0.09,
+  "p75_ms": 0.1,
+  "p90_ms": 0.13,
+  "p95_ms": 0.14,
   "p99_ms": 0.15,
   "max_ms": 0.15,
-  "mean_ms": 0.08
+  "mean_ms": 0.09
 }
 ```
 
 ## Background Tasks
 
 - **background_probe**: {"celery_configured": false, "broker_configured": false, "finding": "NO Celery/broker in project. All work is synchronous in-request.", "recommendation": "For long-running report generation or bulk operations, consider adding Celery with Redis broker in production."}
-- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.009, "status": 401}, "/api/reports/": {"time_s": 0.001, "status": 401}, "/api/customers/": {"time_s": 0.002, "status": 401}}
+- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.007, "status": 401}, "/api/reports/": {"time_s": 0.001, "status": 401}, "/api/customers/": {"time_s": 0.001, "status": 401}}
 
 ## Response Sizes
 
 ```json
 {
-  "bytes": 4917
+  "bytes": 5620
 }
 ```
 ```json
 {
-  "/api/customers/": 11271,
-  "/api/visits/": 5463,
-  "/api/payments/": 4405,
-  "/api/services/": 5802,
-  "/api/inventory/products/": 4869,
-  "/api/dashboard/": 108,
-  "/api/reports/": 5743
+  "/api/customers/": 11298,
+  "/api/visits/": 5470,
+  "/api/payments/": 4412,
+  "/api/services/": 6207,
+  "/api/inventory/products/": 5666,
+  "/api/dashboard/": 109,
+  "/api/reports/": 5706,
+  "/api/finance/operating-expenses/": 52,
+  "/api/finance/operating-expenses/summary/": 173,
+  "/api/finance/operating-expense-categories/": 2060
 }
 ```
 

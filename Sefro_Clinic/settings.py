@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'accounts',
     'customers',
+    'face_analyzer',
     'inventory',
     'logs',
     'website',
@@ -123,6 +124,8 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 AUTH_USER_MODEL = 'accounts.ClinicUser'
 
@@ -162,6 +165,25 @@ JWT_AUTH_COOKIE_SAMESITE = 'Lax'
 # cannot read them from a parseable response. Prod default False.
 RETURN_TOKENS_IN_BODY = env_bool('DJANGO_RETURN_TOKENS_IN_BODY', 'False')
 
+# --- Face AI Analyzer (v3) ---------------------------------------------------
+# Provider: 'local' (MediaPipe pipeline) or 'external' (HTTP API).
+FACE_ANALYZER_MODEL_PROVIDER = os.environ.get('FACE_ANALYZER_MODEL_PROVIDER', 'local')
+FACE_ANALYZER_MODEL_PATH = os.environ.get('FACE_ANALYZER_MODEL_PATH', 'models/face_analyzer/')
+FACE_ANALYZER_EXTERNAL_API_URL = os.environ.get('FACE_ANALYZER_EXTERNAL_API_URL', '')
+FACE_ANALYZER_EXTERNAL_API_KEY = os.environ.get('FACE_ANALYZER_EXTERNAL_API_KEY', '')
+FACE_ANALYZER_MAX_IMAGE_MB = int(os.environ.get('FACE_ANALYZER_MAX_IMAGE_MB', '5') or 5)
+FACE_ANALYZER_ENABLE_HISTORY = env_bool('FACE_ANALYZER_ENABLE_HISTORY', 'True')
+# Live rate read by FaceAnalyzerThrottle; tests keep a high default so only
+# explicit @override_settings(FACE_ANALYZER_THROTTLE_RATE=...) throttles.
+FACE_ANALYZER_THROTTLE_RATE = os.environ.get(
+    'FACE_ANALYZER_THROTTLE_RATE', '100000/min' if TESTING else '5/min'
+)
+FACE_ANALYZER_TIPS_PROVIDER = os.environ.get('FACE_ANALYZER_TIPS_PROVIDER', 'rule_based')
+FACE_ANALYZER_LLM_PROVIDER = os.environ.get('FACE_ANALYZER_LLM_PROVIDER', 'openai')
+FACE_ANALYZER_LLM_API_KEY = os.environ.get('FACE_ANALYZER_LLM_API_KEY', '')
+FACE_ANALYZER_LLM_MODEL = os.environ.get('FACE_ANALYZER_LLM_MODEL', 'gpt-4o-mini')
+FACE_ANALYZER_LLM_TIMEOUT = int(os.environ.get('FACE_ANALYZER_LLM_TIMEOUT', '30') or 30)
+
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -185,6 +207,7 @@ REST_FRAMEWORK = {
         'contact': '100000/min' if TESTING else os.environ.get('THROTTLE_CONTACT_RATE', '5/min'),
         'anon': '100000/min' if TESTING else os.environ.get('THROTTLE_ANON_RATE', '60/min'),
         'user': '100000/min' if TESTING else os.environ.get('THROTTLE_USER_RATE', '600/min'),
+        'face_analyzer': FACE_ANALYZER_THROTTLE_RATE,
     },
 }
 
@@ -216,6 +239,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Expenses', 'description': 'Operational expense recording and approval.'},
         {'name': 'Operating Expenses', 'description': 'Direct clinic operating costs (هزینه‌های جاری), distinct from employee expense claims.'},
         {'name': 'Reports', 'description': 'Profit, revenue, and wallet reporting.'},
+        {'name': 'Face Analyzer', 'description': 'Public face analysis and staff analysis history.'},
     ],
     'SWAGGER_UI_DIST': 'SIDECAR',
     'SWAGGER_UI_FAVICON_HREF': 'SIDECAR',
