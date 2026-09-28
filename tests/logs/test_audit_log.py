@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 
 from customers.models import Customer, Service
 from logs.models import AuditLog
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, EMPLOYEE_PASSWORD, make_admin, make_employee
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, EMPLOYEE_PASSWORD, get_access_token, make_admin, make_employee
 
 
 class AuditLogTest(TestCase):
@@ -25,7 +25,7 @@ class AuditLogTest(TestCase):
             'username': username, 'password': password,
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.data["access"]}')
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(resp)}')
         return client
 
     def _employee_client(self):

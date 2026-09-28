@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, get_refresh_token, make_admin
 
 
 class AccountsE2ETest(TestCase):
@@ -28,16 +28,20 @@ class AccountsE2ETest(TestCase):
 
     def test_01_token_obtain_and_refresh_and_logout(self):
         resp = self._login_as_admin()
-        self.assertIn('access', resp.data)
-        self.assertIn('refresh', resp.data)
+        # Tokens may travel in the body or as HTTP-only cookies depending on
+        # RETURN_TOKENS_IN_BODY, so read them mode-agnostically.
+        access = get_access_token(resp)
+        refresh = get_refresh_token(resp)
+        self.assertTrue(access)
+        self.assertTrue(refresh)
         self.assertIn('access_token', resp.cookies)
         self.assertIn('refresh_token', resp.cookies)
 
         refresh_resp = self.client.post(reverse('accounts:token-refresh'), {
-            'refresh': resp.data['refresh'],
+            'refresh': refresh,
         }, format='json')
         self.assertEqual(refresh_resp.status_code, status.HTTP_200_OK)
-        self.assertIn('access', refresh_resp.data)
+        self.assertTrue(get_access_token(refresh_resp))
 
         logout_resp = self.client.post(reverse('accounts:logout'), format='json')
         self.assertEqual(logout_resp.status_code, status.HTTP_200_OK)

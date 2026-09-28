@@ -54,15 +54,36 @@ def make_employee(username='emp_user', password=EMPLOYEE_PASSWORD):
     return user
 
 
+def get_access_token(response):
+    """Access token from the JSON body or the auth cookie.
+
+    `RETURN_TOKENS_IN_BODY` decides the transport: dev/CI may return tokens in
+    the body while production (and CI without .env) ships them as HTTP-only
+    cookies only. Tests must accept either so they pass in both modes.
+    """
+    token = getattr(response, 'data', {}).get('access') or None
+    if not token:
+        cookie = response.cookies.get('access_token')
+        token = cookie.value if cookie else None
+    return token
+
+
+def get_refresh_token(response):
+    """Refresh token from the JSON body or the auth cookie (see get_access_token)."""
+    token = getattr(response, 'data', {}).get('refresh') or None
+    if not token:
+        cookie = response.cookies.get('refresh_token')
+        token = cookie.value if cookie else None
+    return token
+
+
 def login(client, username, password):
     response = client.post('/api/auth/token/', {
         'username': username,
         'password': password,
     }, format='json')
     assert response.status_code == 200, f'login failed for {username}: {response.status_code} {response.data}'
-    access = response.data.get('access')
-    if not access and 'access_token' in response.cookies:
-        access = response.cookies['access_token'].value
+    access = get_access_token(response)
     assert access, f'no access token in response for {username}: data={response.data} cookies={list(response.cookies.keys())}'
     client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
     return response

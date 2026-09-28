@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from accounts.models import ClinicUser
 from customers.models import Customer, Service, Visit
 from Sefro_Clinic.fields import greg_to_shamsi_dt
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, make_admin
 
 
 class VisitUnrestrictedTimeTest(TestCase):
@@ -41,7 +41,7 @@ class VisitUnrestrictedTimeTest(TestCase):
             'username': username, 'password': password,
         }, format='json')
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        client.credentials(HTTP_AUTHORIZATION=f'Bearer {resp.data["access"]}')
+        client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(resp)}')
         return client
 
     def _employee_client(self):

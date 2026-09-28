@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from accounts.models import ClinicUser
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, make_admin
 
 
 class EmployeeAPIViewTest(TestCase):
@@ -14,7 +14,7 @@ class EmployeeAPIViewTest(TestCase):
         login_resp = self.client.post(reverse('accounts:token-obtain-pair'), {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(login_resp)}')
 
     def test_non_admin_cannot_create_employee(self):
         self.client.credentials()
@@ -24,7 +24,7 @@ class EmployeeAPIViewTest(TestCase):
         login_resp = self.client.post(reverse('accounts:token-obtain-pair'), {
             'username': 'emp', 'password': 'pass123',
         }, format='json')
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(login_resp)}')
 
         resp = self.client.post(reverse('accounts:employee-create'), {
             'username': 'emp2', 'password': 'Test1234',

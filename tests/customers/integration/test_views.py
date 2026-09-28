@@ -3,7 +3,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from customers.models import Customer
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, make_admin
 
 
 class CustomerSearchTest(TestCase):
@@ -13,7 +13,7 @@ class CustomerSearchTest(TestCase):
         login_resp = self.client.post('/api/auth/token/', {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login_resp.data["access"]}')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(login_resp)}')
 
         Customer.objects.create(
             first_name='John', last_name='Doe',

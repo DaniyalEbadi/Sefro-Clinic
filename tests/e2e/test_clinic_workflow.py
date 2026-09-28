@@ -67,7 +67,7 @@ class FullClinicWorkflowE2ETests(TestCase):
     def test_logout_blacklists_refresh_token(self):
         from rest_framework.test import APIClient
 
-        from tests.helpers import make_admin
+        from tests.helpers import get_refresh_token, make_admin
 
         make_admin()
         client = APIClient()
@@ -75,7 +75,8 @@ class FullClinicWorkflowE2ETests(TestCase):
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
         self.assertEqual(login_resp.status_code, 200)
-        refresh_token = login_resp.data['refresh']
+        refresh_token = get_refresh_token(login_resp)
+        self.assertTrue(refresh_token)
 
         refresh_resp = client.post('/api/auth/token/refresh/', {
             'refresh': refresh_token,

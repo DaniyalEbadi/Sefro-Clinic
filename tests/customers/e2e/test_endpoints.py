@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from customers.models import Customer, Service, Visit
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, make_admin
 
 
 class CustomersE2ETest(TestCase):
@@ -14,7 +14,7 @@ class CustomersE2ETest(TestCase):
         login_resp = self.client.post('/api/auth/token/', {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        self.token = login_resp.data['access']
+        self.token = get_access_token(login_resp)
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.token}')
 
         self.service = Service.objects.create(name='Consultation', description='General check')

@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from customers.models import Customer, Payment, Service, Visit
-from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, make_admin
+from tests.helpers import ADMIN_PASSWORD, ADMIN_USERNAME, get_access_token, make_admin
 
 
 def _aware(year, month, day, hour=10, minute=0):
@@ -26,7 +26,7 @@ class VisitPaymentLinkTest(TestCase):
         login = self.client.post('/api/auth/token/', {
             'username': ADMIN_USERNAME, 'password': ADMIN_PASSWORD,
         }, format='json')
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {login.data["access"]}')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {get_access_token(login)}')
 
         self.customer = Customer.objects.create(
             first_name='Sara', last_name='Ahmadi',
