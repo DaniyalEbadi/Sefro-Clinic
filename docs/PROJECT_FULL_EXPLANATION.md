@@ -41,15 +41,25 @@ a clinic:
   historical cost snapshots
 - **Exchange rates** — USD→Toman rate management with DB cache, optional external provider
   (Tindex) and backup provider (BrsApi.ir)
+- **Welcome packs** — product gift bundles issued to customers with immutable cost snapshots
+- **Operating expenses** — direct clinic running costs (rent, supplies, …), a separate domain
+  from the employee expense-claim pipeline
+- **Face AI Analyzer** — public face-photo analysis (aesthetic scores, attributes, beauty
+  suggestions, regenerable skin-care plan) + staff analysis history
 - **Public website API (v2)** — read-only catalog + contact intake for the clinic's public site
 - **Audit trail** — automatic create/update/delete logging of every model change
 
-There are **two parallel API surfaces**:
+There are **three parallel API surfaces**:
 
 | Surface | Base path | Purpose | Docs |
 |---|---|---|---|
 | **Dashboard API (v1 "legacy")** | `/api/` | The internal clinic management dashboard (the main frontend consumes this) | `/api/docs/` |
 | **Site API (v2)** | `/api/v2/` | Public website (barancliniccenter.com): catalog, team, testimonials, contact | `/api/v2/docs/` |
+| **Face AI Analyzer API (v3)** | `/api/v3/` | Public face analysis + skin-care plans; staff analysis history | `/api/v3/docs/` |
+
+> The Django admin site is **not installed and not routed** (`django.contrib.admin` is absent
+> from `INSTALLED_APPS`, no `admin/` URL exists — a security test asserts `/admin/` → 404).
+> Everything is operated through the three API surfaces above.
 
 ---
 
@@ -61,10 +71,11 @@ There are **two parallel API surfaces**:
 |---|---|
 | Framework | Django 5.2, Django REST Framework ≥3.16 |
 | Auth | `djangorestframework-simplejwt` (JWT in **HttpOnly cookies**, refresh rotation + blacklist) |
-| API docs | `drf-spectacular` + sidecar (Swagger UI at `/api/docs/` and `/api/v2/docs/`) |
+| API docs | `drf-spectacular` + sidecar (Swagger UI at `/api/docs/`, `/api/v2/docs/`, `/api/v3/docs/`) |
 | Database | PostgreSQL 16 (via `psycopg2-binary`); `db.sqlite3` exists only as a local artifact |
 | Password hashing | **Argon2id** (primary), PBKDF2 fallbacks |
 | Calendar | `jdatetime` — the business runs on the **Shamsi (Jalali/Persian) calendar** |
+| Face AI | MediaPipe local pipeline (default) or an external HTTP analyzer; skin-care tips rule-based (default) or LLM (OpenAI/Anthropic) |
 | Server | gunicorn + whitenoise; Docker + docker-compose |
 | Time zone / locale | `Asia/Tehran`, `fa-ir`, `USE_TZ=True` |
 
@@ -74,18 +85,22 @@ There are **two parallel API surfaces**:
 Sefro_Clinic/
 ├── Sefro_Clinic/          # Project package (settings, root URLs, shared utils)
 │   ├── settings.py        # All configuration (env-driven; refuses to boot without secrets)
-│   ├── urls.py            # Root URLConf → mounts api_legacy + api_v2 + 2 schema/doc pairs
+│   ├── urls.py            # Root URLConf → mounts api_legacy + api_v2 + face_analyzer (v3) + 3 schema/doc pairs
 │   ├── api_legacy.py      # /api/ → accounts + customers + inventory + finance + logs
 │   ├── api_v2.py          # /api/v2/ → public website API (website app)
+│   ├── api_v3.py          # OpenAPI urlconf for /api/v3/ (face_analyzer) — docs only
 │   ├── docs.py            # Schema/Swagger views gated by DocsAccessPermission
 │   ├── fields.py          # ShamsiDateField / ShamsiDateTimeField serializer fields
 │   └── validators.py      # TEXT_SANITIZERS (NUL-byte + Unicode-surrogate rejection)
 ├── accounts/              # ClinicUser, auth endpoints, permissions, bootstrap admin
 ├── customers/             # Customer, ServiceCategory, Service, Visit, Payment + legacy reports
 ├── finance/               # Sale/PaymentComponent, Wallet ledger, Expenses, Packages,
-│   │                      #   ExchangeRate, StaffCompensation, ProductUsage/Purchase/CostHistory
+│   │                      #   WelcomePacks, OperatingExpenses, ExchangeRate,
+│   │                      #   StaffCompensation, ProductUsage/Purchase/CostHistory
 │   └── services/          # Business-logic layer (checkout, wallet, accounting, reporting, ...)
 ├── inventory/             # Product catalog + stock count
+├── face_analyzer/         # Face AI Analyzer (API v3): models, MediaPipe/external backends,
+│   │                      #   skin-care plan generators (rule-based or LLM)
 ├── logs/                  # AuditLog model, signals, thread-local user middleware
 ├── website/               # Public site models (SiteService, SitePackage, TeamMember, ...)
 ├── tests/                 # unit / integration / e2e / security / performance suites
@@ -102,6 +117,7 @@ accounts  ──────────────► (auth, roles, permission
 customers ──────────────► accounts (staff FK on Visit)
 inventory ──────────────► (standalone Product)
 finance   ──────────────► customers + inventory + accounts
+face_analyzer ──────────► accounts (user FK) + customers (Service FK on tips)
 logs      ──────────────► accounts (user FK, CookieJWTAuthentication)
 website   ──────────────► (standalone, public site)
 ```
@@ -133,6 +149,12 @@ Copy `.env.example` → `.env`. Key variables:
 | `EXCHANGE_RATE_PROVIDER` | `database` | `database` = DB cache only; `external` = HTTP fetch (Tindex) + DB cache |
 | `EXCHANGE_RATE_API_URL/API_KEY/TIMEOUT/CACHE_TTL` | Tindex URL / — / 5s / 3600s | Primary external provider config |
 | `EXCHANGE_RATE_BACKUP_API_URL/API_KEY` | BrsApi URL / — | Backup provider (BrsApi.ir) |
+| `FACE_ANALYZER_MODEL_PROVIDER` | `local` | `local` = MediaPipe pipeline; `external` = HTTP analyzer (`FACE_ANALYZER_EXTERNAL_API_URL` + `_API_KEY`) |
+| `FACE_ANALYZER_MAX_IMAGE_MB` | `5` | Upload size cap for `POST /api/v3/face/analyze/` (JPEG/PNG/WebP, magic-byte + Pillow verified) |
+| `FACE_ANALYZER_ENABLE_HISTORY` | `True` | When `False`, the v3 history endpoints return 404 |
+| `FACE_ANALYZER_THROTTLE_RATE` | `5/min` (prod), `100000/min` (tests) | Scoped `face_analyzer` throttle on analyze + tips |
+| `FACE_ANALYZER_TIPS_PROVIDER` | `rule_based` | `rule_based` or `llm` skin-care plan generator |
+| `FACE_ANALYZER_LLM_PROVIDER/LLM_API_KEY/LLM_MODEL/LLM_TIMEOUT` | `openai` / — / `gpt-4o-mini` / `30` | LLM tips settings; any failure falls back to the rule engine |
 
 
 ---
@@ -190,7 +212,9 @@ Defined in `accounts/permissions.py` + `finance/permissions.py`:
 ### 4.4 Other security controls (all verified in code)
 
 - **Throttling:** scoped `auth` rate on login/refresh (default 10/min/IP) against brute force;
-  `contact` scope (5/min) on the public contact form; global anon 60/min and user 600/min.
+  `contact` scope (5/min) on the public contact form; `face_analyzer` scope (5/min) on
+  `POST /api/v3/face/analyze/` and `POST /api/v3/face/{id}/tips/`; global anon 60/min and
+  user 600/min.
 - **Input sanitization:** every free-text model field uses `TEXT_SANITIZERS` = NUL-byte
   prohibition + Unicode surrogate rejection.
 - **Docs gating:** `/api/docs/` and `/api/v2/docs/` require login unless `DJANGO_DOCS_PUBLIC=True`.
@@ -269,8 +293,15 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 | **`PaymentComponent`** | Split payment line of a Sale: `method` (`cash`/`card`/`wallet`), `amount_usd`, optional `wallet_transaction` link |
 | **`ExpenseCategory`** / **`Expense`** | Expense with approval pipeline: `status` (`draft`→`submitted`→`approved`/`rejected`→`paid`, or `cancelled`), `created_by`, `approved_by`, `amount_usd`/`amount_toman` snapshot, `receipt` file |
 | **`ProductPurchase`** | Restock record; updates `Product.cost_usd` + `count` and closes/opens cost-history range |
+| **`PurchaseOrder`** | **Buying products (purchase order) workflow**: `supplier`, `status` (`draft`→`ordered`→`received` / `cancelled`), `order_date` (Gregorian, defaults to today), `received_date`, `notes`, `created_by`, `total_cost_usd`, `exchange_rate_snapshot` + `total_cost_toman` (written **only on receive**), `idempotency_key` (unique). Indexes on `status+order_date`, `supplier`. Draft/ordered rows are pure paperwork — no stock, cost or ledger effect |
+| **`PurchaseOrderItem`** | Product line of an order (`order` CASCADE `items`, `product` **PROTECT** `purchase_order_items`): `quantity` (> 0, ≤ 3 decimals), `unit_cost_usd`, computed `total_cost_usd`, receive-time `unit_cost_toman`/`total_cost_toman` snapshots. Unique per order+product (duplicate lines are also rejected in the service layer) |
 | **`StaffCompensationRule`** | Per-role commission config (unique `role`): `calculation_type` (`percent_profit`/`fixed_per_session`/`monthly_salary`), `payout_type` (`cash`/`product`/`hybrid`), percent/fixed amounts, transport allowance, commission product+qty |
 | **`StaffPayout`** | Generated per (visit, staff, service) — **unique constraint**; snapshots revenue/cost/profit in USD+Toman, cash and/or product payout, `status` (`pending`/`approved`/`paid`/`cancelled`), `payout_mode`, approval fields |
+| **`WelcomePack`** | Named gift-bundle definition: `name` (unique), `description`, `is_active`, `created_by`. Creating it has **no** financial effect |
+| **`WelcomePackItem`** | Product line inside a pack (`welcome_pack` + `product` unique, `quantity` > 0) |
+| **`WelcomePackUsage`** | The financial event: pack issued to a `customer` (optional `visit`, `issued_by`); snapshots `total_cost_usd_snapshot`, `exchange_rate_snapshot`, `total_cost_toman_snapshot` at issue time. `PROTECT` on pack/customer; immutable, read-only API |
+| **`OperatingExpenseCategory`** | Categories for **direct clinic operating costs** (هزینه‌های جاری): `name` (unique), `slug` (unique), `description`, `is_active`, `sort_order`. Seeded by migration; delete blocked while expenses exist |
+| **`OperatingExpense`** | Direct clinic spend paid with clinic money: `category` (PROTECT), `title`, `amount_usd` (≥ 0), `exchange_rate`/`amount_toman` snapshots, `expense_date` (**Gregorian**), `payment_method` (`cash`/`card`/`bank_transfer`/`other`), `vendor`, `receipt`, `notes`, `created_by`, **`idempotency_key` (unique)**. Never touches Wallet/Sale/PaymentComponent |
 
 ### 5.5 logs — `AuditLog`
 
@@ -288,6 +319,14 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 | **`TeamMember`** / **`Testimonial`** | Specialists and customer testimonials |
 | **`ContactMessage`** | Public consultation intake: `full_name`, `phone` (Iranian mobile `^09\d{9}$`), `message`, `is_handled` |
 
+### 5.7 face_analyzer app (Face AI API v3)
+
+| Model | Purpose |
+|---|---|
+| **`FaceAnalysis`** | Immutable record of one run: nullable `user` FK (SET_NULL; anonymous uploads are allowed and unowned), `image` (uploaded to `face_analyses/%Y/%m/`), five 0–10 scores (`overall_score`, `symmetry_score`, `skin_clarity_score`, `youthfulness_score`, `harmony_score`), `detected_attributes` (JSON), `suggestions` (JSON list), `raw_model_output` (JSON), `provider` (`local`/`external`), `model_version`, Shamsi `created_at`. Indexed on `(user, -created_at)` and `created_at` |
+| **`SkinCarePlan`** | One-to-one per analysis (`related_name=skin_plan`): `summary`, `skin_type` (`oily`/`dry`/`combination`/`normal`), `primary_concerns` (JSON), `recommended_frequency`, `provider` (`rule_based`/`llm`), `model_used`, `created_at` (`auto_now` so regeneration refreshes the timestamp) |
+| **`SkinCareTip`** | Actionable tip rows on a plan: `period` (`morning`/`evening`/`weekly`/`lifestyle`/`professional`), `sort_order`, `title`, `description`, `priority` (`low`/`medium`/`high`), `category` (cleanser, toner, serum, moisturizer, sunscreen, exfoliant, mask, eye_care, treatment, lifestyle, diet, in_clinic), `key_ingredients`/`avoid_ingredients` (JSON), `related_service_slug` + optional `related_service` FK→`customers.Service` (SET_NULL) linking the tip to a sellable clinic service |
+
 
 ---
 
@@ -295,7 +334,9 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 
 Conventions: all list endpoints are paginated (20/page, `?page=`). Unless noted, auth = JWT
 cookie (`access_token`) or `Authorization: Bearer <token>`. **All dates accepted/returned by the
-dashboard API are Shamsi (Jalali) strings** unless marked *Gregorian*.
+dashboard API are Shamsi (Jalali) strings** unless marked *Gregorian*. Router-managed routes also
+accept DRF **format suffixes** (`/api/customers/1.json`, …). Every path below was verified
+against a live dump of the Django URL resolver.
 
 ### 6.1 API documentation & schema
 
@@ -305,6 +346,8 @@ dashboard API are Shamsi (Jalali) strings** unless marked *Gregorian*.
 | GET | `/api/docs/` | same | Swagger UI for the dashboard API |
 | GET | `/api/v2/schema/` | same | OpenAPI 3 JSON for the site API |
 | GET | `/api/v2/docs/` | same | Swagger UI for the site API |
+| GET | `/api/v3/schema/` | same | OpenAPI 3 JSON for the Face AI Analyzer API |
+| GET | `/api/v3/docs/` | same | Swagger UI for the Face AI Analyzer API |
 
 ### 6.2 Authentication & employees — `/api/auth/`
 
@@ -400,7 +443,8 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 | POST | `/api/finance/wallets/{id}/adjust/` | **admin** | Manual wallet adjustment `{amount_usd, direction: credit\|debit, transaction_type: manual_credit\|manual_debit\|adjustment, description?}` |
 
 **Finance reports** (all staff; `start_date`/`end_date` are **Gregorian** `YYYY-MM-DD`; `period`
-shortcut: `today`, `this_week`, `this_month`, `prev_month`):
+shortcut: `today`, `this_week`, `this_month`, `prev_month`, `this_year`; falls back to *today*
+when no usable range is supplied):
 
 | Method | Path | Description |
 |---|---|---|
@@ -411,6 +455,8 @@ shortcut: `today`, `this_week`, `this_month`, `prev_month`):
 | GET | `/api/finance/reports/wallet-summary/` | Wallet liability, rewards issued/reversed, wallet payments/refunds |
 | GET | `/api/finance/reports/staff-payout-summary/` | Payout totals; filters `staff`, `role` |
 | GET | `/api/finance/reports/dashboard/` | The finance dashboard: sales summary, expenses, net profit, payout totals, wallet summary, operational metrics (completed visits, new customers, avg ticket), payment-method breakdown |
+| GET | `/api/finance/reports/welcome-packs/` | Welcome-pack issuance & cost summary: `total_usage_count`, `total_packs_issued`, `total_cost_usd/toman`, `by_pack[]` |
+| GET | `/api/finance/reports/product-purchases/` | **Received purchase orders** (buying products): `order_count`, `line_count`, `total_quantity`, `total_cost_usd/toman`, `by_product[]`, `by_supplier[]`. Filters `product`, `supplier`, plus the standard `start_date`/`end_date`/`period` range (applied to `received_date`) |
 
 
 **Finance CRUD viewsets** (all under `/api/finance/`)
@@ -430,9 +476,21 @@ shortcut: `today`, `this_week`, `this_month`, `prev_month`):
 | `sales/` | read-only + `refund` | staff | Filters: `?customer=`, `?status=`, `?package=` |
 | `expense-categories/` | CRUD | read: staff / write: **admin** | |
 | `expenses/` | CRUD + workflow | staff | **Employees only see their own expenses**; create ⇒ `draft`. Actions below |
-| `product-purchases/` | CRUD | read: staff / write: **admin** | Creating a purchase updates `Product.cost_usd` + `count` and rolls `ProductCostHistory` |
+| `product-purchases/` | CRUD | read: staff / write: **admin** | **Legacy one-shot restock**: creating a purchase updates `Product.cost_usd` + `count` and rolls `ProductCostHistory` immediately. Prefer `purchase-orders/` for a staged workflow |
+| `purchase-orders/` | CRUD + workflow | read: staff / write: **admin** | **Buying products with approval-style flow** (see §8.10). Nested writable `items[]` (`product`, `quantity`, `unit_cost_usd`); server computes `total_cost_usd`, converts `total_cost_toman` live while open and switches to stored snapshots once `received`. Filters `?status= ?supplier= ?product= ?date_from= ?date_to=` (Gregorian), search `supplier,notes,items__product__name`, `POST` idempotent via `idempotency_key`. **Delete blocked (400) once received** |
 | `staff-compensation-rules/` | CRUD | **admin only** | Commission rules per role |
 | `staff-payouts/` | read-only | staff | Filters `?staff= ?role= ?status= ?visit=`; plus `GET staff-payouts/summary/` and `GET staff-payouts/detail_report/` |
+| `operating-expense-categories/` | CRUD | staff (admin **and** employee) | Direct operating-cost categories; search `name,slug,description`; ordering `name,slug,sort_order,is_active`; **delete blocked (400)** while expenses reference the category |
+| `operating-expenses/` | CRUD + `summary` | staff (admin **and** employee) | Direct clinic spend; filters `?category= ?payment_method= ?created_by= ?date_from= ?date_to=` (Gregorian); search `title,description,vendor,notes,category__name`; `POST` is idempotent via `idempotency_key`; `GET …/summary/` for period totals |
+| `welcome-packs/` | CRUD + `issue` | staff (admin **and** employee) | Pack definitions (`?is_active=true\|false`, search `name,description`); nested `items` accepted on create/update; `POST /api/finance/welcome-packs/{id}/issue/` = the financial event (see below) |
+| `welcome-pack-items/` | CRUD | staff | Granular pack→product lines (unique per pack+product, qty > 0) |
+| `welcome-pack-usages/` | read-only | staff | Immutable issuance history; filters `?welcome_pack= ?customer= ?visit= ?date_from= ?date_to=` (Gregorian), search pack/customer name |
+
+**Welcome-pack issuance action**
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/finance/welcome-packs/{id}/issue/` | staff | Issue a pack: `{customer, quantity?=1, visit?}`. Validates customer/visit existence and that the visit belongs to that customer; creates a `WelcomePackUsage` with USD/rate/Toman cost snapshots → **201** |
 
 **Expense workflow actions** (on `/api/finance/expenses/{id}/`):
 
@@ -444,14 +502,41 @@ shortcut: `today`, `this_week`, `this_month`, `prev_month`):
 | `POST …/pay/` | **admin** | `approved → paid` |
 | `POST …/cancel/` | owner or admin | any non-paid state → `cancelled` |
 
-### 6.10 Audit logs — `/api/logs/`
+**Purchase-order lifecycle actions** (on `/api/finance/purchase-orders/{id}/`, **admin only**;
+everything else on the resource follows read: staff / write: admin):
+
+| Action | Auth | Transition & effect |
+|---|---|---|
+| `POST …/mark-ordered/` | **admin** | `draft → ordered`. Still pure paperwork: no stock, cost or Toman snapshot |
+| `POST …/receive/` | **admin** | `draft/ordered → received`. **The only step that moves money**: locks each product, sets `Product.cost_usd`, increments `count`, closes/opens `ProductCostHistory`, then writes `exchange_rate_snapshot` + per-line and order-level Toman totals |
+| `POST …/cancel/` | **admin** | any state except `received → cancelled` (a received order is immutable — it already changed stock) |
+
+### 6.10 Face AI Analyzer — `/api/v3/` (`face_analyzer` app)
+
+Own URLConf (`Sefro_Clinic/api_v3.py`) with its own Swagger/schema. Analysis is **public**;
+history is staff-only and scoped to the caller.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| POST | `/api/v3/face/analyze/` | **public**, throttled (`face_analyzer`, 5/min) | `multipart/form-data` with `image` (JPEG/PNG/WebP; ≤ `FACE_ANALYZER_MAX_IMAGE_MB`, MIME + magic-byte + Pillow verified). Runs the analyzer (`local` MediaPipe or `external` HTTP), persists a `FaceAnalysis` + generated `SkinCarePlan`/`SkinCareTip`s and returns `{id, overall_score, symmetry_score, skin_clarity_score, youthfulness_score, harmony_score, detected_attributes, suggestions, skin_plan, created_at (Shamsi), provider, model_version}`. Logged-in staff callers get the analysis linked to their user. Errors: **400** invalid/too-large image, no face detected, analysis failed; **429** throttled |
+| POST | `/api/v3/face/{pk}/tips/` | **public**, throttled (`face_analyzer`, 5/min) | Regenerate the skin-care plan for an existing analysis → `SkinCarePlanSerializer` (`summary`, `skin_type`, `primary_concerns`, `recommended_frequency`, `provider`, `model_used`, plus `morning/evening/weekly/lifestyle/professional` tip arrays). **404** if the analysis does not exist |
+| GET | `/api/v3/face/history/` | Any staff | Paginated (20/page) list of the caller's own analyses (`id`, five scores, `created_at` Shamsi, `skin_plan {summary, skin_type}`). Admin-role users see **all** analyses; other staff see only their own. **404** when `FACE_ANALYZER_ENABLE_HISTORY=False`. Anonymous rows are nobody's history (they never appear for employees) |
+| GET | `/api/v3/face/history/{pk}/` | Any staff | Full detail (`FaceAnalysisResponseSerializer`, same shape as analyze). **404** for records owned by another non-admin user (queryset-scoped); admin role may read any |
+
+Notes: there is **no** create/update/delete API for analyses or tips — the only write path is
+`analyze`. `tips` regeneration runs `generate_and_store_plan()` atomically: it **upserts** the
+one-to-one plan and **replaces** all its tips (delete + bulk-create), resolving each tip's
+`related_service_slug` to a live `customers.Service`. `FaceAnalysis` rows own their plan and
+tips, which cascade if an analysis is deleted (ORM/shell only).
+
+### 6.11 Audit logs — `/api/logs/`
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/logs/` | **admin** | Audit trail; `?search=` across `model_name, action, object_repr, user__username`; `?ordering=timestamp` |
 | GET | `/api/logs/{id}/` | **admin** | Single entry |
 
-### 6.11 Site API v2 — `/api/v2/` (public website)
+### 6.12 Site API v2 — `/api/v2/` (public website)
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -465,7 +550,8 @@ shortcut: `today`, `this_week`, `this_month`, `prev_month`):
 | POST | `/api/v2/contact/` | **public**, throttled (`contact` scope, 5/min) | Consultation intake `{full_name, phone (Iranian mobile 09xxxxxxxxx), message}` |
 
 > DRF `DefaultRouter` also exposes API-root index views at `/api/`, `/api/finance/`,
-> `/api/inventory/`, and `/api/v2/`.
+> `/api/inventory/`, and `/api/v2/`. There is **no** root index under `/api/v3/`
+> (plain `path()` routes only).
 
 
 ---
@@ -503,6 +589,9 @@ Admin: POST /api/finance/exchange-rates/             → current USD→Toman rat
 Admin: POST /api/finance/reward-rules/               → wallet cashback rule (e.g. 5% over $50)
 Admin: POST /api/finance/staff-compensation-rules/   → per-role commission config
 Admin: POST /api/finance/expense-categories/         → rent, supplies, ...
+Admin: POST /api/finance/operating-expense-categories/ → direct running-cost categories
+                                                        (seeded by migration, extendable)
+Any staff: POST /api/finance/welcome-packs/ (+ welcome-pack-items/) → gift bundles
 ```
 
 ### Phase 3 — Customer registration (Employee or Admin)
@@ -570,9 +659,16 @@ across cash/card/wallet. Wallet rewards are credited automatically.
 
 - **Refund:** `POST /api/finance/sales/{id}/refund/` (full or partial, once per sale).
 - **Wallet top-up/deduction:** `POST /api/finance/wallets/{id}/adjust/` (admin).
-- **Expenses:** employees submit, admin approves/pays (§8.4).
-- **Payouts:** admin reviews generated `StaffPayout` rows (API is read-only; status changes
-  happen via the Django admin panel) and reports via `staff-payouts/summary/`.
+- **Welcome pack:** `POST /api/finance/welcome-packs/{id}/issue/` → immutable cost snapshot
+  (`WelcomePackUsage`); reported by `/api/finance/reports/welcome-packs/` and the dashboard.
+- **Expenses:** employees submit, admin approves/pays (§8.4). Direct clinic running costs go
+  through `/api/finance/operating-expenses/` instead (no approval workflow, any staff).
+- **Payouts:** admin reviews generated `StaffPayout` rows and reports via
+  `staff-payouts/summary/`. The API is **read-only** and there is no Django admin site, so
+  `pending → approved → paid` transitions must be done through the ORM/shell (or a future
+  endpoint) — see §12.
+- **Face analysis:** staff can run `POST /api/v3/face/analyze/` during a consultation and
+  revisit their own records under `/api/v3/face/history/`.
 - **Reporting:** legacy Shamsi reports under `/api/reports/*` and finance (Gregorian) reports
   under `/api/finance/reports/*`.
 
@@ -583,7 +679,10 @@ Visitor: GET /api/v2/services/ (?category=face)  → browses catalog
          GET /api/v2/packages/                    → sees bundles & discounts
          GET /api/v2/products/  /team/  /testimonials/
          POST /api/v2/contact/ {full_name, phone 09xxxxxxxxx, message}  → consultation request
-Staff:   reads ContactMessage rows via the Django admin (no API exposure) and calls back
+         POST /api/v3/face/analyze/ (multipart image)  → scores + skin-care plan (5/min)
+         POST /api/v3/face/{id}/tips/                  → regenerate the plan
+Staff:   reads ContactMessage rows through the ORM/shell (no list API, no admin site mounted)
+         and calls back; browses own analyses at GET /api/v3/face/history/
 ```
 
 
@@ -653,8 +752,8 @@ scoped to their own expenses; admins see all. Only `approved`/`paid` expenses co
   or `fixed_per_session` (USD or Toman), plus transport allowance; `product`/`hybrid` rules add
   a product payout whose value is snapshotted and whose stock is decremented as commission usage.
 - `StaffPayout` rows are idempotent per (visit, staff, service). Lifecycle
-  `pending → approved → paid` (or `cancelled`) is managed via the Django admin panel; the API
-  exposes read/report endpoints only.
+  `pending → approved → paid` (or `cancelled`) has **no API and no admin site** — the API
+  exposes read/report endpoints only, so status changes are made through the ORM/shell.
 - Reports: `staff_payout_summary()` (totals per period/staff/role) and `staff_payout_detail()`
   (per-payout rows).
 
@@ -663,6 +762,11 @@ scoped to their own expenses; admins see all. Only `approved`/`paid` expenses co
 - `record_product_purchase()` — atomic: creates `ProductPurchase`, sets `Product.cost_usd` to
   the new unit cost, increments `Product.count`, closes the open `ProductCostHistory` range and
   opens a new one effective from the purchase date.
+- `apply_purchase_receipt(product, quantity, unit_cost_usd, purchase_date)` — the shared,
+  lock-protected core of that mutation (lock product → set cost → increment count → roll
+  cost history). Used by **both** the one-shot `ProductPurchase` ledger and the
+  purchase-order `receive` step (§8.10) so stock/cost semantics stay identical.
+  It creates **no ledger row** of its own.
 - `record_product_usage()` — snapshots `current_cost()` (from cost history, else current cost)
   into `ProductUsage`. Stock `count` is decremented **only** for commission payouts
   (`is_commission=True`, floored at 0); treatment consumption is tracked for costing without
@@ -678,6 +782,71 @@ scoped to their own expenses; admins see all. Only `approved`/`paid` expenses co
   (callers expose `null`/503 rather than a wrong rate).
 - A `post_migrate` signal seeds a default rate row on first migrate.
 
+### 8.8 Welcome packs (`finance/services/welcome_pack.py`)
+
+- **Definition vs. event.** `WelcomePack` + `WelcomePackItem` are just configuration — creating
+  or editing them moves no money. The financial event is `POST …/welcome-packs/{id}/issue/`.
+- `issue_welcome_pack(pack, customer, quantity, visit, issued_by)` computes the pack cost from
+  current `Product.cost_usd` (`calculate_welcome_pack_cost_usd`), converts with the current
+  rate, and writes one `WelcomePackUsage` holding `total_cost_usd_snapshot`,
+  `exchange_rate_snapshot` and `total_cost_toman_snapshot`. Historical reports read only these
+  snapshots — never today's costs or rate.
+- Pack/customer are `PROTECT`ed, so a pack that has ever been issued cannot be deleted;
+  usages are read-only through the API (`welcome-pack-usages/`).
+- Nested `items` payloads on pack create/update go through `validate_welcome_pack_items`
+  (unique product per pack, quantity > 0) and replace the item set atomically.
+- Cost flows into the finance dashboard (`welcome_pack_cost_usd/toman`, subtracted before
+  gross profit) and into `/api/finance/reports/welcome-packs/`.
+
+### 8.9 Operating expenses (`finance/services/operating_expenses.py`)
+
+- **Separate domain** from `Expense` (employee reimbursement claims): no
+  draft→submitted→approved→paid pipeline, no self-approval guard, no per-owner scoping —
+  any authenticated staff has full CRUD (owner decision recorded in the view docstrings).
+- `create_operating_expense()` validates `amount_usd ≥ 0` and that the category is active,
+  snapshots `exchange_rate` + `amount_toman` at creation, and is **idempotent** on
+  `idempotency_key` (repeat submissions return the original record).
+- `update_operating_expense()` re-validates amount/category; `expense_date` is **Gregorian**
+  (finance convention). Category deletion is blocked (400) while expenses reference it.
+- Reported separately from employee expenses so the two domains can be combined explicitly:
+  `GET /api/finance/operating-expenses/summary/` (period totals) and
+  `reporting.operating_expense_summary()`. It never touches `Wallet`, `Sale` or
+  `PaymentComponent`.
+
+### 8.10 Buying products — purchase orders (`finance/services/purchases.py`)
+
+Buying stock is a **separate, staged workflow** from the legacy one-shot
+`product-purchases/` endpoint, and deliberately writes no `ProductPurchase` rows (one purchase →
+one restock event in the ledger; two ledgers would double-count).
+
+- **Lifecycle:** `draft → ordered → received`, with `cancelled` reachable from any state except
+  `received`. Only drafts/ordered rows can be edited (`update_purchase_order`).
+- **Paperwork vs. money.** `create_purchase_order` / `mark_ordered` / `cancel_purchase_order`
+  change nothing in inventory or profit — no stock, no `Product.cost_usd`, no
+  `ProductCostHistory`. Validation lives in `normalize_items`: ≥ 1 line, unique product per
+  order, quantity > 0 with ≤ 3 decimals, unit cost ≥ 0, unknown products rejected.
+- **Receiving is the event.** `receive_purchase_order` (atomic) loads the lines, resolves the
+  current USD→Toman rate, then for each line (locked in `product_id` order to avoid deadlocks)
+  calls `apply_purchase_receipt()` — set cost, add stock, roll cost history — and stores
+  `unit_cost_toman`/`total_cost_toman` snapshots on the line. It then marks the order
+  `received`, stamps `received_date`, `exchange_rate_snapshot`, `total_cost_usd` and
+  `total_cost_toman`, and refreshes the instance so the API response renders fresh items.
+  Re-receiving, receiving a cancelled order, or receiving without a usable rate all raise
+  `PurchaseOrderError` → HTTP 400. An already-received order can be neither edited, cancelled
+  nor deleted (400) — it is the audit trail.
+- **Profit stays correct by construction.** Receiving only *builds* stock and opens a new
+  cost-history range; the cost reaches the P&L later, when the product is consumed
+  (`ProductUsage` / COGS). So restocking never dilutes today's margin.
+- **USD/Toman convention.** `total_cost_usd` is authoritative. Toman is a *live conversion*
+  while the order is open (serializer converts at the current rate) and becomes a *stored
+  snapshot* (`exchange_rate_snapshot`, line-level `unit_cost_toman`/`total_cost_toman`) once
+  received — same rule as sales, welcome packs and operating expenses.
+- **Idempotency & concurrency.** Creates are keyed on `idempotency_key` (repeat calls return the
+  original order, HTTP 201); `Product` rows are `select_for_update()`ed during receive.
+- **Reporting.** `purchase_summary(start, end, product_id, supplier)` powers
+  `GET /api/finance/reports/product-purchases/`: totals in USD **and** Toman plus `by_product[]`
+  and `by_supplier[]`, filtered on `received_date` (Gregorian, same `_resolve_range` /
+   `period=` helpers as every other finance report).
 
 ---
 
@@ -717,10 +886,11 @@ Mechanics (`Sefro_Clinic/fields.py`):
 
 | Suite | Location | Covers |
 |---|---|---|
-| Unit | `tests/unit/` | Shamsi conversion, period keys, currency, service pricing, exchange-rate helpers |
-| Integration | `tests/integration/` | reports, dashboard, payment aggregation, DB constraints, visit overlap |
+| Unit | `tests/unit/` | Shamsi conversion, period keys, currency, service pricing, exchange-rate helpers, face-analyzer services |
+| Integration | `tests/integration/` | reports, dashboard, payment aggregation, DB constraints, visit overlap, welcome-pack, operating-expense & **purchase-order** APIs, **face-analyzer API** |
 | E2E | `tests/e2e/` | full visit cycle: reserve → confirm → complete → pay → audit-trail integrity |
-| Security | `tests/security/` | auth (forgery/replay/brute-force), authorization/IDOR, CSRF, headers/cookies, injection/XSS, secrets hygiene, docs gating |
+| Domain/feature | `tests/finance/`, `tests/accounts/`, `tests/customers/`, `tests/website/`, `tests/logs/`, `tests/api/`, `tests/logic/` | wallets, staff compensation, welcome packs, operating expenses, **purchase-order service workflow** (`tests/finance/test_purchase_orders.py`), auth serializers/permissions, public site, audit log, API versioning |
+| Security | `tests/security/` | auth (forgery/replay/brute-force), authorization/IDOR, CSRF, headers/cookies, injection/XSS, secrets hygiene, docs gating (incl. `/admin/` → 404) |
 | Performance | `tests/performance/` | smoke/stress/spike (only with `SEFRO_PERF=1`) |
 
 Coverage gate: `--fail-under=90`. `docs/SECURITY_TEST_MAP.md` maps every OWASP Top-10 category
@@ -761,8 +931,10 @@ to know before extending the system:
 4. **Visit status transitions are not guarded** — `confirm`/`complete`/`cancel` set the status
    unconditionally; business discipline is procedural. Payout generation *is* guarded
    (`generate_visit_payouts` no-ops unless status is `completed`).
-5. **Staff payout approval has no API** — `StaffPayoutViewSet` is read-only; approve/pay via
-   Django admin. Contact messages are likewise admin-panel-only (write-only public intake).
+5. **Staff payout approval has no API** — `StaffPayoutViewSet` is read-only, and there is **no
+   Django admin site** (`django.contrib.admin` is not installed; `/admin/` → 404 by test), so
+   payout status changes require direct ORM/shell access or a new endpoint. Contact messages
+   are likewise read via the ORM only (write-only public intake, no list endpoint).
 6. **Stock count vs. consumption** — `Product.count` changes only on purchases and commission
    payouts; visit consumption is cost-tracked via `ProductUsage` snapshots without decrementing
    the counter.
@@ -773,8 +945,25 @@ to know before extending the system:
    remain computable, but you should configure a real rate.
 9. **Admin uniqueness by policy** — there is exactly one admin (the configured bootstrap
    account); the model layer rejects any other admin-role assignment.
-10. **No outbound HTTP except exchange rates** — the only network egress is the optional
-    exchange-rate providers, so SSRF surface is minimal (OWASP A10 marked N/A).
+10. **Outbound HTTP is limited to three providers** — exchange-rate feeds (Tindex/BrsApi), the
+    optional external face-analyzer backend, and the optional LLM tips provider. The default
+    configuration (`FACE_ANALYZER_MODEL_PROVIDER=local`, `FACE_ANALYZER_TIPS_PROVIDER=rule_based`)
+    makes face analysis fully offline, keeping the SSRF surface minimal (OWASP A10 near N/A).
+11. **Three API surfaces, three schemas.** `/api/` (v1 dashboard), `/api/v2/` (public site) and
+    `/api/v3/` (face AI) each have their own OpenAPI urlconf + Swagger UI and are documented
+    independently; the v3 surface is not included in the v1/v2 schemas.
+12. **Face analysis is public but cheap-by-default-throttled.** `POST /api/v3/face/analyze/` is
+    `AllowAny` (anonymous rows have `user = NULL`), protected by the scoped `face_analyzer`
+    throttle; image input is size-capped, MIME- and magic-byte-checked and Pillow-verified
+    before any model runs. History endpoints are `IsAuthenticated` and queryset-scoped to the
+    caller unless the caller has the `admin` role.
+13. **Two expense domains.** `Expense` = employee reimbursement with an approval pipeline and
+    owner-scoped reads; `OperatingExpense` = direct clinic spend with full CRUD for all staff,
+    idempotent creation and Gregorian dates. Reports keep them separate so totals can be
+    combined explicitly.
+14. **Welcome packs snapshot cost at issue time.** `WelcomePackUsage` stores USD/rate/Toman
+    snapshots, so historical welcome-pack cost reports never drift when product costs or the
+    exchange rate change later.
 
 ---
 

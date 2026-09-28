@@ -46,35 +46,20 @@ def models_Q_effective_to(when):
 
 
 @transaction.atomic
-def record_product_purchase(
-    *,
-    product,
-    quantity: Decimal,
-    unit_cost_usd: Decimal,
-    supplier: str = '',
-    purchase_date=None,
-    rate: Optional[Decimal] = None,
-    created_by=None,
-):
+def apply_purchase_receipt(*, product, quantity: Decimal, unit_cost_usd: Decimal, purchase_date=None):
+    """Add bought stock to a product: lock, set cost, increment count, roll history.
+
+    Shared by the one-shot ``ProductPurchase`` ledger and the purchase-order
+    receive step so both keep identical stock/cost semantics. Creates no ledger
+    row of its own.
+    """
     purchase_date = purchase_date or timezone.now().date()
-    rate = rate if rate is not None else get_rate('USD', 'TOMAN')
-    unit_cost_usd = Decimal(unit_cost_usd).quantize(Decimal('0.01'))
     quantity = _valid_quantity(quantity)
-    total_cost_usd = (unit_cost_usd * quantity).quantize(Decimal('0.01'))
+    unit_cost_usd = Decimal(unit_cost_usd).quantize(Decimal('0.01'))
 
     # Locking prevents a purchase and a consumption from losing each other's
     # stock update when they happen at the same time.
     product = product.__class__.objects.select_for_update().get(pk=product.pk)
-
-    purchase = ProductPurchase.objects.create(
-        product=product,
-        quantity=quantity,
-        unit_cost_usd=unit_cost_usd,
-        total_cost_usd=total_cost_usd,
-        supplier=supplier,
-        purchase_date=purchase_date,
-        exchange_rate_snapshot=rate,
-    )
 
     product.cost_usd = unit_cost_usd
     product.count = Decimal(product.count or 0) + quantity
@@ -95,6 +80,42 @@ def record_product_purchase(
             datetime.combine(purchase_date, time.min),
         ),
         effective_to=None,
+    )
+    return product
+
+
+@transaction.atomic
+def record_product_purchase(
+    *,
+    product,
+    quantity: Decimal,
+    unit_cost_usd: Decimal,
+    supplier: str = '',
+    purchase_date=None,
+    rate: Optional[Decimal] = None,
+    created_by=None,
+):
+    purchase_date = purchase_date or timezone.now().date()
+    rate = rate if rate is not None else get_rate('USD', 'TOMAN')
+    unit_cost_usd = Decimal(unit_cost_usd).quantize(Decimal('0.01'))
+    quantity = _valid_quantity(quantity)
+    total_cost_usd = (unit_cost_usd * quantity).quantize(Decimal('0.01'))
+
+    purchase = ProductPurchase.objects.create(
+        product=product,
+        quantity=quantity,
+        unit_cost_usd=unit_cost_usd,
+        total_cost_usd=total_cost_usd,
+        supplier=supplier,
+        purchase_date=purchase_date,
+        exchange_rate_snapshot=rate,
+    )
+
+    apply_purchase_receipt(
+        product=product,
+        quantity=quantity,
+        unit_cost_usd=unit_cost_usd,
+        purchase_date=purchase_date,
     )
     return purchase
 

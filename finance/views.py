@@ -24,6 +24,7 @@ from .models import (
     ProductCostHistory,
     ProductPurchase,
     ProductUsage,
+    PurchaseOrder,
     Sale,
     ServiceItem,
     StaffCompensationRule,
@@ -49,6 +50,7 @@ from .serializers import (
     ProductCostHistorySerializer,
     ProductPurchaseSerializer,
     ProductUsageSerializer,
+    PurchaseOrderSerializer,
     RefundSerializer,
     SaleSerializer,
     ServiceItemSerializer,
@@ -64,6 +66,7 @@ from .serializers import (
 from .services import accounting, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
 from .services import operating_expenses as opex_svc
+from .services import purchases as purchase_svc
 from .services import welcome_pack as welcome_pack_svc
 from .services.exchange_rates import get_rate
 from .services.wallet import InsufficientFunds
@@ -1313,4 +1316,143 @@ class WelcomePackReportView(APIView):
     def get(self, request):
         start, end = _resolve_range(request)
         result = welcome_pack_svc.get_welcome_pack_usage_summary(start, end)
+        return Response(_stringify(result))
+
+
+@extend_schema(tags=['Purchases'])
+class PurchaseOrderViewSet(viewsets.ModelViewSet):
+    """Buying products (stock purchase orders).
+
+    Lifecycle: `draft → ordered → received` (or `cancelled`). Editing is allowed
+    while draft/ordered; **receiving** is the only step that changes inventory
+    and cost — it adds stock, refreshes `Product.cost_usd`, rolls
+    `ProductCostHistory` and snapshots Toman values at the current exchange
+    rate. Read: any staff. Write / actions: admin.
+    """
+
+    queryset = PurchaseOrder.objects.all()
+    serializer_class = PurchaseOrderSerializer
+    permission_classes = [IsAdminOrReadOnly]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['supplier', 'notes', 'items__product__name']
+    ordering_fields = ['order_date', 'status', 'total_cost_usd', 'created_at']
+    ordering = ['-order_date', '-created_at']
+
+    def get_queryset(self):
+        qs = (
+            super().get_queryset()
+            .select_related('created_by')
+            .prefetch_related('items__product')
+        )
+        params = self.request.query_params
+        if params.get('status'):
+            qs = qs.filter(status=params['status'])
+        if params.get('supplier'):
+            qs = qs.filter(supplier__icontains=params['supplier'])
+        if params.get('product'):
+            qs = qs.filter(items__product_id=params['product'])
+        date_from = params.get('date_from')
+        if date_from:
+            try:
+                qs = qs.filter(order_date__gte=datetime.strptime(date_from, '%Y-%m-%d').date())
+            except (ValueError, TypeError):
+                pass
+        date_to = params.get('date_to')
+        if date_to:
+            try:
+                qs = qs.filter(order_date__lte=datetime.strptime(date_to, '%Y-%m-%d').date())
+            except (ValueError, TypeError):
+                pass
+        return qs.distinct()
+
+    def perform_create(self, serializer):
+        data = serializer.validated_data
+        try:
+            order, _created = purchase_svc.create_purchase_order(
+                supplier=data.get('supplier', ''),
+                order_date=data.get('order_date'),
+                notes=data.get('notes', ''),
+                created_by=self.request.user,
+                idempotency_key=data.get('idempotency_key') or '',
+                items_data=self.request.data.get('items', []),
+            )
+        except purchase_svc.PurchaseOrderError as exc:
+            raise serializers.ValidationError({'error': str(exc)})
+        serializer.instance = order
+
+    def perform_update(self, serializer):
+        data = serializer.validated_data
+        request_data = self.request.data
+        try:
+            order = purchase_svc.update_purchase_order(
+                self.get_object(),
+                supplier=data.get('supplier'),
+                order_date=data.get('order_date'),
+                notes=data.get('notes'),
+                items_data=request_data.get('items') if 'items' in request_data else None,
+            )
+        except purchase_svc.PurchaseOrderError as exc:
+            raise serializers.ValidationError({'error': str(exc)})
+        serializer.instance = order
+
+    def destroy(self, request, *args, **kwargs):
+        order = self.get_object()
+        if order.status == PurchaseOrder.Status.RECEIVED:
+            return Response(
+                {'detail': 'A received purchase order cannot be deleted: it already changed '
+                           'stock and cost history. Keep it for the audit trail.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().destroy(request, *args, **kwargs)
+
+    def _transition(self, request, service_call, schema_response=None):
+        order = self.get_object()
+        try:
+            order = service_call(order)
+        except purchase_svc.PurchaseOrderError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(order).data)
+
+    @extend_schema(request=None, responses=PurchaseOrderSerializer)
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin], url_path='mark-ordered')
+    def mark_ordered(self, request, pk=None):
+        """draft → ordered (still no inventory or financial effect)."""
+        return self._transition(request, purchase_svc.mark_ordered)
+
+    @extend_schema(request=None, responses=PurchaseOrderSerializer)
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def receive(self, request, pk=None):
+        """Add stock, roll cost history, snapshot Toman totals at the current rate."""
+        return self._transition(request, purchase_svc.receive_purchase_order)
+
+    @extend_schema(request=None, responses=PurchaseOrderSerializer)
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def cancel(self, request, pk=None):
+        """Any state except received → cancelled."""
+        return self._transition(request, purchase_svc.cancel_purchase_order)
+
+
+@extend_schema(tags=['Reports'])
+class ProductPurchaseReportView(APIView):
+    """Received purchase orders: totals in USD and Toman per period/product/supplier."""
+
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('product', OpenApiTypes.INT, OpenApiParameter.QUERY),
+            OpenApiParameter('supplier', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    def get(self, request):
+        start, end = _resolve_range(request)
+        params = request.query_params
+        result = purchase_svc.purchase_summary(
+            start, end,
+            product_id=params.get('product'),
+            supplier=params.get('supplier'),
+        )
         return Response(_stringify(result))

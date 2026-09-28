@@ -14,11 +14,13 @@ from .views import (
     PackageServiceViewSet,
     PackageViewSet,
     ProductCostHistoryViewSet,
+    ProductPurchaseReportView,
     ProductPurchaseViewSet,
     ProductUsageViewSet,
     ProfitByPackageView,
     ProfitByServiceView,
     ProfitByStaffView,
+    PurchaseOrderViewSet,
     RecordConsumptionView,
     SaleViewSet,
     ServiceItemViewSet,
@@ -52,6 +54,7 @@ router.register('expenses', ExpenseViewSet, basename='expense')
 router.register('operating-expense-categories', OperatingExpenseCategoryViewSet, basename='operating-expense-category')
 router.register('operating-expenses', OperatingExpenseViewSet, basename='operating-expense')
 router.register('product-purchases', ProductPurchaseViewSet, basename='product-purchase')
+router.register('purchase-orders', PurchaseOrderViewSet, basename='purchase-order')
 router.register('staff-compensation-rules', StaffCompensationRuleViewSet, basename='staff-compensation-rule')
 router.register('staff-payouts', StaffPayoutViewSet, basename='staff-payout')
 router.register('welcome-packs', WelcomePackViewSet, basename='welcome-pack')
@@ -67,6 +70,7 @@ urlpatterns = [
     path('reports/profit-by-staff/', ProfitByStaffView.as_view(), name='profit-by-staff'),
     path('reports/wallet-summary/', WalletSummaryView.as_view(), name='wallet-summary'),
     path('reports/staff-payout-summary/', StaffPayoutSummaryView.as_view(), name='staff-payout-summary'),
+    path('reports/product-purchases/', ProductPurchaseReportView.as_view(), name='product-purchase-report'),
     path('reports/dashboard/', DashboardView.as_view(), name='dashboard'),
     path('reports/welcome-packs/', WelcomePackReportView.as_view(), name='welcome-pack-report'),
     path('', include(router.urls)),

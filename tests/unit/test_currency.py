@@ -144,7 +144,10 @@ class ExternalProviderTests(TestCase):
     @override_settings(EXCHANGE_RATE_API_URL='', EXCHANGE_RATE_TIMEOUT=5)
     def test_no_url_configured(self):
         provider = ExternalExchangeRateProvider()
-        self.assertIsNone(provider.get_usd_to_toman_rate())
+        # The provider falls back to a public DEFAULT_URL when no URL is set,
+        # so blank that out too — otherwise this test performs a live HTTP call.
+        with mock.patch.object(ExternalExchangeRateProvider, 'DEFAULT_URL', ''):
+            self.assertIsNone(provider.get_usd_to_toman_rate())
 
     @override_settings(EXCHANGE_RATE_PROVIDER='external', EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_CACHE_TTL=3600, FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('100000'))
     def test_caching_uses_db_when_fresh(self):

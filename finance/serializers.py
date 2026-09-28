@@ -15,6 +15,8 @@ from .models import (
     ProductCostHistory,
     ProductPurchase,
     ProductUsage,
+    PurchaseOrder,
+    PurchaseOrderItem,
     Sale,
     ServiceItem,
     StaffCompensationRule,
@@ -436,4 +438,129 @@ class OperatingExpenseSerializer(serializers.ModelSerializer):
     def validate_amount_usd(self, value):
         if value is not None and value < Decimal('0'):
             raise serializers.ValidationError('Amount must be non-negative.')
+        return value
+
+
+def _current_toman_rate():
+    from .services.exchange_rates import get_rate
+
+    try:
+        return get_rate('USD', 'TOMAN')
+    except Exception:
+        return None
+
+
+class PurchaseOrderItemSerializer(serializers.ModelSerializer):
+    """One product line of a purchase order.
+
+    USD values are authoritative and stored. Toman values are a live
+    conversion while the order is still open and switch to the stored
+    receive-time snapshot once the order is `received`.
+    """
+
+    product_name = serializers.SerializerMethodField()
+    unit_cost_toman = serializers.SerializerMethodField()
+    total_cost_toman = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PurchaseOrderItem
+        fields = [
+            'id', 'order', 'product', 'product_name', 'quantity',
+            'unit_cost_usd', 'total_cost_usd',
+            'unit_cost_toman', 'total_cost_toman',
+            'created_at',
+        ]
+        read_only_fields = [
+            'id', 'order', 'total_cost_usd',
+            'unit_cost_toman', 'total_cost_toman', 'created_at',
+        ]
+
+    def get_product_name(self, obj):
+        return str(obj.product) if obj.product else ''
+
+    def _toman(self, obj, usd_value, stored_value):
+        order = getattr(obj, 'order', None)
+        if order is not None and order.status == PurchaseOrder.Status.RECEIVED:
+            return str(stored_value)
+        rate = _current_toman_rate()
+        if rate is None:
+            return None
+        return str((Decimal(str(usd_value)) * rate).quantize(Decimal('0.01')))
+
+    def get_unit_cost_toman(self, obj):
+        return self._toman(obj, obj.unit_cost_usd, obj.unit_cost_toman)
+
+    def get_total_cost_toman(self, obj):
+        return self._toman(obj, obj.total_cost_usd, obj.total_cost_toman)
+
+    def validate_quantity(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('Quantity must be greater than zero.')
+        if value.as_tuple().exponent < -3:
+            raise serializers.ValidationError('Quantity cannot have more than three decimal places.')
+        return value
+
+    def validate_unit_cost_usd(self, value):
+        if value is not None and value < Decimal('0'):
+            raise serializers.ValidationError('Unit cost must be non-negative.')
+        return value
+
+
+class PurchaseOrderSerializer(serializers.ModelSerializer):
+    """Purchase order with nested product lines and USD/Toman totals.
+
+    `items` is writable on create/update (the service replaces the whole set);
+    `status`, `received_date` and every Toman/rate snapshot are server-owned.
+    """
+
+    items = PurchaseOrderItemSerializer(many=True)
+    created_by_name = serializers.SerializerMethodField()
+    exchange_rate = serializers.SerializerMethodField()
+    total_cost_toman = serializers.SerializerMethodField()
+    order_date = serializers.DateField(
+        required=False, help_text='Gregorian business date of the order; defaults to today.',
+    )
+    # Declared explicitly (no UniqueValidator) so a retried create reaches the
+    # service layer, which returns the original order for the same key.
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=64)
+
+    class Meta:
+        model = PurchaseOrder
+        fields = [
+            'id', 'supplier', 'status', 'order_date', 'received_date', 'notes',
+            'created_by', 'created_by_name', 'idempotency_key',
+            'exchange_rate_snapshot', 'exchange_rate',
+            'total_cost_usd', 'total_cost_toman', 'items',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'status', 'received_date', 'created_by',
+            'exchange_rate_snapshot', 'total_cost_usd',
+            'created_at', 'updated_at',
+        ]
+
+    def get_created_by_name(self, obj):
+        user = obj.created_by
+        if user is None:
+            return None
+        full = f'{user.first_name} {user.last_name}'.strip()
+        return full or user.username
+
+    def get_exchange_rate(self, obj):
+        if obj.exchange_rate_snapshot:
+            return str(obj.exchange_rate_snapshot)
+        rate = _current_toman_rate()
+        return str(rate) if rate is not None else None
+
+    def get_total_cost_toman(self, obj):
+        if obj.status == PurchaseOrder.Status.RECEIVED:
+            return str(obj.total_cost_toman)
+        rate = _current_toman_rate()
+        if rate is None:
+            return None
+        return str((Decimal(str(obj.total_cost_usd)) * rate).quantize(Decimal('0.01')))
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError('At least one product line is required.')
         return value

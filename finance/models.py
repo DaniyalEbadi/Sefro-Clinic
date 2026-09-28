@@ -686,3 +686,92 @@ class OperatingExpense(models.Model):
 
     def __str__(self):
         return f'OperatingExpense {self.id} {self.title} {self.amount_usd}'
+
+
+class PurchaseOrder(models.Model):
+    """A product buying order (stock purchase) with an explicit receive step.
+
+    Separate from ProductPurchase, which is the simple one-shot restock ledger.
+    Money convention: costs are entered in USD (authoritative). Toman values are
+    snapshots captured when the order is received, using the exchange rate at
+    that moment; they are never recomputed with a newer rate.
+
+    Stock (`Product.count`), `Product.cost_usd` and `ProductCostHistory` are
+    mutated **only** when the order moves to `received`, so draft/ordered rows
+    have no financial or inventory effect.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        ORDERED = 'ordered', 'Ordered'
+        RECEIVED = 'received', 'Received'
+        CANCELLED = 'cancelled', 'Cancelled'
+
+    supplier = models.CharField(max_length=200, blank=True, validators=TEXT_SANITIZERS)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    order_date = models.DateField(help_text='Gregorian business date of the order (finance convention).')
+    received_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='purchase_orders_created',
+    )
+    exchange_rate_snapshot = rate_field(
+        null=True, blank=True,
+        help_text='Toman-per-USD captured at receive time; null until received.',
+    )
+    total_cost_usd = usd_field(default=Decimal('0'))
+    total_cost_toman = toman_field(default=Decimal('0'))
+    idempotency_key = models.CharField(
+        max_length=64, unique=True, null=True, blank=True,
+        help_text='Client-supplied key; repeat submissions return the original order.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-order_date', '-created_at']
+        indexes = [
+            models.Index(fields=['status', 'order_date'], name='po_status_date_idx'),
+            models.Index(fields=['supplier'], name='po_supplier_idx'),
+        ]
+
+    def __str__(self):
+        return f'PurchaseOrder {self.id} [{self.status}] {self.supplier or "no supplier"}'
+
+
+class PurchaseOrderItem(models.Model):
+    """One product line of a purchase order: quantity × unit cost (USD)."""
+
+    order = models.ForeignKey(PurchaseOrder, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(
+        'inventory.Product', on_delete=models.PROTECT, related_name='purchase_order_items',
+    )
+    quantity = models.DecimalField(
+        max_digits=12, decimal_places=3, validators=[MinValueValidator(Decimal('0'))],
+    )
+    unit_cost_usd = usd_field(default=Decimal('0'))
+    total_cost_usd = usd_field(default=Decimal('0'))
+    unit_cost_toman = toman_field(
+        default=Decimal('0'),
+        help_text='Snapshot taken when the order is received; 0 until then.',
+    )
+    total_cost_toman = toman_field(
+        default=Decimal('0'),
+        help_text='Snapshot taken when the order is received; 0 until then.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        constraints = [
+            models.UniqueConstraint(fields=['order', 'product'], name='uniq_po_item_product'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='po_item_qty_positive'),
+            models.CheckConstraint(condition=models.Q(total_cost_usd__gte=0), name='po_item_total_nonneg'),
+        ]
+        indexes = [
+            models.Index(fields=['product', 'created_at'], name='po_item_product_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.quantity} x {self.product} @ {self.unit_cost_usd} (order {self.order_id})'
