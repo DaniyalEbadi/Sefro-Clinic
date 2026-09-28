@@ -249,3 +249,41 @@ class CustomersE2ETest(TestCase):
         self.client.cookies.clear()
         resp = self.client.get('/api/customers/')
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_10_visit_detail_exposes_checkout_payments(self):
+        from decimal import Decimal
+
+        from finance.services.exchange_rates import set_rate
+
+        set_rate('USD', 'TOMAN', Decimal('100000'))
+
+        visit_resp = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': '1404-09-01 10:00',
+            'end_at': '1404-09-01 11:00',
+            'services': [self.service.id],
+        }, format='json')
+        self.assertEqual(visit_resp.status_code, status.HTTP_201_CREATED)
+        vid = visit_resp.data['id']
+
+        checkout = self.client.post('/api/finance/checkout/', {
+            'customer': self.customer.id,
+            'amount_usd': '100.00',
+            'components': [{'method': 'card', 'amount_usd': '100.00'}],
+            'visit': vid,
+        }, format='json')
+        self.assertEqual(checkout.status_code, status.HTTP_201_CREATED, checkout.data)
+
+        detail = self.client.get(f'/api/visits/{vid}/')
+        self.assertEqual(detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(detail.data['customer'], self.customer.id)
+        self.assertEqual(len(detail.data['payments']), 1)
+
+        row = detail.data['payments'][0]
+        self.assertEqual(row['customer'], self.customer.id)
+        self.assertEqual(Decimal(str(row['amount'])), Decimal('10000000.00'))
+        self.assertEqual(Decimal(str(detail.data['total_paid'])), Decimal('10000000.00'))
+
+        filtered = self.client.get(f'/api/payments/?visit={vid}')
+        self.assertEqual(filtered.status_code, status.HTTP_200_OK)
+        self.assertEqual([p['id'] for p in filtered.data['results']], [row['id']])

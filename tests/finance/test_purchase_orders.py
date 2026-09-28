@@ -12,6 +12,7 @@ from finance.services.purchases import (
     cancel_purchase_order,
     create_purchase_order,
     mark_ordered,
+    normalize_items,
     purchase_summary,
     receive_purchase_order,
     update_purchase_order,
@@ -96,6 +97,30 @@ class PurchaseOrderServiceTests(TestCase):
             with self.assertRaises(PurchaseOrderError, msg=f'accepted {items}'):
                 self.create_order(items_data=items)
         self.assertEqual(PurchaseOrder.objects.count(), 0)
+
+    def test_normalize_accepts_product_instances(self):
+        lines = normalize_items([
+            {'product': self.product, 'quantity': '2', 'unit_cost_usd': '4'},
+        ])
+        self.assertEqual(lines[0]['product'], self.product)
+        self.assertEqual(lines[0]['quantity'], Decimal('2.000'))
+        self.assertEqual(lines[0]['total_cost_usd'], Decimal('8.00'))
+
+    def test_normalize_rejects_non_object_and_undecodable_costs(self):
+        with self.assertRaises(PurchaseOrderError):
+            normalize_items(['not-an-object'])
+        with self.assertRaises(PurchaseOrderError):
+            normalize_items([{'product': self.product.id, 'quantity': '1', 'unit_cost_usd': 'abc'}])
+        with self.assertRaises(PurchaseOrderError):
+            normalize_items([{'product': self.product.id, 'quantity': '1', 'unit_cost_usd': 'NaN'}])
+
+    def test_receive_without_product_lines_is_rejected(self):
+        order, _ = self.create_order()
+        order.items.all().delete()
+        with self.assertRaises(PurchaseOrderError):
+            receive_purchase_order(order)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.count, Decimal('5'))
 
     def test_order_date_can_be_supplied(self):
         order, _ = self.create_order(order_date=date(2026, 1, 15))

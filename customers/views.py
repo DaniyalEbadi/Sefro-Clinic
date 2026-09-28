@@ -4,7 +4,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 import jdatetime
-from django.db.models import Avg, Count, OuterRef, Subquery, Sum
+from django.db.models import Avg, Count, OuterRef, Prefetch, Subquery, Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, status, viewsets
@@ -502,7 +502,11 @@ class ServiceViewSet(viewsets.ModelViewSet):
     ],
 )
 class VisitViewSet(viewsets.ModelViewSet):
-    queryset = Visit.objects.select_related('customer', 'staff').prefetch_related('services')
+    queryset = (
+        Visit.objects
+        .select_related('customer', 'staff')
+        .prefetch_related('services', Prefetch('payments', queryset=Payment.objects.select_related('customer')))
+    )
     serializer_class = VisitSerializer
     permission_classes = [permissions.IsAuthenticated]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -657,6 +661,17 @@ class PaymentViewSet(viewsets.ModelViewSet):
     search_fields = ['customer__first_name', 'customer__last_name', 'customer__id', 'customer__mobile_number']
     ordering_fields = ['paid_at', 'amount', 'payment_method']
     ordering = ['-paid_at']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        visit = params.get('visit')
+        if visit and visit.isdigit():
+            qs = qs.filter(visit_id=int(visit))
+        customer = params.get('customer')
+        if customer and customer.isdigit():
+            qs = qs.filter(customer_id=int(customer))
+        return qs
 
     @action(detail=False, methods=['get'])
     @extend_schema(

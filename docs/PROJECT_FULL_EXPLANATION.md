@@ -407,7 +407,7 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 |---|---|---|
 | GET | `/api/visits/` | List. Filters: `?status=pending/confirmed/completed/canceled`, `?year=&month=` (Shamsi), `?date_from=&date_to=` (Shamsi); `?search=` across customer name/mobile, notes, status |
 | POST | `/api/visits/` | Create visit `{customer, services[], start_at, end_at (Shamsi "YYYY-MM-DD HH:MM"), notes}`. Validation: `end_at ≥ start_at`; **overlap check** — same customer cannot have two visits whose time ranges intersect while status is pending/confirmed/completed |
-| GET/PUT/PATCH/DELETE | `/api/visits/{id}/` | Retrieve / update (same overlap validation) / delete |
+| GET/PUT/PATCH/DELETE | `/api/visits/{id}/` | Retrieve / update (same overlap validation) / delete. Every response embeds the visit's payments (`payments: [{id, customer, customer_name, amount, amount_usd, exchange_rate, payment_method, paid_at}]`), the denormalized `customer_name` and `total_paid` (sum of `payments.amount`); payments are fetched with one prefetch query for the list endpoint |
 | POST | `/api/visits/{id}/confirm/` | `pending → confirmed` |
 | POST | `/api/visits/{id}/complete/` | `→ completed` **and auto-generates staff commission payouts** (see §8.5) |
 | POST | `/api/visits/{id}/cancel/` | `→ canceled` |
@@ -417,8 +417,8 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/payments/` | List; search customer name/id/mobile; ordering `paid_at, amount, payment_method` |
-| POST | `/api/payments/` | Record a payment directly `{customer, visit?, amount (Toman), payment_method, paid_at (Shamsi), notes}` |
+| GET | `/api/payments/` | List; search customer name/id/mobile; ordering `paid_at, amount, payment_method`; filters `?visit={id}` and `?customer={id}` |
+| POST | `/api/payments/` | Record a payment directly `{customer?, visit?, amount (Toman), payment_method, paid_at (Shamsi), notes}`. When `visit` is given and `customer` is omitted, the customer is **inherited from the visit**; a `customer` that does not match the visit's customer is rejected with `400` |
 | GET/PUT/PATCH/DELETE | `/api/payments/{id}/` | Retrieve / update / delete |
 | GET | `/api/payments/by_service/` | Aggregate payment totals per service; `?date_from=&date_to=` (Shamsi) |
 

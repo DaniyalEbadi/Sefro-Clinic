@@ -94,13 +94,6 @@ def _write_items(order: PurchaseOrder, lines: list):
     order.save(update_fields=['total_cost_usd', 'updated_at'])
 
 
-def _order_totals(order: PurchaseOrder):
-    items = list(order.items.all())
-    total_usd = sum((i.total_cost_usd for i in items), Decimal('0')).quantize(CENT)
-    total_toman = sum((i.total_cost_toman for i in items), Decimal('0')).quantize(CENT)
-    return total_usd, total_toman
-
-
 @transaction.atomic
 def create_purchase_order(
     *,

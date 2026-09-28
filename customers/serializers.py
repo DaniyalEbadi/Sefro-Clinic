@@ -120,16 +120,42 @@ class ServiceSerializer(serializers.ModelSerializer):
 from finance.serializers import ServiceItemSerializer  # noqa: E402, F401
 
 
+class VisitPaymentSerializer(serializers.ModelSerializer):
+    """Read-only payment row embedded in a visit (id + customer + money)."""
+
+    customer_name = serializers.SerializerMethodField()
+    paid_at = ShamsiDateTimeField(read_only=True)
+
+    class Meta:
+        model = Payment
+        fields = ['id', 'customer', 'customer_name', 'amount', 'amount_usd',
+                  'exchange_rate', 'payment_method', 'paid_at']
+        read_only_fields = fields
+
+    def get_customer_name(self, obj):
+        return str(obj.customer) if obj.customer_id else ''
+
+
 class VisitSerializer(serializers.ModelSerializer):
     service_names = serializers.StringRelatedField(source='services', many=True, read_only=True)
     start_at = ShamsiDateTimeField()
     end_at = ShamsiDateTimeField()
     staff = serializers.PrimaryKeyRelatedField(read_only=True)
+    customer_name = serializers.SerializerMethodField()
+    payments = VisitPaymentSerializer(many=True, read_only=True)
+    total_paid = serializers.SerializerMethodField()
 
     class Meta:
         model = Visit
-        fields = ['id', 'customer', 'staff', 'services', 'service_names', 'start_at', 'end_at',
-                  'status', 'notes']
+        fields = ['id', 'customer', 'customer_name', 'staff', 'services', 'service_names',
+                  'start_at', 'end_at', 'status', 'notes', 'payments', 'total_paid']
+
+    def get_customer_name(self, obj):
+        return str(obj.customer) if obj.customer_id else ''
+
+    def get_total_paid(self, obj):
+        payments = list(obj.payments.all()) if hasattr(obj, 'payments') else []
+        return sum((p.amount for p in payments), Decimal('0'))
 
     def validate(self, attrs):
         start_at = attrs.get('start_at')
@@ -158,6 +184,11 @@ class VisitSerializer(serializers.ModelSerializer):
 class PaymentSerializer(serializers.ModelSerializer):
     paid_at = ShamsiDateTimeField(required=False)
     customer_name = serializers.SerializerMethodField()
+    # Optional at field level: the customer can be inherited from the visit
+    # in validate(), which is what keeps the two records in sync.
+    customer = serializers.PrimaryKeyRelatedField(
+        queryset=Customer.objects.all(), required=False, allow_null=True,
+    )
 
     class Meta:
         model = Payment
@@ -166,6 +197,32 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, obj):
         return str(obj.customer)
+
+    def validate(self, attrs):
+        """A payment booked on a visit must belong to that visit's customer.
+
+        When the payload carries a `visit` but no `customer`, the customer is
+        inherited from the visit so the two can never drift apart.
+        """
+        instance = self.instance
+        if 'visit' not in attrs and 'customer' not in attrs:
+            if instance is not None or self.partial:
+                return attrs
+        visit = attrs.get('visit', getattr(instance, 'visit', None) if instance else None)
+        customer = attrs.get('customer', getattr(instance, 'customer', None) if instance else None)
+
+        if visit is not None:
+            if customer is None:
+                attrs['customer'] = visit.customer
+            elif customer.pk != visit.customer_id:
+                raise serializers.ValidationError({
+                    'customer': 'Payment customer must match the customer of the linked visit.',
+                })
+            return attrs
+
+        if customer is None:
+            raise serializers.ValidationError({'customer': 'This field is required.'})
+        return attrs
 
 
 class CustomerSerializer(serializers.ModelSerializer):

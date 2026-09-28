@@ -31,7 +31,8 @@ tests/
 │   ├── integration/
 │   │   ├── __init__.py
 │   │   ├── test_views.py                 # Customer view integration tests
-│   │   └── test_visit_past_dates.py      # Visit past-date validation tests
+│   │   ├── test_visit_past_dates.py      # Visit past-date validation tests
+│   │   └── test_visit_payments.py        # Visit endpoint ↔ Payment link (embedded payments, customer guard, filters)
 │   └── unit/
 │       ├── __init__.py
 │       ├── test_models.py                # Customer/Service/Visit model tests
@@ -45,25 +46,33 @@ tests/
 ├── finance/                                # Finance app tests
 │   ├── __init__.py
 │   ├── test_finance.py                    # Finance API & checkout tests
+│   ├── test_inventory_consumption.py      # Inventory consumption/accounting tests
 │   ├── test_models.py                     # Finance model constraint tests
 │   ├── test_operating_expenses.py         # OperatingExpense domain tests (38 tests)
+│   ├── test_purchase_orders.py            # Purchase order service tests (draft/ordered/received)
 │   ├── test_services.py                   # Finance service layer tests
 │   ├── test_staff_compensation.py         # Staff compensation/payout tests
-│   └── test_wallets.py                    # Wallet & transaction tests
+│   ├── test_wallets.py                    # Wallet & transaction tests
+│   ├── test_welcome_pack_models.py        # Welcome pack model tests
+│   └── test_welcome_pack_services.py      # Welcome pack service tests
 │
 ├── integration/                            # Cross-app integration tests
 │   ├── __init__.py
 │   ├── test_constraints.py                # DB constraint integration tests
 │   ├── test_customer_visit_expense_exchange_integration.py
 │   ├── test_dashboard.py                  # Dashboard endpoint integration tests
+│   ├── test_face_analyzer.py              # Face analyzer API integration tests
 │   ├── test_finance_endpoints_api.py      # Finance endpoint API tests
 │   ├── test_finance_reports_api.py        # Finance reports API tests
 │   ├── test_inventory_api.py              # Inventory endpoint API tests
+│   ├── test_operating_expenses_api.py     # Operating expense endpoint API tests
 │   ├── test_payments_by_service.py        # Payment aggregation tests
+│   ├── test_purchase_orders_api.py        # Purchase orders endpoint API tests
 │   ├── test_reports_api.py                # Reports API integration tests
 │   ├── test_service_category_and_pricing_api.py
 │   ├── test_visit_overlap.py             # Visit overlap prevention tests
-│   └── test_wallet_checkout_integration.py # Wallet + checkout integration tests
+│   ├── test_wallet_checkout_integration.py # Wallet + checkout integration tests
+│   └── test_welcome_pack_api.py           # Welcome pack endpoint API tests
 │
 ├── logic/                                  # Business logic permission tests
 │   ├── __init__.py
@@ -181,6 +190,7 @@ tests/
 │   ├── __init__.py
 │   ├── test_currency.py                   # Currency validation tests
 │   ├── test_exchange_rate_helpers.py      # Exchange rate provider & conversion tests
+│   ├── test_face_analyzer_services.py     # Face analyzer service unit tests
 │   ├── test_period_keys.py               # Shamsi period key & range tests
 │   ├── test_service_pricing.py           # Service cost/profit calculation tests
 │   └── test_shamsi_fields.py            # Shamsi/Jalali date field tests
@@ -198,20 +208,23 @@ tests/
 
 | Category | Location | Test Count | Description |
 |---|---|---|---|
-| **Unit** | `tests/unit/` | ~50 | Currency, exchange rates, Shamsi dates, pricing, period keys |
-| **Integration** | `tests/integration/` | ~100 | API endpoints, constraints, dashboard, reports, wallet+checkout |
-| **E2E** | `tests/e2e/` + `*/e2e/` | ~30 | Full workflow journeys: reserve → confirm → complete → pay → audit |
-| **Security** | `tests/security/` | ~60 | Auth, authorization, CSRF, headers, injection, XSS, secrets hygiene |
-| **Finance** | `tests/finance/` | ~80 | Checkout, wallet, expenses, operating expenses, staff compensation |
-| **Performance** | `tests/performance/` | ~40 | Smoke, stress, spike, endurance, scalability, cache, query plans |
-| **Accounts** | `tests/accounts/` | ~20 | User model, permissions, serializers, auth endpoints |
-| **Customers** | `tests/customers/` | ~20 | Customer model, serializers, visit validation |
-| **Logic** | `tests/logic/` | ~10 | Admin/employee permission boundary tests |
-| **Logs** | `tests/logs/` | ~5 | AuditLog model & signal tests |
-| **Website** | `tests/website/` | ~15 | Public catalog, contact intake, visitor journey |
-| **API** | `tests/api/` | ~3 | API versioning tests |
+| **Unit** | `tests/unit/` | ~167 | Currency, exchange rates, Shamsi dates, pricing, period keys, face analyzer |
+| **Integration** | `tests/integration/` | ~264 | API endpoints, constraints, dashboard, reports, wallet+checkout, purchase orders |
+| **E2E** | `tests/e2e/` + `*/e2e/` | ~87 | Full workflow journeys: reserve → confirm → complete → pay → audit |
+| **Security** | `tests/security/` | ~126 | Auth, authorization, CSRF, headers, injection, XSS, secrets hygiene |
+| **Finance** | `tests/finance/` | ~232 | Checkout, wallet, expenses, operating expenses, staff compensation, purchase orders |
+| **Performance** | `tests/performance/` | ~87 | Smoke, stress, spike, endurance, scalability, cache, query plans |
+| **Accounts** | `tests/accounts/` | ~22 | User model, permissions, serializers, auth endpoints |
+| **Customers** | `tests/customers/` | ~65 | Customer model, serializers, visit validation, visit↔payment link |
+| **Logic** | `tests/logic/` | ~89 | Admin/employee permission boundary tests |
+| **Logs** | `tests/logs/` | ~6 | AuditLog model & signal tests |
+| **Website** | `tests/website/` | ~33 | Public catalog, contact intake, visitor journey |
+| **API** | `tests/api/` | ~10 | API versioning tests |
 
-**Total: 815 tests** (15 performance tests skipped unless `SEFRO_PERF=1`)
+**Total: 1123 tests** (17 skipped — performance suite runs only when `SEFRO_PERF=1`)
+
+Coverage of the whole project: **91%** (`coverage report`; `customers` 92–97%,
+`finance/services/purchases.py` 100%).
 
 ## Running Tests
 
@@ -229,4 +242,8 @@ py manage.py test tests.finance.test_operating_expenses --noinput
 
 # Performance (opt-in)
 SEFRO_PERF=1 py manage.py test tests.performance --noinput
+
+# Full suite with coverage
+coverage run manage.py test --noinput
+coverage report
 ```
