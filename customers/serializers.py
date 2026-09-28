@@ -230,6 +230,7 @@ class CustomerSerializer(serializers.ModelSerializer):
     is_new_customer = serializers.SerializerMethodField()
     is_loyal_customer = serializers.SerializerMethodField()
     total_payments = serializers.SerializerMethodField()
+    last_payment = serializers.SerializerMethodField()
     created_at = ShamsiDateTimeField(read_only=True)
     last_visit_date = serializers.SerializerMethodField()
     birthday = ShamsiDateField(required=False, allow_null=True)
@@ -255,6 +256,7 @@ class CustomerSerializer(serializers.ModelSerializer):
             'is_new_customer',
             'is_loyal_customer',
             'total_payments',
+            'last_payment',
             'last_visit_date',
         ]
 
@@ -278,3 +280,15 @@ class CustomerSerializer(serializers.ModelSerializer):
         from Sefro_Clinic.fields import greg_to_shamsi_date
         dt = getattr(obj, 'last_visit_at', None)
         return greg_to_shamsi_date(dt)
+
+    def get_last_payment(self, obj):
+        payment = obj.last_payment
+        if not payment:
+            return None
+        return {
+            'id': payment.id,
+            'amount': str(payment.amount),
+            'amount_usd': str(payment.amount_usd) if payment.amount_usd is not None else None,
+            'payment_method': payment.payment_method,
+            'paid_at': str(payment.paid_at),
+        }

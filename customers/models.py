@@ -113,6 +113,10 @@ class Customer(models.Model):
         from Sefro_Clinic.fields import greg_to_shamsi_date
         return greg_to_shamsi_date(last.start_at)
 
+    @property
+    def last_payment(self):
+        return self.payments.order_by('-paid_at').first()
+
 
 class Visit(models.Model):
     class Status(models.TextChoices):
