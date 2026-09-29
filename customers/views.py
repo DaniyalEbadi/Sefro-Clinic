@@ -425,10 +425,16 @@ class CustomerViewSet(viewsets.ModelViewSet):
         last_visit_subquery = Subquery(
             Visit.objects.filter(customer=OuterRef('pk')).order_by('-start_at').values('start_at')[:1],
         )
+        last_payment_qs = Payment.objects.filter(customer=OuterRef('pk')).order_by('-paid_at')
         return Customer.objects.annotate(
             num_visits=Count('visits'),
             sum_payments=Sum('payments__amount'),
             last_visit_at=last_visit_subquery,
+            last_payment_id=Subquery(last_payment_qs.values('id')[:1]),
+            last_payment_amount=Subquery(last_payment_qs.values('amount')[:1]),
+            last_payment_amount_usd=Subquery(last_payment_qs.values('amount_usd')[:1]),
+            last_payment_method=Subquery(last_payment_qs.values('payment_method')[:1]),
+            last_payment_paid_at=Subquery(last_payment_qs.values('paid_at')[:1]),
         )
 
 

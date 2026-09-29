@@ -282,6 +282,17 @@ class CustomerSerializer(serializers.ModelSerializer):
         return greg_to_shamsi_date(dt)
 
     def get_last_payment(self, obj):
+        if hasattr(obj, 'last_payment_id'):
+            if obj.last_payment_id is None:
+                return None
+            amount_usd = obj.last_payment_amount_usd
+            return {
+                'id': obj.last_payment_id,
+                'amount': str(obj.last_payment_amount),
+                'amount_usd': str(amount_usd) if amount_usd is not None else None,
+                'payment_method': obj.last_payment_method,
+                'paid_at': str(obj.last_payment_paid_at),
+            }
         payment = obj.last_payment
         if not payment:
             return None

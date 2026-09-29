@@ -705,7 +705,7 @@ def calculate_service_profit(service, rate):
 
 @extend_schema(tags=['Staff Compensation'])
 class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
-    queryset = StaffCompensationRule.objects.all()
+    queryset = StaffCompensationRule.objects.prefetch_related('product_lines__product')
     serializer_class = StaffCompensationRuleSerializer
     permission_classes = [IsAdmin]
     filter_backends = [filters.OrderingFilter]
@@ -714,7 +714,9 @@ class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
 
 @extend_schema(tags=['Staff Compensation'])
 class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = StaffPayout.objects.select_related('staff', 'visit', 'service', 'payout_product')
+    queryset = StaffPayout.objects.select_related('staff', 'visit', 'service', 'payout_product').prefetch_related(
+        'product_lines__product',
+    )
     serializer_class = StaffPayoutSerializer
     permission_classes = [IsEmployeeOrAdmin]
     filter_backends = [filters.OrderingFilter, filters.SearchFilter]

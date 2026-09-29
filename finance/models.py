@@ -519,8 +519,8 @@ class StaffCompensationRule(models.Model):
     calculation_type = models.CharField(max_length=20, choices=CalculationType.choices, default=CalculationType.PERCENT_PROFIT)
 
     percent_profit = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Percentage of profit (e.g., 50.00 for 50%)')
-    fixed_amount_usd = usd_field(null=True, blank=True, help_text='Fixed USD amount per session')
-    fixed_amount_toman = toman_field(null=True, blank=True, help_text='Fixed Toman amount per session (alternative to USD)')
+    fixed_amount_usd = usd_field(null=True, blank=True, help_text='Fixed USD amount per session, or the monthly salary when calculation_type is monthly_salary')
+    fixed_amount_toman = toman_field(null=True, blank=True, help_text='Fixed Toman amount per session, or the monthly salary when calculation_type is monthly_salary (alternative to USD)')
     transport_usd = usd_field(default=Decimal('0'), help_text='Transport allowance per session (USD)')
     transport_toman = toman_field(default=Decimal('0'), help_text='Transport allowance per session (Toman)')
 
@@ -538,6 +538,35 @@ class StaffCompensationRule(models.Model):
         return f'{self.get_role_display()} - {self.get_calculation_type_display()}'
 
 
+class StaffCompensationRuleProduct(models.Model):
+    """One product line of a compensation rule (product + quantity per payout).
+
+    Replaces the historical single ``StaffCompensationRule.product`` /
+    ``product_qty`` pair, which is kept mirrored with the first line so older
+    API clients keep working.
+    """
+
+    rule = models.ForeignKey(StaffCompensationRule, on_delete=models.CASCADE, related_name='product_lines')
+    product = models.ForeignKey(
+        'inventory.Product', on_delete=models.PROTECT, related_name='compensation_rule_lines',
+    )
+    quantity = models.DecimalField(
+        max_digits=10, decimal_places=3, default=Decimal('1'),
+        validators=[MinValueValidator(Decimal('0'))],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        constraints = [
+            models.UniqueConstraint(fields=['rule', 'product'], name='uniq_compensation_rule_product'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='compensation_rule_product_qty_positive'),
+        ]
+
+    def __str__(self):
+        return f'{self.quantity} x {self.product} ({self.rule})'
+
+
 class StaffPayout(models.Model):
     class Status(models.TextChoices):
         PENDING = 'pending', 'Pending'
@@ -548,6 +577,10 @@ class StaffPayout(models.Model):
     class PayoutMode(models.TextChoices):
         CASH = 'cash', 'Cash'
         PRODUCT = 'product', 'Product'
+
+    class PayoutKind(models.TextChoices):
+        SESSION = 'session', 'Per Visit'
+        MONTHLY_SALARY = 'monthly_salary', 'Monthly Salary'
 
     staff = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='payouts')
     visit = models.ForeignKey('customers.Visit', on_delete=models.PROTECT, related_name='staff_payouts')
@@ -565,12 +598,20 @@ class StaffPayout(models.Model):
     payout_cash_toman = toman_field(default=Decimal('0'))
     payout_product = models.ForeignKey('inventory.Product', on_delete=models.SET_NULL, null=True, blank=True, related_name='staff_payouts')
     payout_product_qty = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('0'))
-    payout_product_value_usd = usd_field(default=Decimal('0'))
-    payout_product_value_toman = toman_field(default=Decimal('0'))
+    payout_product_value_usd = usd_field(default=Decimal('0'), help_text='Total value of all payout product lines')
+    payout_product_value_toman = toman_field(default=Decimal('0'), help_text='Total Toman value of all payout product lines')
 
     exchange_rate = rate_field()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     payout_mode = models.CharField(max_length=10, choices=PayoutMode.choices, default=PayoutMode.CASH)
+    payout_kind = models.CharField(
+        max_length=20, choices=PayoutKind.choices, default=PayoutKind.SESSION,
+        help_text='SESSION pays per visit; MONTHLY_SALARY pays once per salary_period.',
+    )
+    salary_period = models.DateField(
+        null=True, blank=True,
+        help_text='First day of the salary month. Set only for MONTHLY_SALARY payouts.',
+    )
     notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_payouts')
     approved_at = models.DateTimeField(null=True, blank=True)
@@ -588,10 +629,43 @@ class StaffPayout(models.Model):
         ]
         constraints = [
             models.UniqueConstraint(fields=['visit', 'staff', 'service'], name='uniq_payout_per_visit_staff_service'),
+            models.UniqueConstraint(
+                fields=['staff', 'role', 'salary_period'],
+                condition=models.Q(payout_kind='monthly_salary'),
+                name='uniq_monthly_salary_payout_per_period',
+            ),
         ]
 
     def __str__(self):
         return f'Payout {self.staff} - {self.service} ({self.status})'
+
+
+class StaffPayoutProduct(models.Model):
+    """One product line of a staff payout (snapshot of what was given).
+
+    ``StaffPayout.payout_product_value_usd/toman`` hold the total across all
+    lines so existing summary/report aggregates stay correct; this table holds
+    the per-product detail.
+    """
+
+    payout = models.ForeignKey(StaffPayout, on_delete=models.CASCADE, related_name='product_lines')
+    product = models.ForeignKey(
+        'inventory.Product', on_delete=models.PROTECT, related_name='staff_payout_lines',
+    )
+    quantity = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal('1'))
+    value_usd = usd_field(default=Decimal('0'))
+    value_toman = toman_field(default=Decimal('0'))
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['id']
+        constraints = [
+            models.UniqueConstraint(fields=['payout', 'product'], name='uniq_payout_product'),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name='payout_product_qty_positive'),
+        ]
+
+    def __str__(self):
+        return f'{self.quantity} x {self.product} (payout {self.payout_id})'
 
 
 class OperatingExpenseCategory(models.Model):

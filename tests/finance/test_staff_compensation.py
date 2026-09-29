@@ -11,7 +11,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Service, Visit
-from finance.models import ProductUsage, ServiceItem, StaffCompensationRule, StaffPayout
+from finance.models import ProductUsage, ServiceItem, StaffCompensationRule, StaffCompensationRuleProduct, StaffPayout
 from finance.services import staff_compensation
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
@@ -491,3 +491,287 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         response = employee.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(StaffPayout.objects.count(), 1)
+
+    def test_completing_visit_with_monthly_salary_rule_creates_salary_payout(self):
+        make_rule(
+            calculation_type=StaffCompensationRule.CalculationType.MONTHLY_SALARY,
+            fixed_amount_usd=Decimal('500.00'),
+        )
+        response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
+        self.assertEqual(response.status_code, 200, response.data)
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_kind, StaffPayout.PayoutKind.MONTHLY_SALARY)
+        self.assertEqual(payout.payout_cash_usd, Decimal('500.00'))
+
+
+class MonthlySalaryPayoutTests(CompensationFixtureMixin, TestCase):
+    SALARY_USD = Decimal('500.00')
+
+    def _make_salary_rule(self, **overrides):
+        overrides.setdefault('calculation_type', StaffCompensationRule.CalculationType.MONTHLY_SALARY)
+        overrides.setdefault('fixed_amount_usd', self.SALARY_USD)
+        return make_rule(**overrides)
+
+    def _make_visit(self, at=None):
+        start = at or timezone.now()
+        visit = Visit.objects.create(
+            customer=self.customer, staff=self.staff,
+            start_at=start, end_at=start + timedelta(hours=1),
+            status=Visit.Status.COMPLETED,
+        )
+        visit.services.add(self.service)
+        return visit
+
+    def test_salary_amount_is_paid(self):
+        self._make_salary_rule()
+        payouts = staff_compensation.generate_visit_payouts(self.visit)
+        self.assertEqual(len(payouts), 1)
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_usd, Decimal('500.00'))
+        self.assertEqual(payout.payout_cash_toman, Decimal('50000000.00'))
+        self.assertEqual(payout.payout_kind, StaffPayout.PayoutKind.MONTHLY_SALARY)
+        self.assertEqual(payout.salary_period, timezone.localtime(self.visit.start_at).date().replace(day=1))
+        self.assertEqual(payout.revenue_usd, Decimal('0'))
+        self.assertEqual(payout.profit_usd, Decimal('0'))
+        self.assertEqual(payout.status, StaffPayout.Status.PENDING)
+
+    def test_only_one_salary_row_per_month(self):
+        self._make_salary_rule()
+        first = staff_compensation.generate_visit_payouts(self.visit)
+        second = self._make_visit()
+        repeated = staff_compensation.generate_visit_payouts(second)
+        self.assertEqual(StaffPayout.objects.count(), 1)
+        self.assertEqual(repeated[0].pk, first[0].pk)
+
+    def test_recompleting_same_visit_does_not_duplicate_salary_row(self):
+        self._make_salary_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        staff_compensation.generate_visit_payouts(self.visit)
+        self.assertEqual(StaffPayout.objects.count(), 1)
+
+    def test_next_month_creates_a_new_salary_row(self):
+        self._make_salary_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        next_month_visit = self._make_visit(at=timezone.now() + timedelta(days=40))
+        payouts = staff_compensation.generate_visit_payouts(next_month_visit)
+        self.assertEqual(len(payouts), 1)
+        self.assertEqual(StaffPayout.objects.count(), 2)
+        periods = set(StaffPayout.objects.values_list('salary_period', flat=True))
+        self.assertEqual(len(periods), 2)
+
+    def test_toman_amount_converts_to_usd(self):
+        self._make_salary_rule(fixed_amount_usd=None, fixed_amount_toman=Decimal('2500000.00'))
+        staff_compensation.generate_visit_payouts(self.visit)
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_toman, Decimal('2500000.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('25.00'))
+
+    def test_pending_row_tracks_rule_amount_change(self):
+        self._make_salary_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        StaffCompensationRule.objects.filter(role=StaffCompensationRule.Role.DOCTOR).update(
+            fixed_amount_usd=Decimal('600.00'),
+        )
+        staff_compensation.generate_visit_payouts(self._make_visit())
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_usd, Decimal('600.00'))
+        self.assertEqual(payout.status, StaffPayout.Status.PENDING)
+
+    def test_approved_row_is_not_reprice(self):
+        self._make_salary_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        StaffPayout.objects.update(status=StaffPayout.Status.PAID, payout_cash_usd=Decimal('500.00'))
+        StaffCompensationRule.objects.filter(role=StaffCompensationRule.Role.DOCTOR).update(
+            fixed_amount_usd=Decimal('600.00'),
+        )
+        staff_compensation.generate_visit_payouts(self._make_visit())
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_usd, Decimal('500.00'))
+        self.assertEqual(payout.status, StaffPayout.Status.PAID)
+        self.assertEqual(StaffPayout.objects.count(), 1)
+
+    def test_salary_with_product_pays_products_once_per_month(self):
+        self._make_salary_rule(
+            payout_type=StaffCompensationRule.PayoutType.PRODUCT,
+            product=self.product, product_qty=Decimal('2'),
+        )
+        staff_compensation.generate_visit_payouts(self.visit)
+        staff_compensation.generate_visit_payouts(self._make_visit())
+
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_usd, Decimal('500.00'))
+        self.assertEqual(payout.payout_product_value_usd, Decimal('50.00'))
+        self.assertEqual(ProductUsage.objects.filter(is_commission=True).count(), 1)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.count, 8)
+
+
+class MultiProductPayoutTests(CompensationFixtureMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.other_product = Product.objects.create(
+            name='Botox', sku='BTX-1', unit_price=Decimal('50'),
+            cost_usd=Decimal('10.00'), count=5,
+        )
+
+    def _multi_product_rule(self, **overrides):
+        rule = make_rule(
+            payout_type=StaffCompensationRule.PayoutType.HYBRID,
+            **overrides,
+        )
+        StaffCompensationRuleProduct.objects.create(rule=rule, product=self.product, quantity=Decimal('2'))
+        StaffCompensationRuleProduct.objects.create(rule=rule, product=self.other_product, quantity=Decimal('3'))
+        return rule
+
+    def test_payout_covers_every_product_line(self):
+        self._multi_product_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
+        self.assertEqual(payout.payout_product_value_usd, Decimal('80.00'))
+        self.assertEqual(payout.payout_product_value_toman, Decimal('8000000.00'))
+        lines = list(payout.product_lines.all())
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(
+            {(line.product_id, line.quantity) for line in lines},
+            {(self.product.pk, Decimal('2')), (self.other_product.pk, Decimal('3'))},
+        )
+
+    def test_stock_is_decremented_per_line(self):
+        self._multi_product_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+
+        usages = ProductUsage.objects.filter(is_commission=True)
+        self.assertEqual(usages.count(), 2)
+        self.product.refresh_from_db()
+        self.other_product.refresh_from_db()
+        self.assertEqual(self.product.count, 8)
+        self.assertEqual(self.other_product.count, 2)
+
+    def test_regenerating_does_not_duplicate_lines_or_usage(self):
+        self._multi_product_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        staff_compensation.generate_visit_payouts(self.visit)
+
+        payout = StaffPayout.objects.get()
+        self.assertEqual(payout.product_lines.count(), 2)
+        self.assertEqual(ProductUsage.objects.filter(is_commission=True).count(), 2)
+
+    def test_detail_report_includes_product_lines(self):
+        self._multi_product_rule()
+        staff_compensation.generate_visit_payouts(self.visit)
+        rows = staff_compensation.staff_payout_detail()
+        self.assertEqual(len(rows), 1)
+        lines = rows[0]['payout_products']
+        self.assertEqual(len(lines), 2)
+        self.assertEqual({line['product_name'] for line in lines}, {'Filler', 'Botox'})
+
+
+class StaffCompensationRuleProductsAPITests(CompensationFixtureMixin, TestCase):
+    URL = '/api/finance/staff-compensation-rules/'
+
+    def setUp(self):
+        super().setUp()
+        self.admin = admin_client()
+        self.product_a = Product.objects.create(
+            name='Filler', sku='FIL-2', unit_price=Decimal('100'),
+            cost_usd=Decimal('25.00'), count=10,
+        )
+        self.product_b = Product.objects.create(
+            name='Botox', sku='BTX-2', unit_price=Decimal('50'),
+            cost_usd=Decimal('10.00'), count=10,
+        )
+
+    def _payload(self, **extra):
+        payload = {
+            'role': StaffCompensationRule.Role.DOCTOR,
+            'payout_type': StaffCompensationRule.PayoutType.HYBRID,
+            'calculation_type': StaffCompensationRule.CalculationType.FIXED_PER_SESSION,
+            'fixed_amount_usd': '40.00',
+        }
+        payload.update(extra)
+        return payload
+
+    def test_create_with_product_objects(self):
+        response = self.admin.post(self.URL, self._payload(products=[
+            {'product': self.product_a.id, 'quantity': '2'},
+            {'product': self.product_b.id, 'quantity': '3'},
+        ]), format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        rule = StaffCompensationRule.objects.get()
+        self.assertEqual(rule.product_lines.count(), 2)
+        self.assertEqual(rule.product_id, self.product_a.id)
+        self.assertEqual(rule.product_qty, Decimal('2'))
+        self.assertEqual(len(response.data['products']), 2)
+        self.assertEqual(response.data['products'][0]['product_name'], 'Filler')
+
+    def test_create_with_bare_product_ids(self):
+        response = self.admin.post(self.URL, self._payload(products=[
+            self.product_a.id, self.product_b.id,
+        ]), format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        rule = StaffCompensationRule.objects.get()
+        self.assertEqual(rule.product_lines.count(), 2)
+        self.assertEqual(
+            list(rule.product_lines.values_list('quantity', flat=True)),
+            [Decimal('1'), Decimal('1')],
+        )
+
+    def test_create_with_legacy_product_fields(self):
+        response = self.admin.post(self.URL, self._payload(
+            product=self.product_a.id, product_qty='3',
+        ), format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        rule = StaffCompensationRule.objects.get()
+        self.assertEqual(rule.product_lines.count(), 1)
+        self.assertEqual(rule.product_lines.get().quantity, Decimal('3'))
+        self.assertEqual(len(response.data['products']), 1)
+
+    def test_update_replaces_product_lines(self):
+        created = self.admin.post(self.URL, self._payload(products=[
+            {'product': self.product_a.id, 'quantity': '2'},
+            {'product': self.product_b.id, 'quantity': '3'},
+        ]), format='json')
+        rule_id = created.data['id']
+
+        response = self.admin.patch(
+            f'{self.URL}{rule_id}/',
+            {'products': [{'product': self.product_b.id, 'quantity': '5'}]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        rule = StaffCompensationRule.objects.get(pk=rule_id)
+        self.assertEqual(rule.product_lines.count(), 1)
+        self.assertEqual(rule.product_lines.get().product_id, self.product_b.id)
+        self.assertEqual(rule.product_lines.get().quantity, Decimal('5'))
+        self.assertEqual(rule.product_id, self.product_b.id)
+
+    def test_duplicate_products_are_rejected(self):
+        response = self.admin.post(self.URL, self._payload(products=[
+            {'product': self.product_a.id, 'quantity': '1'},
+            self.product_a.id,
+        ]), format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(StaffCompensationRule.objects.count(), 0)
+
+    def test_zero_quantity_is_rejected(self):
+        response = self.admin.post(self.URL, self._payload(products=[
+            {'product': self.product_a.id, 'quantity': '0'},
+        ]), format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(StaffCompensationRule.objects.count(), 0)
+
+    def test_payout_list_exposes_product_lines(self):
+        StaffCompensationRuleProduct.objects.create(
+            rule=make_rule(payout_type=StaffCompensationRule.PayoutType.HYBRID),
+            product=self.product_a, quantity=Decimal('2'),
+        )
+        staff_compensation.generate_visit_payouts(self.visit)
+
+        response = self.admin.get('/api/finance/staff-payouts/')
+        self.assertEqual(response.status_code, 200)
+        row = response.data['results'][0]
+        self.assertEqual(len(row['payout_products']), 1)
+        self.assertEqual(row['payout_products'][0]['product_name'], 'Filler')
+        self.assertEqual(row['payout_kind'], StaffPayout.PayoutKind.SESSION)

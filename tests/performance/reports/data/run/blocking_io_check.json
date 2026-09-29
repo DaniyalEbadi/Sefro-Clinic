@@ -1,6 +1,6 @@
 {
   "/api/dashboard/": {
-    "time_s": 0.01,
+    "time_s": 0.009,
     "status": 401
   },
   "/api/reports/": {

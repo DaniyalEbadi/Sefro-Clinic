@@ -20,7 +20,9 @@ from .models import (
     Sale,
     ServiceItem,
     StaffCompensationRule,
+    StaffCompensationRuleProduct,
     StaffPayout,
+    StaffPayoutProduct,
     Wallet,
     WalletRewardRule,
     WalletTransaction,
@@ -339,17 +341,132 @@ class RefundSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True, max_length=500)
 
 
+class StaffCompensationRuleProductSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StaffCompensationRuleProduct
+        fields = ['id', 'product', 'product_name', 'quantity']
+        read_only_fields = ['id']
+
+    def get_product_name(self, obj):
+        return str(obj.product) if obj.product else ''
+
+    def validate_quantity(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError('Quantity must be greater than zero.')
+        return value
+
+
+class RuleProductLineField(serializers.Field):
+    """One rule product line: a bare product id, or {'product': id, 'quantity': qty}."""
+
+    def to_internal_value(self, data):
+        if isinstance(data, bool):
+            raise serializers.ValidationError('Invalid product line.')
+        if isinstance(data, int) or (isinstance(data, str) and data.isdigit()):
+            data = {'product': int(data)}
+        if not isinstance(data, dict):
+            raise serializers.ValidationError(
+                'A product line must be a product id or an object with "product" and "quantity".'
+            )
+        serializer = StaffCompensationRuleProductSerializer(data=data, context=self.context)
+        serializer.is_valid(raise_exception=True)
+        return serializer.validated_data
+
+    def to_representation(self, value):
+        return StaffCompensationRuleProductSerializer(value, context=self.context).data
+
+
+class RuleProductsField(serializers.ListField):
+    """Writable list of rule product lines, readable straight off the reverse manager."""
+
+    def to_representation(self, data):
+        if hasattr(data, 'all'):
+            data = data.all()
+        return super().to_representation(data)
+
+
+def _sync_rule_products(rule, lines):
+    """Replace the rule's product lines and mirror the first line onto the
+    legacy product/product_qty columns."""
+    rule.product_lines.all().delete()
+    for line in lines:
+        StaffCompensationRuleProduct.objects.create(
+            rule=rule,
+            product=line['product'],
+            quantity=line.get('quantity') or Decimal('1'),
+        )
+    first = lines[0] if lines else None
+    rule.product = first['product'] if first else None
+    if first:
+        rule.product_qty = first.get('quantity') or Decimal('1')
+    rule.save(update_fields=['product', 'product_qty'])
+    return rule
+
+
 class StaffCompensationRuleSerializer(serializers.ModelSerializer):
+    products = RuleProductsField(
+        child=RuleProductLineField(),
+        source='product_lines',
+        required=False,
+        allow_empty=True,
+    )
+
     class Meta:
         model = StaffCompensationRule
         fields = [
             'id', 'role', 'payout_type', 'calculation_type',
             'percent_profit', 'fixed_amount_usd', 'fixed_amount_toman',
             'transport_usd', 'transport_toman',
-            'product', 'product_qty',
+            'product', 'product_qty', 'products',
             'is_active', 'created_at', 'updated_at',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def validate(self, attrs):
+        lines = attrs.get('product_lines')
+        if lines:
+            seen = set()
+            for line in lines:
+                product_id = line['product'].pk
+                if product_id in seen:
+                    raise serializers.ValidationError({'products': f'Duplicate product {product_id} in rule products.'})
+                seen.add(product_id)
+        return attrs
+
+    def create(self, validated_data):
+        lines = validated_data.pop('product_lines', None)
+        if lines is None:
+            legacy_product = validated_data.get('product')
+            if legacy_product is not None:
+                lines = [{'product': legacy_product, 'quantity': validated_data.get('product_qty') or Decimal('1')}]
+            else:
+                lines = []
+        rule = StaffCompensationRule.objects.create(**validated_data)
+        return _sync_rule_products(rule, lines)
+
+    def update(self, instance, validated_data):
+        lines = validated_data.pop('product_lines', None)
+        legacy_touched = 'product' in validated_data or 'product_qty' in validated_data
+        instance = super().update(instance, validated_data)
+        if lines is None and legacy_touched:
+            lines = [{'product': instance.product, 'quantity': instance.product_qty}] if instance.product_id else []
+        if lines is not None:
+            instance = _sync_rule_products(instance, lines)
+        return instance
+
+
+class StaffPayoutProductSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StaffPayoutProduct
+        fields = ['id', 'product', 'product_name', 'quantity', 'value_usd', 'value_toman']
+        read_only_fields = fields
+
+    def get_product_name(self, obj):
+        return str(obj.product) if obj.product else ''
 
 
 class StaffPayoutSerializer(serializers.ModelSerializer):
@@ -358,6 +475,7 @@ class StaffPayoutSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     total_payout_usd = serializers.SerializerMethodField()
     total_payout_toman = serializers.SerializerMethodField()
+    payout_products = StaffPayoutProductSerializer(many=True, read_only=True, source='product_lines')
 
     class Meta:
         model = StaffPayout
@@ -369,6 +487,7 @@ class StaffPayoutSerializer(serializers.ModelSerializer):
             'payout_cash_usd', 'payout_cash_toman',
             'payout_product', 'product_name', 'payout_product_qty',
             'payout_product_value_usd', 'payout_product_value_toman',
+            'payout_products', 'payout_kind', 'salary_period',
             'total_payout_usd', 'total_payout_toman',
             'exchange_rate', 'status', 'payout_mode', 'notes',
             'approved_by', 'approved_at', 'paid_at',
