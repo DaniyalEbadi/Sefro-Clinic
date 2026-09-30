@@ -248,7 +248,7 @@ class ProductUsageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductUsage
         fields = [
-            'id', 'product', 'visit', 'service', 'package_sale',
+            'id', 'product', 'visit', 'service', 'package_sale', 'welcome_pack_usage',
             'quantity', 'unit_cost_usd_snapshot', 'total_cost_usd_snapshot',
             'exchange_rate_snapshot', 'is_commission', 'created_at',
         ]

@@ -189,7 +189,7 @@ class ExpenseWorkflowIntegrationTests(TestCase):
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test-expense')
         self.admin = admin_client()
         self.emp = employee_client(username='emp_expense')
-        self.cat = ExpenseCategory.objects.create(name='Rent')
+        self.cat = ExpenseCategory.objects.get_or_create(name='Rent')[0]
 
     def test_full_expense_state_machine_via_api_and_self_approval_forbidden(self):
         # employee creates
@@ -335,7 +335,7 @@ class ReportingIntegrationTests(TestCase):
         record_product_usage(product=self.product, quantity=Decimal('2'), package_sale=sale, at=timezone.now(), rate=Decimal('100000'))
         from finance.models import ExpenseCategory
         from finance.services import expenses as expense_svc
-        cat = ExpenseCategory.objects.create(name='Rent-Rep')
+        cat = ExpenseCategory.objects.get_or_create(name='Rent-Rep')[0]
         # Need distinct users for expense approval
         from tests.helpers import make_employee
         creator = make_admin()

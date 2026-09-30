@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal
 from typing import Optional
 
 from django.db import transaction
@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from ..models import WelcomePack, WelcomePackItem, WelcomePackUsage
 from .exchange_rates import convert_usd_to_toman, get_current_usd_to_toman_rate
-from .inventory import current_cost
+from .inventory import InventoryError, current_cost, record_product_usage
 
 
 def calculate_welcome_pack_cost_usd(welcome_pack: WelcomePack, at=None) -> Decimal:
@@ -41,6 +41,19 @@ class WelcomePackError(Exception):
     pass
 
 
+# Product.count is Decimal(max_digits=12, decimal_places=3); stock cannot hold
+# finer precision, so a required amount is rounded *up* to that quantum to make
+# sure a pack never decrements less than it actually consumes.
+STOCK_QUANTUM = Decimal('0.001')
+
+
+def _required_stock(item_quantity: Decimal, quantity: Decimal) -> Decimal:
+    """Stock units consumed by issuing ``quantity`` packs holding ``item_quantity``."""
+    return (Decimal(item_quantity) * Decimal(quantity)).quantize(
+        STOCK_QUANTUM, rounding=ROUND_UP,
+    )
+
+
 def _valid_quantity(value) -> Decimal:
     try:
         quantity = Decimal(str(value))
@@ -69,6 +82,12 @@ def issue_welcome_pack(
     This is the ONLY operation that creates a financial impact for Welcome Packs.
     Creating/editing a WelcomePack definition does NOT affect finances.
 
+    Issuing a pack consumes real inventory: every item is drawn down by
+    ``item.quantity * quantity`` and a ``ProductUsage`` row is recorded so the
+    warehouse consumption log shows pack usage. Stock is short-falling checked
+    under a row lock and the whole issuance (cost snapshot + stock writes +
+    usage rows) is one transaction, so a shortage leaves nothing behind.
+
     Returns a WelcomePackUsage snapshot with costs frozen at issuance time.
     """
     if not welcome_pack.is_active:
@@ -96,6 +115,24 @@ def issue_welcome_pack(
         total_cost_toman_snapshot=total_cost_toman,
         issued_at=at,
     )
+
+    # Draw down real stock. Items are walked in product order so concurrent
+    # issuances of packs sharing products always lock in the same sequence and
+    # cannot deadlock. Any shortage raises and rolls the issuance back.
+    items = welcome_pack.items.select_related('product').order_by('product_id')
+    for item in items:
+        needed = _required_stock(item.quantity, quantity)
+        try:
+            record_product_usage(
+                product=item.product,
+                quantity=needed,
+                visit=visit,
+                welcome_pack_usage=usage,
+                at=at,
+                decrement_stock=True,
+            )
+        except InventoryError as exc:
+            raise WelcomePackError(str(exc)) from exc
     return usage
 
 

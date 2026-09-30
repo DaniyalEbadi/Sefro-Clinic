@@ -157,7 +157,7 @@ class SaleTests(TestCase):
 
 class ExpenseTests(TestCase):
     def test_expense_creation(self):
-        category = ExpenseCategory.objects.create(name='Supplies')
+        category = ExpenseCategory.objects.get_or_create(name='Supplies')[0]
         expense = Expense.objects.create(
             category=category, amount_usd=Decimal('50'), vendor='Test Vendor',
             expense_date=timezone.now().date(), status=Expense.Status.DRAFT

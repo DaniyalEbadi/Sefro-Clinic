@@ -128,6 +128,7 @@ def record_product_usage(
     visit=None,
     service=None,
     package_sale=None,
+    welcome_pack_usage=None,
     at: Optional[object] = None,
     rate: Optional[Decimal] = None,
     is_commission: bool = False,
@@ -153,6 +154,7 @@ def record_product_usage(
         visit=visit,
         service=service,
         package_sale=package_sale,
+        welcome_pack_usage=welcome_pack_usage,
         quantity=quantity,
         unit_cost_usd_snapshot=unit_cost,
         total_cost_usd_snapshot=total_cost,
@@ -160,6 +162,7 @@ def record_product_usage(
         is_commission=is_commission,
     )
     return usage
+
 
 
 def total_product_cost_usd(usages) -> Decimal:

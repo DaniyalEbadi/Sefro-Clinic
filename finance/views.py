@@ -194,7 +194,44 @@ class ProductCostHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsEmployeeOrAdmin]
 
 
-@extend_schema(tags=['Finance'])
+DATE_PARAMS = [
+    OpenApiParameter('date_from', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                     description='Jalali (Shamsi) date YYYY-MM-DD, inclusive.'),
+    OpenApiParameter('date_to', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                     description='Jalali (Shamsi) date YYYY-MM-DD, inclusive.'),
+    OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                     description='Gregorian inclusive start (same convention as the report views).'),
+    OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY,
+                     description='Gregorian inclusive end (same convention as the report views).'),
+]
+
+
+def _apply_date_range(qs, request, field='created_at'):
+    """Narrow ``qs`` by the period the caller asked for.
+
+    ``date_from``/``date_to`` are Jalali ``YYYY-MM-DD`` strings (the convention
+    the dashboard reports and the PWA already use), and are inclusive.
+    ``start_date``/``end_date`` are Gregorian and keep working as aliases so
+    callers of the report endpoints are not surprised. Omitting every parameter
+    leaves the queryset untouched, so unfiltered list calls are unaffected.
+    """
+    from Sefro_Clinic.fields import shamsi_to_greg_date
+
+    params = request.query_params
+    date_from = params.get('date_from')
+    date_to = params.get('date_to')
+    if date_from:
+        qs = qs.filter(**{f'{field}__date__gte': shamsi_to_greg_date(date_from)})
+    if date_to:
+        qs = qs.filter(**{f'{field}__date__lte': shamsi_to_greg_date(date_to)})
+    if params.get('start_date'):
+        qs = qs.filter(**{f'{field}__date__gte': params['start_date']})
+    if params.get('end_date'):
+        qs = qs.filter(**{f'{field}__date__lte': params['end_date']})
+    return qs
+
+
+@extend_schema(tags=['Finance'], parameters=DATE_PARAMS)
 class ProductUsageViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ProductUsage.objects.all()
     serializer_class = ProductUsageSerializer
@@ -211,7 +248,8 @@ class ProductUsageViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(product_id=params['product'])
         if params.get('package_sale'):
             qs = qs.filter(package_sale_id=params['package_sale'])
-        return qs.select_related('product', 'visit', 'service', 'package_sale')
+        qs = _apply_date_range(qs, self.request)
+        return qs.select_related('product', 'visit', 'service', 'package_sale', 'welcome_pack_usage')
 
 
 @extend_schema(tags=['Wallet'])
@@ -357,6 +395,36 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         except expense_svc.ExpenseError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(ExpenseSerializer(expense, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
+
+    def _update(self, request, *args, **kwargs):
+        """Update a claim, re-pricing it when the USD amount changes.
+
+        ``amount_toman`` and ``exchange_rate_snapshot`` are read-only, so
+        without this a PATCH of ``amount_usd`` would leave the claim priced at
+        the old rate and silently corrupt the expense reports.
+        """
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        new_amount_usd = data.get('amount_usd')
+        reprice = new_amount_usd is not None and Decimal(new_amount_usd) != instance.amount_usd
+        expense = serializer.save()
+        if reprice:
+            try:
+                expense = expense_svc.reprice_expense(expense, new_amount_usd)
+            except Exception as exc:  # noqa: BLE001 - surface as 400, never 500
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(ExpenseSerializer(expense, context=self.get_serializer_context()).data)
+
+    def update(self, request, *args, **kwargs):
+        kwargs['partial'] = False
+        return self._update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self._update(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'], permission_classes=[IsEmployeeOrAdmin])
     def submit(self, request, pk=None):
@@ -712,7 +780,7 @@ class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
     ordering = ['role']
 
 
-@extend_schema(tags=['Staff Compensation'])
+@extend_schema(tags=['Staff Compensation'], parameters=DATE_PARAMS)
 class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = StaffPayout.objects.select_related('staff', 'visit', 'service', 'payout_product').prefetch_related(
         'product_lines__product',
@@ -734,7 +802,7 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(status=params['status'])
         if params.get('visit'):
             qs = qs.filter(visit_id=params['visit'])
-        return qs
+        return _apply_date_range(qs, self.request)
 
     @extend_schema(
         parameters=[
@@ -836,31 +904,35 @@ class ProfitByStaffView(APIView):
 
         for visit in visits:
             if not visit.staff:
+                # No staff assigned: nothing can be attributed. Excluded here
+                # and counted by the `coverage` action.
                 continue
             staff_id = visit.staff.id
             staff_name = f"{visit.staff.first_name} {visit.staff.last_name}".strip() or visit.staff.username
 
+            if staff_id not in staff_data:
+                staff_data[staff_id] = {
+                    'staff_id': staff_id,
+                    'staff_name': staff_name,
+                    'revenue_usd': Decimal('0'),
+                    'revenue_toman': Decimal('0'),
+                    'product_cost_usd': Decimal('0'),
+                    'product_cost_toman': Decimal('0'),
+                    'profit_usd': Decimal('0'),
+                    'profit_toman': Decimal('0'),
+                    'visit_count': 0,
+                }
+            # visit_count counts visits, not service lines: increment once per
+            # visit, outside the per-service loop.
+            staff_data[staff_id]['visit_count'] += 1
             for svc in visit.services.all():
                 profit = calculate_service_profit(svc, rate)
-                if staff_id not in staff_data:
-                    staff_data[staff_id] = {
-                        'staff_id': staff_id,
-                        'staff_name': staff_name,
-                        'revenue_usd': Decimal('0'),
-                        'revenue_toman': Decimal('0'),
-                        'product_cost_usd': Decimal('0'),
-                        'product_cost_toman': Decimal('0'),
-                        'profit_usd': Decimal('0'),
-                        'profit_toman': Decimal('0'),
-                        'visit_count': 0,
-                    }
                 staff_data[staff_id]['revenue_usd'] += profit['revenue_usd']
                 staff_data[staff_id]['revenue_toman'] += profit['revenue_toman']
                 staff_data[staff_id]['product_cost_usd'] += profit['product_cost_usd']
                 staff_data[staff_id]['product_cost_toman'] += profit['product_cost_toman']
                 staff_data[staff_id]['profit_usd'] += profit['profit_usd']
                 staff_data[staff_id]['profit_toman'] += profit['profit_toman']
-                staff_data[staff_id]['visit_count'] += 1
 
         for data in staff_data.values():
             data['revenue_usd'] = str(data['revenue_usd'].quantize(Decimal('0.01')))
@@ -869,8 +941,52 @@ class ProfitByStaffView(APIView):
             data['product_cost_toman'] = str(data['product_cost_toman'].quantize(Decimal('0.01')))
             data['profit_usd'] = str(data['profit_usd'].quantize(Decimal('0.01')))
             data['profit_toman'] = str(data['profit_toman'].quantize(Decimal('0.01')))
+            # Revenue here is list price of services delivered, not collected
+            # money. The key is kept for backward compatibility; this label lets
+            # the UI present it as potential revenue.
+            data['revenue_basis'] = reporting.REVENUE_BASIS_LIST_PRICE
+            data['welcome_pack_cost_basis'] = reporting.WELCOME_PACK_COST_BASIS_EXCLUDED
 
-        return Response(_stringify(sorted(staff_data.values(), key=lambda x: x['staff_name'])))
+        rows = sorted(staff_data.values(), key=lambda x: x['staff_name'])
+        # The response stays a bare list of per-staff rows (backward compatible);
+        # assignment coverage lives in ProfitByStaffCoverageView.
+        return Response(_stringify(rows))
+
+
+@extend_schema(tags=['Reports'])
+class ProfitByStaffCoverageView(APIView):
+    """How many completed visits could be attributed to a staff member.
+
+    Visits with ``staff_id = NULL`` cannot appear in ``profit-by-staff``, so
+    without this the report looks healthy while silently dropping them.
+    """
+
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+        ],
+    )
+    def get(self, request):
+        from customers.models import Visit
+
+        start, end = _resolve_range(request)
+        completed = Visit.objects.filter(
+            start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
+        )
+        total_visits = completed.count()
+        unassigned_visits = completed.filter(staff__isnull=True).count()
+        return Response({
+            'period': {'start': start, 'end': end},
+            'total_visits': total_visits,
+            'visits_with_staff': total_visits - unassigned_visits,
+            'unassigned_visits': unassigned_visits,
+            'revenue_basis': reporting.REVENUE_BASIS_LIST_PRICE,
+            'welcome_pack_cost_basis': reporting.WELCOME_PACK_COST_BASIS_EXCLUDED,
+        })
 
 
 @extend_schema(tags=['Reports'])
@@ -891,17 +1007,29 @@ class DashboardView(APIView):
         from finance.models import Expense, Wallet, WelcomePackUsage
 
         # Sales Summary
-        sales = Sale.objects.filter(created_at__gte=start, created_at__lte=end)
+        # Only revenue-bearing sales count (pending/cancelled are not money);
+        # refunded sales stay in with their negative amount.
+        sales = Sale.objects.filter(
+            created_at__gte=start, created_at__lte=end,
+            status__in=reporting.REVENUE_STATUSES,
+        )
         revenue_usd = sales.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
         revenue_toman = sales.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
         paid_sales = sales.filter(status=Sale.Status.PAID)
         sale_count = paid_sales.count()
+        # Same revenue-bearing set as the revenue itself, so the average ticket
+        # can never disagree with the revenue above.
+        revenue_sale_count = sales.count()
 
         # Product Costs
+        # Pack-linked usage rows are excluded: pack cost is taken from the
+        # WelcomePackUsage snapshots below, so counting both would charge the
+        # same inventory twice.
         usages = ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
-        product_cost_usd = usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
+        cost_usages = usages.filter(welcome_pack_usage__isnull=True)
+        product_cost_usd = cost_usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
         product_cost_toman = Decimal('0')
-        for u in usages.only('total_cost_usd_snapshot', 'exchange_rate_snapshot'):
+        for u in cost_usages.only('total_cost_usd_snapshot', 'exchange_rate_snapshot'):
             product_cost_toman += (u.total_cost_usd_snapshot or Decimal('0')) * (u.exchange_rate_snapshot or get_rate())
         product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
 
@@ -953,13 +1081,11 @@ class DashboardView(APIView):
         new_customers = Customer.objects.filter(
             created_at__gte=start, created_at__lte=end,
         ).count()
-        avg_ticket = (revenue_usd / sale_count).quantize(Decimal('0.01')) if sale_count else Decimal('0')
+        avg_ticket = (revenue_usd / revenue_sale_count).quantize(Decimal('0.01')) if revenue_sale_count else Decimal('0')
 
         # Payment Method Breakdown
         comps = PaymentComponent.objects.filter(sale__in=sales)
-        method_breakdown = {}
-        for method in (PaymentComponent.Method.CASH, PaymentComponent.Method.CARD, PaymentComponent.Method.WALLET):
-            method_breakdown[method] = comps.filter(method=method).aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
+        method_breakdown, method_breakdown_by_method = reporting.payment_method_breakdown(comps)
 
         return Response(_stringify({
             'period': {'start': start, 'end': end},
@@ -981,6 +1107,7 @@ class DashboardView(APIView):
                 'sale_count': sale_count,
                 'avg_ticket_usd': str(avg_ticket),
                 'payment_methods': {k: str(v) for k, v in method_breakdown.items()},
+                'payment_methods_by_method': {k: str(v) for k, v in method_breakdown_by_method.items()},
             },
             'wallet_summary': {
                 'total_liability_usd': str(wallet_liability),

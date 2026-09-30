@@ -342,6 +342,10 @@ class ProductUsage(models.Model):
     package_sale = models.ForeignKey(
         'finance.Sale', on_delete=models.SET_NULL, null=True, blank=True, related_name='product_usages',
     )
+    welcome_pack_usage = models.ForeignKey(
+        'finance.WelcomePackUsage', on_delete=models.CASCADE, null=True, blank=True, related_name='product_usages',
+        help_text='Set when the consumption was caused by issuing a free welcome pack.',
+    )
     quantity = models.DecimalField(
         max_digits=10, decimal_places=3, default=Decimal('1'),
         validators=[MinValueValidator(Decimal('0'))],

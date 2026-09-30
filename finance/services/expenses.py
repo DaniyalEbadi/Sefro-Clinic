@@ -32,6 +32,24 @@ def create_expense(*, created_by, category, amount_usd, expense_date, vendor='',
     return expense
 
 
+@transaction.atomic
+def reprice_expense(expense: Expense, amount_usd, rate=None):
+    """Re-derive the money columns after ``amount_usd`` changes.
+
+    Mirrors ``create_expense``: the toman figure and the rate snapshot are
+    never edited by hand, so a claim whose USD amount is changed must be
+    re-priced at the current rate or the ledger keeps a stale conversion and
+    every expense report drifts.
+    """
+    amount_usd = Decimal(amount_usd).quantize(Decimal('0.01'))
+    rate = rate if rate is not None else get_rate('USD', 'TOMAN')
+    expense.amount_usd = amount_usd
+    expense.exchange_rate_snapshot = rate
+    expense.amount_toman = to_toman(amount_usd, rate)
+    expense.save(update_fields=['amount_usd', 'exchange_rate_snapshot', 'amount_toman', 'updated_at'])
+    return expense
+
+
 def _require_status(expense: Expense, *statuses):
     if expense.status not in statuses:
         raise ExpenseError(f'Cannot transition expense from {expense.status}.')

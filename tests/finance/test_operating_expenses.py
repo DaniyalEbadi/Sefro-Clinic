@@ -396,7 +396,7 @@ class OperatingExpenseAuditAndIsolationTests(OpexBase):
 
     def test_existing_expense_workflow_regression(self):
         """The employee expense-claim domain must behave exactly as before."""
-        category = ExpenseCategory.objects.create(name='Supplies')
+        category = ExpenseCategory.objects.get_or_create(name='Supplies')[0]
         client = employee_client()
         created = client.post('/api/finance/expenses/', {
             'category': category.id,

@@ -383,7 +383,7 @@ class ReportingServiceTests(TestCase):
         record_product_purchase(product=self.product, quantity=Decimal('10'), unit_cost_usd=Decimal('10'), purchase_date=timezone.now().date())
         sale = self._seed_sale(Decimal('100'))
         record_product_usage(product=self.product, quantity=Decimal('2'), visit=None, package_sale=sale, at=timezone.now(), rate=Decimal('100000'))
-        cat = ExpenseCategory.objects.create(name='Rent')
+        cat = ExpenseCategory.objects.get_or_create(name='Rent')[0]
         creator = make_admin()
         approver = make_employee()
         exp = expense_svc.create_expense(
@@ -446,7 +446,7 @@ class ExpenseServiceTests(TestCase):
         self.employee = make_employee()
 
     def test_full_flow_and_self_approval_blocked(self):
-        cat = ExpenseCategory.objects.create(name='Supplies')
+        cat = ExpenseCategory.objects.get_or_create(name='Supplies')[0]
         exp = expense_svc.create_expense(
             created_by=self.employee, category=cat, amount_usd=Decimal('200'),
             expense_date=timezone.now().date(), vendor='Shop',
@@ -462,7 +462,7 @@ class ExpenseServiceTests(TestCase):
         self.assertEqual(Expense.objects.get(pk=exp.pk).status, expense_svc.Status.PAID)
 
     def test_employee_cannot_approve_via_api(self):
-        cat = ExpenseCategory.objects.create(name='Utilities')
+        cat = ExpenseCategory.objects.get_or_create(name='Utilities')[0]
         exp = expense_svc.create_expense(
             created_by=self.employee, category=cat, amount_usd=Decimal('50'), expense_date=timezone.now().date(),
         )

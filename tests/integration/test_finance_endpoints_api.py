@@ -166,7 +166,10 @@ class ExpenseCategoryAPITests(TestCase):
     def test_admin_can_create_and_list(self):
         created = self.client.post(self.URL, {'name': 'Rent', 'is_active': True}, format='json')
         self.assertEqual(created.status_code, 201, created.data)
-        self.assertEqual(self.client.get(self.URL).data['count'], 1)
+        # Default claim categories ship with a data migration, so assert the
+        # new row is listed rather than that it is the only one.
+        listing = self.client.get(self.URL).data
+        self.assertIn(created.data['id'], [row['id'] for row in listing['results']])
 
     def test_employee_cannot_create(self):
         response = employee_client().post(self.URL, {'name': 'Marketing'}, format='json')
