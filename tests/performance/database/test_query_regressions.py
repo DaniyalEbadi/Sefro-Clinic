@@ -17,6 +17,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from Sefro_Clinic.fields import greg_to_shamsi_date
 from tests.performance.conftest import BUDGETS, QueryProbe
 from tests.performance.factories import build_clinic_dataset, create_products
 
@@ -212,7 +213,9 @@ class VisitOverlapGuardPerformance(TestCase):
         payload = {
             'customer': customer.id,
             'services': [1],
-            'date': start.date().isoformat(),
+            # reserve expects a Shamsi (Jalali) date; sending the Gregorian
+            # isoformat would now be rejected as an invalid Shamsi year.
+            'date': greg_to_shamsi_date(start.date()),
             'time': '10:00',
         }
         started = timezone.now()

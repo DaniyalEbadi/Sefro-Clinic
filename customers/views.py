@@ -4,7 +4,18 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 import jdatetime
-from django.db.models import Avg, Count, OuterRef, Prefetch, Subquery, Sum
+from django.db.models import (
+    Avg,
+    Count,
+    DecimalField,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, status, viewsets
@@ -13,7 +24,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminOrEmployee, IsAdminOrReadOnly
-from Sefro_Clinic.fields import shamsi_to_greg_date
+from Sefro_Clinic.fields import SHAMSI_DATE_FORMAT, shamsi_to_greg_date
 
 from .models import Customer, Payment, Service, ServiceCategory, Visit
 from .serializers import (
@@ -422,13 +433,47 @@ class CustomerViewSet(viewsets.ModelViewSet):
     ordering = ['first_name', 'last_name']
 
     def get_queryset(self):
+        # Aggregates are computed by independent correlated subqueries, one
+        # per relation. Annotating Count('visits') and Sum('payments__amount')
+        # in a single .annotate() call joins both relations in the same FROM
+        # clause, so a customer with 4 visits and 4 payments yields 4 x 4 = 16
+        # joined rows and both aggregates are inflated (num_visits = 16).
+        # Separate subqueries each see only their own relation, so neither can
+        # multiply the other, and the whole page still costs one SQL statement.
+        visit_count_qs = (
+            Visit.objects
+            .filter(customer=OuterRef('pk'))
+            .order_by()
+            .values('customer')
+            .annotate(n=Count('pk'))
+            .values('n')
+        )
+        payment_sum_qs = (
+            Payment.objects
+            .filter(customer=OuterRef('pk'))
+            .order_by()
+            .values('customer')
+            .annotate(t=Sum('amount'))
+            .values('t')
+        )
         last_visit_subquery = Subquery(
             Visit.objects.filter(customer=OuterRef('pk')).order_by('-start_at').values('start_at')[:1],
         )
         last_payment_qs = Payment.objects.filter(customer=OuterRef('pk')).order_by('-paid_at')
         return Customer.objects.annotate(
-            num_visits=Count('visits'),
-            sum_payments=Sum('payments__amount'),
+            num_visits=Coalesce(
+                Subquery(visit_count_qs, output_field=IntegerField()),
+                Value(0),
+                output_field=IntegerField(),
+            ),
+            sum_payments=Coalesce(
+                Subquery(
+                    payment_sum_qs,
+                    output_field=DecimalField(max_digits=14, decimal_places=2),
+                ),
+                Value(0),
+                output_field=DecimalField(max_digits=14, decimal_places=2),
+            ),
             last_visit_at=last_visit_subquery,
             last_payment_id=Subquery(last_payment_qs.values('id')[:1]),
             last_payment_amount=Subquery(last_payment_qs.values('amount')[:1]),
@@ -619,11 +664,26 @@ class VisitViewSet(viewsets.ModelViewSet):
         if not isinstance(time_str, str) or not re.fullmatch(r'\d{1,2}:\d{2}', time_str.strip()):
             return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Contract: `date` MUST be a Jalali (Shamsi) date in YYYY-MM-DD form
+        # (e.g. "1405-07-08"). A Gregorian value such as "2026-09-28" used to
+        # be accepted and reinterpreted as Jalali year 2647 — the corruption
+        # behind the legacy out-of-range Visits. It is now rejected with an
+        # explicit message instead of being silently converted.
+        if not shamsi_date_str:
+            return Response(
+                {'error': f'date is required and must be a Shamsi date ({SHAMSI_DATE_FORMAT}, e.g. 1405-07-08)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             greg_date = shamsi_to_greg_date(shamsi_date_str)
+        except serializers.ValidationError as exc:
+            detail = exc.detail[0] if isinstance(exc.detail, list) and exc.detail else exc.detail
+            return Response({'error': str(detail)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
             hour, minute = (int(part) for part in time_str.strip().split(':'))
             start_dt = timezone.make_aware(datetime.combine(greg_date, time(hour=hour, minute=minute)))
-        except (ValueError, TypeError, serializers.ValidationError):
+        except (ValueError, TypeError):
             return Response({'error': 'Invalid date or time format'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not isinstance(customer_id, int):

@@ -75,6 +75,18 @@ class ShamsiToGregTests(SimpleTestCase):
         gregorian = shamsi_to_greg_date('1403-12-30')
         self.assertIsNotNone(gregorian)
 
+    def test_gregorian_years_are_rejected_instead_of_reinterpreted(self):
+        # The historical corruption: "2026-09-28" parsed structurally as the
+        # Jalali date 2026-09-28 and converted to Gregorian 2647-12-19.
+        for bad in ['2026-09-28', '2025-06-01', '1990-05-15', '1500-01-01', '1299-01-01']:
+            with self.assertRaises(ValidationError) as ctx:
+                shamsi_to_greg_date(bad)
+            self.assertIn('Shamsi', str(ctx.exception))
+
+    def test_shamsi_year_window_boundaries(self):
+        self.assertIsNotNone(shamsi_to_greg_date('1300-01-01'))
+        self.assertIsNotNone(shamsi_to_greg_date('1499-06-31'))
+
 
 class ShamsiSerializerFieldTests(SimpleTestCase):
     def test_datetime_field_roundtrip(self):
