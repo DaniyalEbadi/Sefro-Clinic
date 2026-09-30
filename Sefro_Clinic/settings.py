@@ -145,6 +145,8 @@ X_FRAME_OPTIONS = 'DENY'
 # REFRESH_TOKEN_LIFETIME 7d is standard.
 ACCESS_TOKEN_LIFETIME = int(os.environ.get('JWT_ACCESS_TOKEN_LIFETIME', '900') or 900)
 REFRESH_TOKEN_LIFETIME = int(os.environ.get('JWT_REFRESH_TOKEN_LIFETIME', '604800') or 604800)
+# Clock-skew tolerance so a just-issued token is not rejected as expired.
+JWT_LEEWAY = int(os.environ.get('JWT_LEEWAY', '30') or 30)
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(seconds=ACCESS_TOKEN_LIFETIME),
@@ -153,6 +155,7 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': False,
     'AUTH_HEADER_TYPES': ('Bearer',),
+    'LEEWAY': timedelta(seconds=JWT_LEEWAY),
 }
 
 JWT_AUTH_COOKIE = 'access_token'

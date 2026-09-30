@@ -8,37 +8,37 @@
 
 | Endpoint | p50 (ms) | p95 (ms) | p99 (ms) | RPS | Errors |
 |----------|----------|----------|----------|-----|--------|
-| auth_login | 147.96 | 226.94 | 279.9 | - | - |
-| auth_me | 1.14 | 3.18 | 8.33 | 563.3 | 0.0 |
-| auth_refresh | 4.92 | 7.96 | 24.81 | - | - |
-| crud_customer_detail | 9.95 | 15.23 | 18.68 | 96.7 | 0.0 |
-| crud_customer_list | 45.16 | 54.02 | 59.79 | 21.8 | 0.0 |
-| crud_customer_search | 89.25 | 155.21 | 156.38 | 10.0 | 0.0 |
-| crud_payment_by_service | 100.05 | 286.46 | 352.13 | 8.0 | 0.0 |
-| crud_payment_list | 10.06 | 16.47 | 20.93 | 89.2 | 0.0 |
-| crud_service_list | 13.97 | 20.35 | 38.84 | 64.2 | 0.0 |
-| crud_visit_list | 29.08 | 71.96 | 106.41 | 26.1 | 0.0 |
-| dashboard | 13.3 | 43.12 | 78.3 | 41.8 | 0.0 |
-| finance_checkout | 19.22 | 62.11 | 62.11 | - | - |
-| finance_exchange_dollar | 4.04 | 5.85 | 13.75 | 207.7 | 0.0 |
-| finance_expense_list | 4.43 | 5.55 | 20.24 | 187.8 | 0.0 |
-| finance_financial_summary | 27.5 | 38.16 | 67.17 | 33.1 | 0.0 |
-| finance_operating_expense_category_list | 5.73 | 11.08 | 21.75 | 147.0 | 0.0 |
-| finance_operating_expense_list | 4.92 | 11.79 | 20.91 | 155.4 | 0.0 |
-| finance_operating_expense_summary | 8.88 | 13.05 | 21.98 | 101.1 | 0.0 |
-| finance_wallet_list | 5.98 | 13.79 | 15.06 | 141.0 | 0.0 |
-| inventory_product_create | 5.93 | 7.89 | 16.78 | - | - |
-| inventory_product_detail | 3.17 | 4.81 | 9.92 | 265.1 | 0.0 |
-| inventory_product_list | 7.55 | 10.43 | 14.42 | 122.8 | 0.0 |
+| auth_login | 141.45 | 164.01 | 245.47 | - | - |
+| auth_me | 1.96 | 4.51 | 9.98 | 388.0 | 0.0 |
+| auth_refresh | 15.45 | 23.35 | 26.39 | - | - |
+| crud_customer_detail | 8.75 | 14.75 | 23.29 | 99.6 | 0.0 |
+| crud_customer_list | 20.26 | 25.94 | 28.97 | 47.3 | 0.0 |
+| crud_customer_search | 24.43 | 36.89 | 45.56 | 37.0 | 0.0 |
+| crud_payment_by_service | 95.05 | 245.5 | 354.1 | 8.4 | 0.0 |
+| crud_payment_list | 8.39 | 10.49 | 15.37 | 111.6 | 0.0 |
+| crud_service_list | 11.31 | 20.36 | 34.2 | 75.9 | 0.0 |
+| crud_visit_list | 22.05 | 29.64 | 37.72 | 41.8 | 0.0 |
+| dashboard | 80.14 | 198.75 | 476.44 | 9.0 | 0.0 |
+| finance_checkout | 14.14 | 37.74 | 37.74 | - | - |
+| finance_exchange_dollar | 3.3 | 3.79 | 11.37 | 265.4 | 0.0 |
+| finance_expense_list | 3.76 | 4.36 | 16.57 | 225.7 | 0.0 |
+| finance_financial_summary | 22.41 | 32.87 | 55.9 | 38.9 | 0.0 |
+| finance_operating_expense_category_list | 4.52 | 5.66 | 16.78 | 191.0 | 0.0 |
+| finance_operating_expense_list | 3.49 | 4.59 | 27.16 | 210.9 | 0.0 |
+| finance_operating_expense_summary | 7.57 | 8.41 | 15.4 | 124.0 | 0.0 |
+| finance_wallet_list | 4.69 | 5.97 | 13.92 | 188.1 | 0.0 |
+| inventory_product_create | 5.34 | 6.45 | 14.15 | - | - |
+| inventory_product_detail | 3.21 | 4.34 | 9.9 | 273.7 | 0.0 |
+| inventory_product_list | 5.72 | 7.56 | 12.57 | 160.3 | 0.0 |
 | inventory_product_list_size | - | - | - | - | - |
-| inventory_product_search | 9.82 | 19.74 | 29.46 | 84.2 | 0.0 |
-| reports_all | 100.24 | 154.91 | 154.91 | 9.3 | 0.0 |
-| reports_customers | 34.62 | 67.14 | 86.75 | 29.1 | 0.0 |
-| reports_daily | 7.81 | 15.84 | 16.87 | 109.7 | 0.0 |
-| reports_monthly | 13.0 | 17.69 | 19.09 | 74.5 | 0.0 |
-| reports_referral | 6.85 | 15.88 | 25.61 | 114.4 | 0.0 |
-| reports_summary | 95.99 | 128.67 | 138.93 | 10.0 | 0.0 |
-| reports_weekly | 12.47 | 24.35 | 50.25 | 61.6 | 0.0 |
+| inventory_product_search | 8.34 | 18.37 | 313.86 | 40.2 | 0.0 |
+| reports_all | 103.73 | 124.48 | 124.48 | 9.6 | 0.0 |
+| reports_customers | 161.12 | 237.42 | 273.42 | 5.8 | 0.0 |
+| reports_daily | 6.13 | 8.55 | 22.48 | 135.1 | 0.0 |
+| reports_monthly | 10.91 | 12.89 | 18.2 | 87.0 | 0.0 |
+| reports_referral | 111.82 | 197.04 | 209.82 | 8.1 | 0.0 |
+| reports_summary | 109.19 | 130.74 | 152.69 | 9.1 | 0.0 |
+| reports_weekly | 10.4 | 13.92 | 17.07 | 89.3 | 0.0 |
 
 ## Database Performance
 
@@ -46,22 +46,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 60.01,
-  "p50_ms": 100.06,
-  "p75_ms": 104.6,
-  "p90_ms": 154.47,
-  "p95_ms": 154.47,
-  "p99_ms": 365.29,
-  "max_ms": 365.29,
-  "mean_ms": 113.28,
+  "min_ms": 26.19,
+  "p50_ms": 47.76,
+  "p75_ms": 61.28,
+  "p90_ms": 104.16,
+  "p95_ms": 104.16,
+  "p99_ms": 118.66,
+  "max_ms": 118.66,
+  "mean_ms": 54.99,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 8.8,
-  "avg_response_bytes": 14079,
-  "max_response_bytes": 14079
+  "throughput_rps": 18.2,
+  "avg_response_bytes": 14107,
+  "max_response_bytes": 14107
 }
 ```
 
@@ -69,22 +69,22 @@
 ```json
 {
   "n": 10,
-  "min_ms": 10.7,
-  "p50_ms": 11.71,
-  "p75_ms": 12.99,
-  "p90_ms": 13.45,
-  "p95_ms": 19.8,
-  "p99_ms": 19.8,
-  "max_ms": 19.8,
-  "mean_ms": 12.52,
+  "min_ms": 10.28,
+  "p50_ms": 10.78,
+  "p75_ms": 12.02,
+  "p90_ms": 18.92,
+  "p95_ms": 21.79,
+  "p99_ms": 21.79,
+  "max_ms": 21.79,
+  "mean_ms": 12.87,
   "url": "/api/inventory/products/?search=\u0645\u062d\u0635\u0648\u0644",
   "method": "GET",
   "iterations": 10,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 79.9,
-  "avg_response_bytes": 5792,
-  "max_response_bytes": 5792
+  "throughput_rps": 77.7,
+  "avg_response_bytes": 5763,
+  "max_response_bytes": 5763
 }
 ```
 
@@ -92,22 +92,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 6.26,
-  "p50_ms": 8.02,
-  "p75_ms": 8.41,
-  "p90_ms": 12.27,
-  "p95_ms": 12.27,
-  "p99_ms": 15.49,
-  "max_ms": 15.49,
-  "mean_ms": 8.35,
+  "min_ms": 6.16,
+  "p50_ms": 7.75,
+  "p75_ms": 7.87,
+  "p90_ms": 12.44,
+  "p95_ms": 12.44,
+  "p99_ms": 14.7,
+  "max_ms": 14.7,
+  "mean_ms": 8.15,
   "url": "/api/inventory/products/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 119.8,
-  "avg_response_bytes": 5727,
-  "max_response_bytes": 5727
+  "throughput_rps": 122.8,
+  "avg_response_bytes": 5675,
+  "max_response_bytes": 5675
 }
 ```
 
@@ -115,22 +115,22 @@
 ```json
 {
   "n": 15,
-  "min_ms": 45.82,
-  "p50_ms": 59.08,
-  "p75_ms": 62.01,
-  "p90_ms": 70.02,
-  "p95_ms": 70.02,
-  "p99_ms": 85.79,
-  "max_ms": 85.79,
-  "mean_ms": 60.02,
+  "min_ms": 15.97,
+  "p50_ms": 19.63,
+  "p75_ms": 20.69,
+  "p90_ms": 27.07,
+  "p95_ms": 27.07,
+  "p99_ms": 38.0,
+  "max_ms": 38.0,
+  "mean_ms": 21.38,
   "url": "/api/customers/",
   "method": "GET",
   "iterations": 15,
   "errors": 0,
   "error_rate": 0.0,
-  "throughput_rps": 16.7,
-  "avg_response_bytes": 14020,
-  "max_response_bytes": 14020
+  "throughput_rps": 46.8,
+  "avg_response_bytes": 14024,
+  "max_response_bytes": 14024
 }
 ```
 
@@ -147,15 +147,15 @@
 - Workers: 4
 - Requests executed: 20
 - Error rate: 0.0
-- P95: 67.49 ms
-- Aggregate RPS: 39.3
+- P95: 63.6 ms
+- Aggregate RPS: 63.5
 
 ## Database Plan Analysis
 
 - **explain_customer_search**: uses_index=unknown
 - **explain_payments_range**: uses_index=False
 - **explain_visit_overlap**: uses_index=True
-- **explain_visits_window**: uses_index=False
+- **explain_visits_window**: uses_index=True
 
 ## Cache Performance
 
@@ -177,8 +177,8 @@
     "p75_ms": 0.01,
     "p90_ms": 0.01,
     "p95_ms": 0.01,
-    "p99_ms": 0.01,
-    "max_ms": 0.05,
+    "p99_ms": 0.03,
+    "max_ms": 0.03,
     "mean_ms": 0.01
   },
   "get": {
@@ -188,8 +188,8 @@
     "p75_ms": 0.01,
     "p90_ms": 0.01,
     "p95_ms": 0.01,
-    "p99_ms": 0.02,
-    "max_ms": 0.03,
+    "p99_ms": 0.01,
+    "max_ms": 0.02,
     "mean_ms": 0.01
   }
 }
@@ -199,21 +199,21 @@
 ```json
 {
   "n": 20,
-  "min_ms": 0.05,
-  "p50_ms": 0.14,
-  "p75_ms": 0.17,
-  "p90_ms": 0.18,
+  "min_ms": 0.06,
+  "p50_ms": 0.11,
+  "p75_ms": 0.13,
+  "p90_ms": 0.15,
   "p95_ms": 0.19,
-  "p99_ms": 0.61,
-  "max_ms": 0.61,
-  "mean_ms": 0.15
+  "p99_ms": 0.19,
+  "max_ms": 0.19,
+  "mean_ms": 0.11
 }
 ```
 
 ## Background Tasks
 
 - **background_probe**: {"celery_configured": false, "broker_configured": false, "finding": "NO Celery/broker in project. All work is synchronous in-request.", "recommendation": "For long-running report generation or bulk operations, consider adding Celery with Redis broker in production."}
-- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.009, "status": 401}, "/api/reports/": {"time_s": 0.001, "status": 401}, "/api/customers/": {"time_s": 0.001, "status": 401}}
+- **blocking_io_check**: {"/api/dashboard/": {"time_s": 0.008, "status": 401}, "/api/reports/": {"time_s": 0.001, "status": 401}, "/api/customers/": {"time_s": 0.001, "status": 401}}
 
 ## Response Sizes
 
@@ -224,13 +224,13 @@
 ```
 ```json
 {
-  "/api/customers/": 14035,
-  "/api/visits/": 10394,
-  "/api/payments/": 4400,
+  "/api/customers/": 14032,
+  "/api/visits/": 11203,
+  "/api/payments/": 4417,
   "/api/services/": 6207,
-  "/api/inventory/products/": 5714,
+  "/api/inventory/products/": 5647,
   "/api/dashboard/": 109,
-  "/api/reports/": 5746,
+  "/api/reports/": 5749,
   "/api/finance/operating-expenses/": 52,
   "/api/finance/operating-expenses/summary/": 173,
   "/api/finance/operating-expense-categories/": 2060

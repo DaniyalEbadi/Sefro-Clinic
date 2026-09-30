@@ -140,6 +140,7 @@ Copy `.env.example` → `.env`. Key variables:
 | `CLINIC_ADMIN_USERNAME` / `CLINIC_ADMIN_PASSWORD` | — (required) | **Bootstrap admin**, created once on first `migrate` (post-migrate signal); password must pass the full Django password policy |
 | `JWT_ACCESS_TOKEN_LIFETIME` | `900` (15 min) | Access-token lifetime (seconds) |
 | `JWT_REFRESH_TOKEN_LIFETIME` | `604800` (7 days) | Refresh-token lifetime |
+| `JWT_LEEWAY` | `30` | Clock-skew tolerance (seconds) so a just-issued token is not rejected as expired |
 | `DJANGO_JWT_COOKIE_SECURE` | follows SSL redirect | `Secure` flag on JWT cookies |
 | `DJANGO_RETURN_TOKENS_IN_BODY` | `False` | If `True`, login/refresh also return tokens in the JSON body (dev/Swagger convenience) |
 | `THROTTLE_AUTH_RATE` / `THROTTLE_CONTACT_RATE` / `THROTTLE_ANON_RATE` / `THROTTLE_USER_RATE` | `10/min` / `5/min` / `60/min` / `600/min` | DRF throttling (effectively disabled during tests) |
@@ -193,9 +194,14 @@ Login (`POST /api/auth/token/`) returns SimpleJWT tokens and stores them in cook
    via Django's `CsrfViewMiddleware` before accepting the cookie token.
 
 Refresh tokens **rotate** (`ROTATE_REFRESH_TOKENS=True`) and the old one is **blacklisted**
-(`BLACKLIST_AFTER_ROTATION=True`), so replay of a used refresh token is rejected. Logout
-blacklists the presented/cookie refresh token and clears both cookies. Logout is deliberately
-`AllowAny` so an expired session can always log out cleanly.
+(`BLACKLIST_AFTER_ROTATION=True`), so replay of a used refresh token is rejected. Refresh is
+401-loop proof by design: if the presented token fails but the `refresh_token` cookie holds a
+different (rotated) token, the request **retries once with the cookie**; if the session is
+definitively dead, the failure response **deletes both cookies** so the client gets a clean
+logged-out state instead of replaying a blacklisted token forever. Logout has
+`authentication_classes = []` (an expired access token can never 401 it), blacklists the
+presented/cookie refresh token, and clears both cookies — an expired session can always log
+out cleanly. Token verification allows `JWT_LEEWAY` (default 30 s) of clock skew.
 
 ### 4.3 Permission classes (who can call what)
 
@@ -354,8 +360,8 @@ against a live dump of the Django URL resolver.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | POST | `/api/auth/token/` | Public, throttled (`auth` scope) | Login `{username, password}` → sets `access_token`/`refresh_token` HttpOnly cookies + `csrftoken`; body tokens only if `DJANGO_RETURN_TOKENS_IN_BODY=True` |
-| POST | `/api/auth/token/refresh/` | Public (refresh cookie/body), throttled | Rotates tokens; old refresh blacklisted; cookies re-set |
-| POST | `/api/auth/logout/` | Public | Blacklists refresh token, clears cookies → `{"detail": "Logged out."}` |
+| POST | `/api/auth/token/refresh/` | Public (refresh cookie/body), throttled | Rotates tokens; old refresh blacklisted; cookies re-set; retries once with the cookie if the body token is stale; dead session ⇒ both cookies deleted |
+| POST | `/api/auth/logout/` | Public (never authenticated) | Blacklists refresh token, clears cookies → `{"detail": "Logged out."}` — works even with an expired access token |
 | GET | `/api/auth/me/` | Any staff | Current user `{id, username, role, date_joined(Shamsi)}` |
 | POST | `/api/auth/employees/` | **Admin** | Create employee `{username, password, first_name, last_name, phone_number}` (password policy enforced; role forced to `employee`) |
 | GET | `/api/auth/employees/list/` | **Admin** | List employees (admin account never appears) |

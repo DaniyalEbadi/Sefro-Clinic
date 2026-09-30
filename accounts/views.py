@@ -2,6 +2,7 @@ from django.conf import settings
 from django.middleware.csrf import get_token
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions
+from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
@@ -72,12 +73,26 @@ class ClinicTokenRefreshView(TokenRefreshView):
     throttle_scope = 'auth'
 
     def post(self, request, *args, **kwargs):
-        if 'refresh' not in request.data:
-            refresh_token = request.COOKIES.get(settings.JWT_AUTH_REFRESH_COOKIE)
-            if refresh_token:
-                request.data['refresh'] = refresh_token
+        cookie_refresh = request.COOKIES.get(settings.JWT_AUTH_REFRESH_COOKIE)
+        if 'refresh' not in request.data and cookie_refresh:
+            request.data['refresh'] = cookie_refresh
 
-        response = super().post(request, *args, **kwargs)
+        body_refresh = request.data.get('refresh')
+        try:
+            response = super().post(request, *args, **kwargs)
+        except APIException as first_error:
+            # The presented token may be stale (rotated by another tab or kept
+            # in client storage) while the refresh cookie already holds the
+            # rotated successor — retry once with the cookie before giving up.
+            if cookie_refresh and cookie_refresh != body_refresh:
+                request.data['refresh'] = cookie_refresh
+                try:
+                    response = super().post(request, *args, **kwargs)
+                except APIException as exc:
+                    return self._refresh_failed(request, exc)
+            else:
+                return self._refresh_failed(request, first_error)
+
         # With ROTATE_REFRESH_TOKENS the response carries a fresh refresh token too.
         access = response.data.get('access')
         refresh = response.data.get('refresh')
@@ -85,9 +100,24 @@ class ClinicTokenRefreshView(TokenRefreshView):
         set_jwt_cookies(response, access_token=access, refresh_token=refresh)
         return response
 
+    def _refresh_failed(self, request, exc):
+        """Return the auth error response and drop the dead session cookies.
+
+        Without clearing, the browser keeps replaying the same blacklisted
+        refresh cookie on every retry — a self-sustaining 401 loop.
+        """
+        response = self.handle_exception(exc)
+        if settings.JWT_AUTH_REFRESH_COOKIE in request.COOKIES:
+            clear_jwt_cookies(response)
+        return response
+
 
 @extend_schema(tags=['Authentication'])
 class LogoutAPIView(APIView):
+    # Never authenticate here: an expired/invalid access cookie must not 401
+    # the one request whose job is to clear the dead session — that left the
+    # blacklisted cookies in place and sustained 401 loops.
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
