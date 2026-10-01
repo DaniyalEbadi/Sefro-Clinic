@@ -18,11 +18,12 @@ from finance.models import (
     PaymentComponent,
     ProductUsage,
     Sale,
+    ServiceItem,
     WelcomePack,
     WelcomePackItem,
     WelcomePackUsage,
 )
-from finance.services import reporting
+from finance.services import accounting, payments, reporting
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, make_customer, make_employee
@@ -211,18 +212,21 @@ class ProfitByServiceRevenueTests(TestCase):
                 name=f'Consumable {line}', sku=f'CONS-{line}', unit_price=Decimal('5'),
                 cost_usd=Decimal('4.00'), count=Decimal('10'),
             )
-            ProductUsage.objects.create(
+            ServiceItem.objects.create(
                 service=self.service, product=product, quantity=Decimal('1'),
-                unit_cost_usd_snapshot=Decimal('4.00'), total_cost_usd_snapshot=Decimal('4.00'),
             )
 
-    def _visit(self, *services, status=Visit.Status.COMPLETED):
+    def _visit(self, *services, status=Visit.Status.COMPLETED, consume=True):
         visit = Visit.objects.create(
             customer=self.customer, staff=self.staff, start_at=timezone.now(),
             end_at=timezone.now() + timedelta(hours=1), status=status,
         )
         for service in services:
             visit.services.add(service)
+        if consume:
+            # Real consumption, so the usage rows are linked to this visit and
+            # the service, with a frozen cost snapshot.
+            accounting.record_visit_consumption(visit, rate=RATE)
         return visit
 
     def test_service_price_is_counted_once_per_visit_not_once_per_consumable(self):
@@ -260,11 +264,28 @@ class ProfitByServiceRevenueTests(TestCase):
         self._visit(self.service, self.second)
         start, end = window()
         rows = {r['service_id']: r for r in reporting.profit_by_service(start, end)}
+        # Revenue is allocated by price weight: 100 of 150 collected-equivalent
+        # and 50 of 150, so the parts always add up to the visit.
         self.assertEqual(rows[self.service.id]['revenue_usd'], Decimal('100.00'))
         self.assertEqual(rows[self.second.id]['revenue_usd'], Decimal('50.00'))
 
+    def test_collected_revenue_replaces_list_price_as_the_basis(self):
+        visit = self._visit(self.service)
+        payments.checkout(
+            customer=self.customer, amount_usd=Decimal('60'), visit=visit, rate=RATE,
+            components=[{'method': 'cash_toman', 'amount_usd': Decimal('60') * RATE}],
+        )
+        start, end = window()
+        row = next(
+            r for r in reporting.profit_by_service(start, end) if r['service_id'] == self.service.id
+        )
+        # Discounted from 100 list price to 60 actually collected.
+        self.assertEqual(row['revenue_usd'], Decimal('60.00'))
+        self.assertEqual(row['revenue_basis'], 'sale_ledger')
+        self.assertEqual(row['profit_usd'], Decimal('52.00'))
+
     def test_not_completed_visits_are_not_counted(self):
-        self._visit(self.service, status=Visit.Status.CANCELED)
+        self._visit(self.service, status=Visit.Status.CANCELED, consume=False)
         start, end = window()
         self.assertEqual(reporting.profit_by_service(start, end), [])
 

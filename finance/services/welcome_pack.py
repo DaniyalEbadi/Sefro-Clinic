@@ -76,6 +76,7 @@ def issue_welcome_pack(
     issued_by=None,
     at=None,
     rate: Optional[Decimal] = None,
+    idempotency_key: Optional[str] = None,
 ) -> WelcomePackUsage:
     """Issue a WelcomePack to a customer, creating a financial event.
 
@@ -92,6 +93,12 @@ def issue_welcome_pack(
     """
     if not welcome_pack.is_active:
         raise WelcomePackError('Welcome pack is not active.')
+
+    # Idempotency: a retried issuance must not deduct stock or add cost twice.
+    if idempotency_key:
+        existing = WelcomePackUsage.objects.filter(idempotency_key=idempotency_key).first()
+        if existing is not None:
+            return existing
 
     quantity = _valid_quantity(quantity)
     at = at or timezone.now()
@@ -114,6 +121,7 @@ def issue_welcome_pack(
         exchange_rate_snapshot=rate,
         total_cost_toman_snapshot=total_cost_toman,
         issued_at=at,
+        idempotency_key=idempotency_key or None,
     )
 
     # Draw down real stock. Items are walked in product order so concurrent

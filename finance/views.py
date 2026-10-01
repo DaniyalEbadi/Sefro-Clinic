@@ -20,7 +20,6 @@ from .models import (
     Package,
     PackageItem,
     PackageService,
-    PaymentComponent,
     ProductCostHistory,
     ProductPurchase,
     ProductUsage,
@@ -63,7 +62,7 @@ from .serializers import (
     WelcomePackSerializer,
     WelcomePackUsageSerializer,
 )
-from .services import accounting, payments, reporting, staff_compensation
+from .services import accounting, financials, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
 from .services import operating_expenses as opex_svc
 from .services import purchases as purchase_svc
@@ -901,6 +900,7 @@ class ProfitByStaffView(APIView):
 
         rate = get_rate()
         staff_data = {}
+        basis_by_staff = {}
 
         for visit in visits:
             if not visit.staff:
@@ -925,14 +925,21 @@ class ProfitByStaffView(APIView):
             # visit_count counts visits, not service lines: increment once per
             # visit, outside the per-service loop.
             staff_data[staff_id]['visit_count'] += 1
-            for svc in visit.services.all():
-                profit = calculate_service_profit(svc, rate)
-                staff_data[staff_id]['revenue_usd'] += profit['revenue_usd']
-                staff_data[staff_id]['revenue_toman'] += profit['revenue_toman']
-                staff_data[staff_id]['product_cost_usd'] += profit['product_cost_usd']
-                staff_data[staff_id]['product_cost_toman'] += profit['product_cost_toman']
-                staff_data[staff_id]['profit_usd'] += profit['profit_usd']
-                staff_data[staff_id]['profit_toman'] += profit['profit_toman']
+            # Same per-service actuals the payout engine uses, so this report
+            # and the compensation ledger cannot disagree.
+            per_visit = financials.calculate_visit_financials(visit, rate=rate)
+            # Only call it list price if *every* visit for this staff member was
+            # priced from list price; any collected sale makes it real revenue.
+            basis_by_staff.setdefault(staff_id, financials.REVENUE_BASIS_LEDGER)
+            if per_visit['revenue_basis'] == financials.REVENUE_BASIS_LIST_PRICE:
+                basis_by_staff[staff_id] = financials.REVENUE_BASIS_LIST_PRICE
+            for service_row in per_visit['services'].values():
+                staff_data[staff_id]['revenue_usd'] += service_row['revenue_usd']
+                staff_data[staff_id]['revenue_toman'] += service_row['revenue_toman']
+                staff_data[staff_id]['product_cost_usd'] += service_row['product_cost_usd']
+                staff_data[staff_id]['product_cost_toman'] += service_row['product_cost_toman']
+                staff_data[staff_id]['profit_usd'] += service_row['profit_usd']
+                staff_data[staff_id]['profit_toman'] += service_row['profit_toman']
 
         for data in staff_data.values():
             data['revenue_usd'] = str(data['revenue_usd'].quantize(Decimal('0.01')))
@@ -944,7 +951,9 @@ class ProfitByStaffView(APIView):
             # Revenue here is list price of services delivered, not collected
             # money. The key is kept for backward compatibility; this label lets
             # the UI present it as potential revenue.
-            data['revenue_basis'] = reporting.REVENUE_BASIS_LIST_PRICE
+            data['revenue_basis'] = basis_by_staff.get(
+                    data['staff_id'], financials.REVENUE_BASIS_LEDGER,
+                )
             data['welcome_pack_cost_basis'] = reporting.WELCOME_PACK_COST_BASIS_EXCLUDED
 
         rows = sorted(staff_data.values(), key=lambda x: x['staff_name'])
@@ -1003,67 +1012,13 @@ class DashboardView(APIView):
     def get(self, request):
         start, end = _resolve_range(request)
 
-        from customers.models import Customer, Visit
-        from finance.models import Expense, Wallet, WelcomePackUsage
+        from customers.models import Customer
 
-        # Sales Summary
-        # Only revenue-bearing sales count (pending/cancelled are not money);
-        # refunded sales stay in with their negative amount.
-        sales = Sale.objects.filter(
-            created_at__gte=start, created_at__lte=end,
-            status__in=reporting.REVENUE_STATUSES,
-        )
-        revenue_usd = sales.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
-        revenue_toman = sales.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
-        paid_sales = sales.filter(status=Sale.Status.PAID)
-        sale_count = paid_sales.count()
-        # Same revenue-bearing set as the revenue itself, so the average ticket
-        # can never disagree with the revenue above.
-        revenue_sale_count = sales.count()
+        # One authoritative calculation, shared with /reports/financial-summary/.
+        # The dashboard used to re-derive revenue, cost and profit locally, which
+        # is how the two endpoints drifted apart.
+        report = financials.build_report(start, end)
 
-        # Product Costs
-        # Pack-linked usage rows are excluded: pack cost is taken from the
-        # WelcomePackUsage snapshots below, so counting both would charge the
-        # same inventory twice.
-        usages = ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
-        cost_usages = usages.filter(welcome_pack_usage__isnull=True)
-        product_cost_usd = cost_usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
-        product_cost_toman = Decimal('0')
-        for u in cost_usages.only('total_cost_usd_snapshot', 'exchange_rate_snapshot'):
-            product_cost_toman += (u.total_cost_usd_snapshot or Decimal('0')) * (u.exchange_rate_snapshot or get_rate())
-        product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
-
-        # Welcome Pack Costs (from immutable usage snapshots)
-        wp_usages = WelcomePackUsage.objects.filter(issued_at__gte=start, issued_at__lte=end)
-        welcome_pack_cost_usd = wp_usages.aggregate(total=Sum('total_cost_usd_snapshot'))['total'] or Decimal('0')
-        welcome_pack_cost_toman = wp_usages.aggregate(total=Sum('total_cost_toman_snapshot'))['total'] or Decimal('0')
-
-        # Gross Profit
-        gross_profit_usd = (revenue_usd - product_cost_usd - welcome_pack_cost_usd).quantize(Decimal('0.01'))
-        gross_profit_toman = (revenue_toman - product_cost_toman - welcome_pack_cost_toman).quantize(Decimal('0.01'))
-
-        # Expenses
-        expenses = Expense.objects.filter(
-            expense_date__gte=start.date(), expense_date__lte=end.date(),
-            status__in=[Expense.Status.APPROVED, Expense.Status.PAID],
-        )
-        expenses_usd = expenses.aggregate(total=Sum('amount_usd'))['total'] or Decimal('0')
-        expenses_toman = expenses.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
-
-        # Net Profit
-        net_profit_usd = (gross_profit_usd - expenses_usd).quantize(Decimal('0.01'))
-        net_profit_toman = (gross_profit_toman - expenses_toman).quantize(Decimal('0.01'))
-
-        # Staff Payouts
-        payouts = StaffPayout.objects.filter(created_at__gte=start, created_at__lte=end)
-        payout_cash_usd = payouts.aggregate(total=Sum('payout_cash_usd'))['total'] or Decimal('0')
-        payout_cash_toman = payouts.aggregate(total=Sum('payout_cash_toman'))['total'] or Decimal('0')
-        payout_product_usd = payouts.aggregate(total=Sum('payout_product_value_usd'))['total'] or Decimal('0')
-        payout_product_toman = payouts.aggregate(total=Sum('payout_product_value_toman'))['total'] or Decimal('0')
-        total_payout_usd = (payout_cash_usd + payout_product_usd).quantize(Decimal('0.01'))
-        total_payout_toman = (payout_cash_toman + payout_product_toman).quantize(Decimal('0.01'))
-
-        # Wallet Summary
         wallet_liability = Wallet.objects.aggregate(total=Sum('balance'))['total'] or Decimal('0')
         wallet_rewards = WalletTransaction.objects.filter(
             transaction_type=WalletTransaction.Type.REWARD,
@@ -1074,50 +1029,62 @@ class DashboardView(APIView):
             created_at__gte=start, created_at__lte=end,
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
-        # Operational Metrics
-        visits_completed = Visit.objects.filter(
-            start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
-        ).count()
         new_customers = Customer.objects.filter(
             created_at__gte=start, created_at__lte=end,
         ).count()
-        avg_ticket = (revenue_usd / revenue_sale_count).quantize(Decimal('0.01')) if revenue_sale_count else Decimal('0')
-
-        # Payment Method Breakdown
-        comps = PaymentComponent.objects.filter(sale__in=sales)
-        method_breakdown, method_breakdown_by_method = reporting.payment_method_breakdown(comps)
 
         return Response(_stringify({
-            'period': {'start': start, 'end': end},
+            'period': report['period'],
             'sales_summary': {
-                'revenue_usd': str(revenue_usd),
-                'revenue_toman': str(revenue_toman),
-                'product_cost_usd': str(product_cost_usd),
-                'product_cost_toman': str(product_cost_toman),
-                'welcome_pack_cost_usd': str(welcome_pack_cost_usd),
-                'welcome_pack_cost_toman': str(welcome_pack_cost_toman),
-                'gross_profit_usd': str(gross_profit_usd),
-                'gross_profit_toman': str(gross_profit_toman),
-                'expenses_usd': str(expenses_usd),
-                'expenses_toman': str(expenses_toman),
-                'net_profit_usd': str(net_profit_usd),
-                'net_profit_toman': str(net_profit_toman),
-                'total_payout_usd': str(total_payout_usd),
-                'total_payout_toman': str(total_payout_toman),
-                'sale_count': sale_count,
-                'avg_ticket_usd': str(avg_ticket),
-                'payment_methods': {k: str(v) for k, v in method_breakdown.items()},
-                'payment_methods_by_method': {k: str(v) for k, v in method_breakdown_by_method.items()},
+                # Existing keys, unchanged names.
+                'revenue_usd': str(report['revenue']['usd']),
+                'revenue_toman': str(report['revenue']['toman']),
+                'product_cost_usd': str(report['product_cost']['usd']),
+                'product_cost_toman': str(report['product_cost']['toman']),
+                'welcome_pack_cost_usd': str(report['welcome_pack_cost']['usd']),
+                'welcome_pack_cost_toman': str(report['welcome_pack_cost']['toman']),
+                'gross_profit_usd': str(report['gross_profit']['usd']),
+                'gross_profit_toman': str(report['gross_profit']['toman']),
+                'expenses_usd': str(report['staff_expense_claims']['usd']),
+                'expenses_toman': str(report['staff_expense_claims']['toman']),
+                'net_profit_usd': str(report['net_profit']['usd']),
+                'net_profit_toman': str(report['net_profit']['toman']),
+                'total_payout_usd': str(report['staff_compensation']['total']['usd']),
+                'total_payout_toman': str(report['staff_compensation']['total']['toman']),
+                'sale_count': report['counts']['paid_sales'],
+                'avg_ticket_usd': str(report['counts']['average_transaction_value']),
+                'payment_methods': {k: str(v) for k, v in report['payment_methods'].items()},
+                'payment_methods_by_method': {
+                    k: str(v) for k, v in report['payment_methods_by_method'].items()
+                },
+                # New: the below-the-line buckets Net Profit actually subtracts.
+                'operating_expenses_usd': str(report['operating_expenses']['usd']),
+                'operating_expenses_toman': str(report['operating_expenses']['toman']),
+                'staff_compensation_usd': str(report['staff_compensation']['total']['usd']),
+                'staff_compensation_toman': str(report['staff_compensation']['total']['toman']),
+                'below_the_line_total_usd': str(report['below_the_line_total']['usd']),
+                'below_the_line_total_toman': str(report['below_the_line_total']['toman']),
+                'net_profit_breakdown': {
+                    'gross_profit_usd': str(report['gross_profit']['usd']),
+                    'minus_staff_compensation_usd': str(report['staff_compensation']['total']['usd']),
+                    'minus_operating_expenses_usd': str(report['operating_expenses']['usd']),
+                    'minus_staff_claims_usd': str(report['staff_expense_claims']['usd']),
+                    'net_profit_usd': str(report['net_profit']['usd']),
+                },
             },
+            'staff_compensation': report['staff_compensation'],
+            'operating_expenses': report['operating_expenses'],
+            'staff_expense_claims': report['staff_expense_claims'],
+            'cost_coverage': report['cost_coverage'],
             'wallet_summary': {
                 'total_liability_usd': str(wallet_liability),
                 'rewards_issued_usd': str(wallet_rewards),
                 'wallet_payments_usd': str(abs(wallet_payments)),
             },
             'operational': {
-                'visits_completed': visits_completed,
+                'visits_completed': report['counts']['appointments'],
                 'new_customers': new_customers,
-                'staff_payout_count': payouts.count(),
+                'staff_payout_count': report['staff_compensation']['payout_count'],
             },
         }))
 
@@ -1337,7 +1304,7 @@ class WelcomePackViewSet(viewsets.ModelViewSet):
             return Response(
                 {'error': 'Visit does not belong to the specified customer.'},
                 status=status.HTTP_400_BAD_REQUEST,
-            )
+)
 
         try:
             usage = welcome_pack_svc.issue_welcome_pack(
@@ -1346,6 +1313,7 @@ class WelcomePackViewSet(viewsets.ModelViewSet):
                 quantity=quantity,
                 visit=visit,
                 issued_by=request.user,
+                idempotency_key=request.data.get('idempotency_key'),
             )
         except welcome_pack_svc.WelcomePackError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)

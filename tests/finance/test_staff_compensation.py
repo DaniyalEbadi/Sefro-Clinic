@@ -28,7 +28,14 @@ def make_rule(role=StaffCompensationRule.Role.DOCTOR, **overrides):
         'percent_profit': Decimal('50.00'),
     }
     base.update(overrides)
-    return StaffCompensationRule.objects.create(**base)
+    # get_or_create: the clinic rules ship in a data migration, so the default
+    # role already exists and each test sets the attributes it cares about.
+    rule, _ = StaffCompensationRule.objects.get_or_create(role=role)
+    for field, value in base.items():
+        if field != 'role':
+            setattr(rule, field, value)
+    rule.save()
+    return rule
 
 
 class CompensationFixtureMixin:
@@ -159,8 +166,19 @@ class GenerateVisitPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(staff_compensation.generate_visit_payouts(self.visit), [])
         self.assertEqual(StaffPayout.objects.count(), 0)
 
-    def test_visit_without_staff_generates_nothing(self):
+    def test_visit_without_staff_is_rejected_for_a_compensable_service(self):
+        # A compensable visit must not complete with no staff: that would
+        # silently produce zero compensation.
         Visit.objects.filter(pk=self.visit.pk).update(staff=None)
+        self.visit.refresh_from_db()
+        make_rule()
+        with self.assertRaises(staff_compensation.CompensationError):
+            staff_compensation.generate_visit_payouts(self.visit)
+        self.assertEqual(StaffPayout.objects.count(), 0)
+
+    def test_visit_without_staff_is_skipped_when_no_service_is_compensable(self):
+        Visit.objects.filter(pk=self.visit.pk).update(staff=None)
+        Service.objects.filter(pk=self.service.pk).update(compensation_role=Service.CompensationRole.NONE)
         self.visit.refresh_from_db()
         make_rule()
         self.assertEqual(staff_compensation.generate_visit_payouts(self.visit), [])
@@ -173,6 +191,9 @@ class GenerateVisitPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(StaffPayout.objects.count(), 0)
 
     def test_missing_rule_is_skipped(self):
+        # The clinic rules ship in a data migration, so remove them to exercise
+        # the "no applicable rule" path this test is about.
+        StaffCompensationRule.objects.all().delete()
         self.assertEqual(staff_compensation.generate_visit_payouts(self.visit), [])
         self.assertEqual(StaffPayout.objects.count(), 0)
 
@@ -331,6 +352,9 @@ class StaffCompensationRuleAPITests(TestCase):
         self.employee = employee_client()
 
     def test_admin_can_create_and_list_rules(self):
+        # Rules ship in a data migration and role is unique, so clear them to
+        # exercise the create endpoint itself.
+        StaffCompensationRule.objects.all().delete()
         payload = {
             'role': StaffCompensationRule.Role.DOCTOR,
             'payout_type': StaffCompensationRule.PayoutType.CASH,
@@ -467,15 +491,17 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
 
     def test_completing_visit_without_rule_creates_nothing(self):
+        StaffCompensationRule.objects.all().delete()
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(StaffPayout.objects.count(), 0)
 
-    def test_completing_visit_without_staff_creates_nothing(self):
+    def test_completing_compensable_visit_without_staff_is_rejected(self):
         make_rule()
         Visit.objects.filter(pk=self.visit.pk).update(staff=None)
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('staff', response.data['error'])
         self.assertEqual(StaffPayout.objects.count(), 0)
 
     def test_recompleting_visit_does_not_duplicate_payout(self):
@@ -673,6 +699,9 @@ class StaffCompensationRuleProductsAPITests(CompensationFixtureMixin, TestCase):
 
     def setUp(self):
         super().setUp()
+        # role is unique and the clinic rules ship in a data migration; clear
+        # them so the create endpoint is exercised on a clean table.
+        StaffCompensationRule.objects.all().delete()
         self.admin = admin_client()
         self.product_a = Product.objects.create(
             name='Filler', sku='FIL-2', unit_price=Decimal('100'),

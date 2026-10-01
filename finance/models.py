@@ -318,6 +318,10 @@ class WelcomePackUsage(models.Model):
     total_cost_toman_snapshot = toman_field(default=Decimal('0'))
     issued_at = models.DateTimeField(default=timezone.now)
     created_at = models.DateTimeField(auto_now_add=True)
+    idempotency_key = models.CharField(
+        max_length=64, unique=True, null=True, blank=True,
+        help_text='Client-supplied key; a repeated issuance returns the original record instead of deducting stock again.',
+    )
 
     class Meta:
         ordering = ['-issued_at']

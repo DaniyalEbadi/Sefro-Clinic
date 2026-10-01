@@ -95,7 +95,7 @@ class FinanceReportDefaultRangeTests(TestCase):
         )
 
         default = self.client.get(DASHBOARD_URL)
-        self.assertEqual(default.data['sales_summary']['revenue_usd'], '0')
+        self.assertEqual(default.data['sales_summary']['revenue_usd'], '0.00')
 
         explicit = self.client.get(DASHBOARD_URL + day_range(local_today() - timedelta(days=1)))
         self.assertEqual(explicit.data['sales_summary']['revenue_usd'], '50.00')
@@ -152,10 +152,13 @@ class FinanceDashboardReportTests(TestCase):
         summary = self.client.get(DASHBOARD_URL).data['sales_summary']
         self.assertEqual(summary['revenue_usd'], '120.00')
         self.assertEqual(summary['revenue_toman'], '7200000.00')
+        # Gross profit is revenue (120) - product cost (10); staff pay is below
+        # this line and must not be deducted here.
         self.assertEqual(summary['gross_profit_usd'], '110.00')
         self.assertEqual(summary['gross_profit_toman'], '6600000.00')
-        self.assertEqual(summary['expenses_usd'], '0')
-        self.assertEqual(summary['net_profit_usd'], '110.00')
+        self.assertEqual(summary['expenses_usd'], '0.00')
+        # Net profit is gross profit minus staff compensation (30).
+        self.assertEqual(summary['net_profit_usd'], '80.00')
         self.assertEqual(summary['sale_count'], 1)
         self.assertEqual(summary['avg_ticket_usd'], '120.00')
         self.assertEqual(summary['total_payout_usd'], '30.00')

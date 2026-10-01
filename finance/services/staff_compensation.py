@@ -11,7 +11,12 @@ from ..models import (
     StaffPayoutProduct,
 )
 from .exchange_rates import get_current_usd_to_toman_rate
+from .financials import calculate_visit_financials, visit_requires_staff
 from .inventory import record_product_usage
+
+
+class CompensationError(Exception):
+    """A visit cannot be compensated as requested (e.g. missing staff)."""
 
 
 def get_rate():
@@ -19,31 +24,24 @@ def get_rate():
 
 
 def calculate_visit_profit(visit):
+    """Whole-visit totals.
+
+    Kept for callers that need a visit-level number. Compensation must NOT use
+    this: each service is paid on its own profit (see
+    ``financials.calculate_visit_financials``), because a visit routinely mixes
+    a doctor's service with a facial operator's.
+    """
     rate = get_rate()
-    services = visit.services.all()
-
-    total_revenue_usd = Decimal('0')
-    total_cost_usd = Decimal('0')
-
-    for svc in services:
-        total_revenue_usd += svc.price_usd or Decimal('0')
-        for item in svc.items.select_related('product').all():
-            qty = item.quantity
-            cost = item.product.cost_usd if item.product else Decimal('0')
-            total_cost_usd += (Decimal(str(qty)) * Decimal(str(cost))).quantize(Decimal('0.01'))
-
-    revenue_toman = (total_revenue_usd * rate).quantize(Decimal('0.01'))
-    cost_toman = (total_cost_usd * rate).quantize(Decimal('0.01'))
-    profit_usd = (total_revenue_usd - total_cost_usd).quantize(Decimal('0.01'))
-    profit_toman = (revenue_toman - cost_toman).quantize(Decimal('0.01'))
-
+    financials = calculate_visit_financials(visit, rate=rate)
     return {
-        'revenue_usd': total_revenue_usd,
-        'revenue_toman': revenue_toman,
-        'product_cost_usd': total_cost_usd,
-        'product_cost_toman': cost_toman,
-        'profit_usd': profit_usd,
-        'profit_toman': profit_toman,
+        'revenue_usd': financials['revenue_usd'],
+        'revenue_toman': financials['revenue_toman'],
+        'product_cost_usd': financials['product_cost_usd'],
+        'product_cost_toman': financials['product_cost_toman'],
+        'profit_usd': (financials['revenue_usd'] - financials['product_cost_usd']).quantize(Decimal('0.01')),
+        'profit_toman': (
+            financials['revenue_toman'] - financials['product_cost_toman']
+        ).quantize(Decimal('0.01')),
         'rate': rate,
     }
 
@@ -174,23 +172,134 @@ def _upsert_monthly_salary_payout(*, visit, staff, service, role, salary_period,
     return payout, created
 
 
+SETTLED_STATUSES = (StaffPayout.Status.APPROVED, StaffPayout.Status.PAID)
+
+# Fields that make up a settled session payout. A payout that has already been
+# approved or paid must keep the amount it was settled with, so recalculating
+# only refreshes a row that is still PENDING.
+_SESSION_AMOUNT_FIELDS = (
+    'revenue_usd', 'revenue_toman', 'product_cost_usd', 'product_cost_toman',
+    'profit_usd', 'profit_toman', 'exchange_rate', 'payout_cash_usd',
+    'payout_cash_toman', 'payout_product', 'payout_product_qty',
+    'payout_product_value_usd', 'payout_product_value_toman', 'payout_mode',
+)
+
+
+def _upsert_session_payout(*, visit, staff, service, role, financials, rate, payout_calc, payout_mode):
+    """One session payout per (visit, staff, service).
+
+    Returns ``(payout, created)``, or ``(None, False)`` when an existing row
+    was already approved/paid and must keep its settled amount.
+    """
+    defaults = {
+        'role': role,
+        'revenue_usd': financials['revenue_usd'],
+        'revenue_toman': financials['revenue_toman'],
+        'product_cost_usd': financials['product_cost_usd'],
+        'product_cost_toman': financials['product_cost_toman'],
+        'profit_usd': financials['profit_usd'],
+        'profit_toman': financials['profit_toman'],
+        'exchange_rate': rate,
+        'payout_cash_usd': payout_calc['payout_cash_usd'],
+        'payout_cash_toman': payout_calc['payout_cash_toman'],
+        'payout_product': payout_calc['payout_product'],
+        'payout_product_qty': payout_calc['payout_product_qty'],
+        'payout_product_value_usd': payout_calc['payout_product_value_usd'],
+        'payout_product_value_toman': payout_calc['payout_product_value_toman'],
+        'status': StaffPayout.Status.PENDING,
+        'payout_mode': payout_mode,
+    }
+    try:
+        with transaction.atomic():
+            payout, created = StaffPayout.objects.get_or_create(
+                visit=visit,
+                staff=staff,
+                service=service,
+                payout_kind=StaffPayout.PayoutKind.SESSION,
+                defaults=defaults,
+            )
+    except IntegrityError:
+        return None, False
+
+    if created:
+        return payout, True
+
+    # Already settled: leave the agreed amount alone.
+    if payout.status in SETTLED_STATUSES:
+        return payout, False
+
+    changed = [field for field in _SESSION_AMOUNT_FIELDS if getattr(payout, field) != defaults[field]]
+    if changed:
+        for field in changed:
+            setattr(payout, field, defaults[field])
+        payout.save(update_fields=[*changed, 'updated_at'])
+    return payout, False
+
+
+def cancel_payouts_for_visit(visit, reason=''):
+    """Void the compensation owed for a visit whose revenue was cancelled/refunded.
+
+    Payout rows are marked CANCELLED rather than deleted so the history stays
+    auditable, and running it twice is harmless: already-cancelled rows are not
+    touched again, so no duplicate reversal rows appear.
+
+    Returns the number of payouts transitioned to CANCELLED.
+    """
+    payouts = StaffPayout.objects.filter(
+        visit=visit, status__in=[
+            StaffPayout.Status.PENDING, StaffPayout.Status.APPROVED,
+        ],
+    ).exclude(payout_kind=StaffPayout.PayoutKind.MONTHLY_SALARY)
+    changed = 0
+    for payout in payouts:
+        payout.status = StaffPayout.Status.CANCELLED
+        notes = (payout.notes or '').strip()
+        message = f'Cancelled: {reason}' if reason else 'Cancelled.'
+        payout.notes = f'{notes} {message}'.strip()
+        payout.save(update_fields=['status', 'notes', 'updated_at'])
+        changed += 1
+    return changed
+
+
 @transaction.atomic
-def generate_visit_payouts(visit, actor=None):
+def generate_visit_payouts(visit, actor=None, strict_staff=True):
+    """Create/update the staff compensation owed for one completed visit.
+
+    Every compensable service is paid on **its own** profit: the collected
+    revenue allocated to that service minus the material cost actually recorded
+    against it. A visit mixing a doctor service and a facial service therefore
+    pays each role a percentage of its own profit, never a share of one
+    visit-level total applied repeatedly.
+
+    Idempotent: session payouts are keyed on (visit, staff, service) and monthly
+    salaries on (staff, role, month), so re-running updates rather than
+    duplicates. Rows that were already approved or paid keep that state and
+    their settled amount.
+    """
     if visit.status != 'completed':
         return []
 
     staff = visit.staff
     if not staff:
+        if strict_staff and visit_requires_staff(visit):
+            raise CompensationError(
+                'This visit has a service that requires a staff member, but no staff '
+                'is assigned. Assign staff before completing the visit so compensation '
+                'is not silently skipped.'
+            )
         return []
 
     rate = get_rate()
-    profit_data = calculate_visit_profit(visit)
+    financials = calculate_visit_financials(visit, rate=rate)
     salary_period = timezone.localtime(visit.start_at).date().replace(day=1)
 
     created_payouts = []
     for service in visit.services.all():
         role = service.compensation_role
         if role == 'none':
+            continue
+        service_financials = financials['services'].get(service.id)
+        if service_financials is None:
             continue
 
         try:
@@ -200,7 +309,7 @@ def generate_visit_payouts(visit, actor=None):
 
         payout_calc = calculate_service_payout(
             visit, service, rule,
-            profit_data['profit_usd'], profit_data['profit_toman'], rate
+            service_financials['profit_usd'], service_financials['profit_toman'], rate,
         )
         payout_mode = (
             StaffPayout.PayoutMode.PRODUCT
@@ -219,33 +328,12 @@ def generate_visit_payouts(visit, actor=None):
             if not any(existing.pk == payout.pk for existing in created_payouts):
                 created_payouts.append(payout)
         else:
-            try:
-                with transaction.atomic():
-                    payout, created = StaffPayout.objects.update_or_create(
-                        visit=visit,
-                        staff=staff,
-                        service=service,
-                        payout_kind=StaffPayout.PayoutKind.SESSION,
-                        defaults={
-                            'role': role,
-                            'revenue_usd': profit_data['revenue_usd'],
-                            'revenue_toman': profit_data['revenue_toman'],
-                            'product_cost_usd': profit_data['product_cost_usd'],
-                            'product_cost_toman': profit_data['product_cost_toman'],
-                            'profit_usd': profit_data['profit_usd'],
-                            'profit_toman': profit_data['profit_toman'],
-                            'exchange_rate': rate,
-                            'payout_cash_usd': payout_calc['payout_cash_usd'],
-                            'payout_cash_toman': payout_calc['payout_cash_toman'],
-                            'payout_product': payout_calc['payout_product'],
-                            'payout_product_qty': payout_calc['payout_product_qty'],
-                            'payout_product_value_usd': payout_calc['payout_product_value_usd'],
-                            'payout_product_value_toman': payout_calc['payout_product_value_toman'],
-                            'status': StaffPayout.Status.PENDING,
-                            'payout_mode': payout_mode,
-                        }
-                    )
-            except IntegrityError:
+            payout, created = _upsert_session_payout(
+                visit=visit, staff=staff, service=service, role=role,
+                financials=service_financials, rate=rate,
+                payout_calc=payout_calc, payout_mode=payout_mode,
+            )
+            if payout is None:
                 continue
             created_payouts.append(payout)
 

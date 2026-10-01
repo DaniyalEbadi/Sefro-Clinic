@@ -20,6 +20,7 @@ from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, permissions, serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -569,7 +570,32 @@ class VisitViewSet(viewsets.ModelViewSet):
         serializer.save()
 
     def perform_update(self, serializer):
-        serializer.save()
+        """Update, then settle compensation if this write completed the visit.
+
+        Without this, ``PATCH {"status": "completed"}`` reached COMPLETED with no
+        staff payout at all, so compensation could be bypassed entirely by
+        editing instead of using the complete action.
+        """
+        was_completed = serializer.instance.status == Visit.Status.COMPLETED
+        visit = serializer.save()
+        becoming_completed = (not was_completed) and visit.status == Visit.Status.COMPLETED
+        if not becoming_completed:
+            return
+        from finance.services import staff_compensation
+
+        if visit.staff:
+            staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
+        else:
+            # Keep the row consistent with the complete action: a compensable
+            # visit is never left completed with no staff and no payout.
+            from finance.services import financials
+
+            if financials.visit_requires_staff(visit):
+                visit.status = was_completed
+                visit.save(update_fields=['status'])
+                raise ValidationError(
+                    {'status': 'This visit has a service that requires a staff member. Assign staff before completing it.'}
+                )
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -623,12 +649,23 @@ class VisitViewSet(viewsets.ModelViewSet):
     @extend_schema(responses=VisitSerializer)
     def complete(self, request, pk=None):
         visit = self.get_object()
+        # A visit whose services carry a compensation role must have a staff
+        # member, otherwise compensation would be silently skipped. This is
+        # rejected up front rather than completing with zero payout.
+        from finance.services import financials, staff_compensation
+
+        if not visit.staff and financials.visit_requires_staff(visit):
+            return Response(
+                {'error': 'This visit has a service that requires a staff member. Assign staff before completing it.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         visit.status = Visit.Status.COMPLETED
         visit.save(update_fields=['status'])
         # Generate staff commission payouts for the services performed. The
-        # service is idempotent (update_or_create per visit/staff/service) and
-        # no-ops when the visit has no staff or no matching compensation rule.
-        from finance.services import staff_compensation
+        # service is idempotent (per visit/staff/service, and one row per
+        # staff/role/month for fixed salaries) so a repeated completion updates
+        # rather than duplicates.
         staff_compensation.generate_visit_payouts(visit, actor=request.user)
         return Response(self.get_serializer(visit).data)
 
@@ -638,6 +675,12 @@ class VisitViewSet(viewsets.ModelViewSet):
         visit = self.get_object()
         visit.status = Visit.Status.CANCELED
         visit.save(update_fields=['status'])
+        # Revenue the clinic no longer keeps must not leave live compensation
+        # behind, so any session payout for this visit is voided (not deleted,
+        # and monthly salaries are untouched because they cover the whole month).
+        from finance.services import staff_compensation
+
+        staff_compensation.cancel_payouts_for_visit(visit, reason='visit cancelled')
         return Response(self.get_serializer(visit).data)
 
     @action(detail=False, methods=['post'])

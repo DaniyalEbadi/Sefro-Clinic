@@ -224,7 +224,7 @@ class WelcomePackUsageSerializer(serializers.ModelSerializer):
             'id', 'welcome_pack', 'welcome_pack_name', 'customer', 'customer_name',
             'visit', 'issued_by', 'issued_by_name', 'quantity',
             'total_cost_usd_snapshot', 'exchange_rate_snapshot', 'total_cost_toman_snapshot',
-            'issued_at', 'created_at',
+            'issued_at', 'created_at', 'idempotency_key',
         ]
         read_only_fields = fields
 
