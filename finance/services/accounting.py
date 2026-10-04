@@ -65,14 +65,53 @@ def _normalise_selected_products(selected_products, service_ids):
     return selected
 
 
+def _normalise_extra_products(extra_products):
+    """Return [(product_id, Decimal quantity)] for billable non-recipe products.
+
+    Manual invoice extras («محصولات این صورتحساب») are not part of any service
+    recipe but must still decrement stock and leave a cost snapshot so reports
+    count their cost. Their ProductUsage rows carry ``service=None`` — summed
+    as visit-unattributed cost, following the welcome-pack precedent.
+    """
+    if extra_products is None:
+        return []
+    if not isinstance(extra_products, (list, tuple)):
+        raise ConsumptionError('extra_products must be a list of [product_id, quantity] pairs.')
+
+    parsed = []
+    seen_product_ids = set()
+    for entry in extra_products:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+            raise ConsumptionError('Each extra product must be [product_id, quantity].')
+        raw_product_id, raw_quantity = entry
+        try:
+            if isinstance(raw_product_id, bool):
+                raise ValueError
+            product_id = int(raw_product_id)
+        except (TypeError, ValueError) as exc:
+            raise ConsumptionError('Invalid product id.') from exc
+        if product_id in seen_product_ids:
+            raise ConsumptionError(f'Duplicate extra product {product_id}.')
+        seen_product_ids.add(product_id)
+        parsed.append((product_id, _parse_quantity(raw_quantity)))
+    return parsed
+
+
 @transaction.atomic
-def record_visit_consumption(visit, *, selected_products=None, at: Optional[object] = None, rate=None):
+def record_visit_consumption(
+    visit, *, selected_products=None, extra_products=None, at: Optional[object] = None, rate=None,
+):
     """Atomically consume a visit recipe and snapshot actual product costs.
 
     The legacy ``{service_id: [[product_id, quantity]]}`` payload remains in
     use. Mandatory items are automatic; explicitly supplying a mandatory item
     is the previously supported quantity override. Every configured selection
     group requires exactly one selected item.
+
+    ``extra_products`` are billable non-recipe products added to the invoice by
+    the operator. They draw down stock and leave a cost snapshot just like
+    recipe materials, but carry no service. A shortage on either a recipe item
+    or an extra rolls the whole call back.
     """
     from customers.models import Service, Visit
     from inventory.models import Product
@@ -83,15 +122,19 @@ def record_visit_consumption(visit, *, selected_products=None, at: Optional[obje
     except Visit.DoesNotExist as exc:
         raise ConsumptionError('Visit not found.') from exc
 
-    # A retry/double-click must not consume stock twice. Commission usage is a
-    # distinct event and must not make normal treatment consumption look done.
+    # A retry/double-click must not consume stock twice. Commission usage and a
+    # welcome-pack issuance are distinct events that share the visit and must
+    # not make normal treatment consumption look done. Extras rows have
+    # service=None but welcome_pack_usage=NULL, so retries stay blocked here.
     if ProductUsage.objects.filter(
         visit=visit, package_sale__isnull=True, is_commission=False,
+        welcome_pack_usage__isnull=True,
     ).exists():
         raise ConsumptionError('Consumption has already been recorded for this visit.')
 
     service_ids = set(visit.services.values_list('id', flat=True))
     selected = _normalise_selected_products(selected_products, service_ids)
+    extras = _normalise_extra_products(extra_products)
     services = list(Service.objects.filter(id__in=service_ids).order_by('id'))
     service_items = list(
         ServiceItem.objects.filter(service_id__in=service_ids)
@@ -141,6 +184,7 @@ def record_visit_consumption(visit, *, selected_products=None, at: Optional[obje
             raise ConsumptionError(f'Invalid selection for service {service.id}.')
 
     product_ids = {product_id for _, product_id, _ in usage_specs}
+    product_ids.update(product_id for product_id, _ in extras)
     locked_products = {
         product.id: product
         for product in Product.objects.select_for_update().filter(id__in=product_ids).order_by('id')
@@ -151,6 +195,8 @@ def record_visit_consumption(visit, *, selected_products=None, at: Optional[obje
     total_by_product = defaultdict(lambda: Decimal('0'))
     for _, product_id, quantity in usage_specs:
         total_by_product[product_id] += _parse_quantity(quantity)
+    for product_id, quantity in extras:
+        total_by_product[product_id] += quantity
     for product_id, required_quantity in total_by_product.items():
         product = locked_products[product_id]
         if required_quantity > Decimal(product.count or 0):
@@ -167,6 +213,16 @@ def record_visit_consumption(visit, *, selected_products=None, at: Optional[obje
                 quantity=quantity,
                 visit=visit,
                 service=service,
+                at=at,
+                rate=rate,
+                decrement_stock=True,
+            ))
+        for product_id, quantity in extras:
+            consumed.append(record_product_usage(
+                product=locked_products[product_id],
+                quantity=quantity,
+                visit=visit,
+                service=None,
                 at=at,
                 rate=rate,
                 decrement_stock=True,

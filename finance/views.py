@@ -548,6 +548,14 @@ class RecordConsumptionView(APIView):
                         'Mandatory products are automatic; choose exactly one product from each selection group.'
                     ),
                 ),
+                'extra_products': serializers.ListField(
+                    required=False,
+                    help_text=(
+                        'Optional list of [product_id, quantity] pairs for billable '
+                        'non-recipe products (manual invoice extras). Deducts stock '
+                        'and records cost snapshots.'
+                    ),
+                ),
             },
         ),
         responses=ProductUsageSerializer(many=True),
@@ -555,6 +563,11 @@ class RecordConsumptionView(APIView):
             OpenApiExample(
                 'Alternative selections',
                 value={'selected_products': {'10': [[21, '1.000'], [35, '1.000']]}},
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Manual extras',
+                value={'selected_products': {'10': [[21, '1.000']]}, 'extra_products': [[99, '2']]},
                 request_only=True,
             ),
         ],
@@ -565,8 +578,11 @@ class RecordConsumptionView(APIView):
         if not visit:
             return Response({'error': 'Visit not found.'}, status=status.HTTP_404_NOT_FOUND)
         selected = request.data.get('selected_products')
+        extras = request.data.get('extra_products')
         try:
-            usages = accounting.record_visit_consumption(visit, selected_products=selected)
+            usages = accounting.record_visit_consumption(
+                visit, selected_products=selected, extra_products=extras,
+            )
         except Exception as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(ProductUsageSerializer(usages, many=True).data, status=status.HTTP_201_CREATED)

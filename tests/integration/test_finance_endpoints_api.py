@@ -497,6 +497,94 @@ class RecordConsumptionAPITests(TestCase):
         self.assertEqual(self.product.count, starting_stock)
         self.assertEqual(second.count, Decimal('0.500'))
 
+    def test_extra_products_deduct_stock_and_record_cost(self):
+        extra = make_product(name='Alkarisah', sku='SKU-9', count=Decimal('4'), cost_usd=Decimal('10.00'))
+        response = self._post(self.visit.id, {'extra_products': [[extra.id, '1.5']]})
+        self.assertEqual(response.status_code, 201, response.data)
+        extra.refresh_from_db()
+        self.assertEqual(extra.count, Decimal('2.500'))
+        usage = ProductUsage.objects.get(product=extra)
+        self.assertIsNone(usage.service)
+        self.assertEqual(Decimal(usage.total_cost_usd_snapshot), Decimal('15.00'))
+        # the service recipe is still consumed in the same atomic call
+        self.assertEqual(ProductUsage.objects.filter(product=self.product).count(), 1)
+
+    def test_extra_products_short_stock_and_duplicates_reject_everything(self):
+        extra = make_product(name='Rare Oil', sku='SKU-10', count=Decimal('1'))
+        short = self._post(self.visit.id, {'extra_products': [[extra.id, '5']]})
+        self.assertEqual(short.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        duplicate = self._post(self.visit.id, {'extra_products': [[extra.id, '1'], [extra.id, '1']]})
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+        # extras-only payload still records recipe + extras in one call
+        ok = self._post(self.visit.id, {'extra_products': [[extra.id, '1']]})
+        self.assertEqual(ok.status_code, 201, ok.data)
+        extra.refresh_from_db()
+        self.assertEqual(extra.count, Decimal('0.000'))
+
+    def test_extra_products_retry_is_blocked_by_the_idempotency_guard(self):
+        extra = make_product(name='Retried Extra', sku='SKU-11', count=Decimal('10'))
+        first = self._post(self.visit.id, {'extra_products': [[extra.id, '1']]})
+        self.assertEqual(first.status_code, 201, first.data)
+        retry = self._post(self.visit.id, {'extra_products': [[extra.id, '1']]})
+        self.assertEqual(retry.status_code, 400)
+        self.assertIn('already been recorded', retry.data['error'])
+        extra.refresh_from_db()
+        self.assertEqual(extra.count, Decimal('9.000'))
+
+    def test_extra_shortage_rolls_back_the_recipe_consumption_too(self):
+        extra = make_product(name='Too Short', sku='SKU-12', count=Decimal('1'))
+        starting_stock = self.product.count
+
+        response = self._post(self.visit.id, {'extra_products': [[extra.id, '5']]})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+        self.product.refresh_from_db()
+        extra.refresh_from_db()
+        self.assertEqual(self.product.count, starting_stock)
+        self.assertEqual(extra.count, Decimal('1.000'))
+
+    def test_extra_quantity_must_be_valid(self):
+        extra = make_product(name='Validation Extra', sku='SKU-13', count=Decimal('10'))
+        for bad in ['0', '-1', 'NaN', '1.0001']:
+            with self.subTest(quantity=bad):
+                response = self._post(self.visit.id, {'extra_products': [[extra.id, bad]]})
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(ProductUsage.objects.count(), 0)
+
+    def test_extra_products_must_be_pairs_of_product_and_quantity(self):
+        extra = make_product(name='Shape Extra', sku='SKU-14', count=Decimal('10'))
+        for bad in [[[extra.id]], [[extra.id, '1', '2']], 'not-a-list', [[[extra.id], '1']]]:
+            with self.subTest(payload=bad):
+                response = self._post(self.visit.id, {'extra_products': bad})
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(ProductUsage.objects.count(), 0)
+
+    def test_unknown_extra_product_is_rejected(self):
+        response = self._post(self.visit.id, {'extra_products': [[999999, '1']]})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(ProductUsage.objects.count(), 0)
+
+    def test_consumption_still_works_after_a_welcome_pack_was_issued(self):
+        # A pack issuance also writes a service-less ProductUsage row against
+        # this visit; it must not make treatment consumption look already done.
+        from finance.models import WelcomePack, WelcomePackItem
+        from finance.services.welcome_pack import issue_welcome_pack
+
+        gift = make_product(name='Pack Gift', sku='SKU-15', count=Decimal('10'))
+        pack = WelcomePack.objects.create(name='Consumption guard pack')
+        WelcomePackItem.objects.create(welcome_pack=pack, product=gift, quantity=Decimal('1'))
+        issue_welcome_pack(welcome_pack=pack, customer=self.customer, quantity='1')
+
+        response = self._post(self.visit.id)
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(ProductUsage.objects.filter(visit=self.visit, service=self.service).count(), 1)
+
 
 class ServiceItemSelectionGroupAPITests(TestCase):
     def test_admin_can_configure_multiple_items_in_one_group(self):
