@@ -39,6 +39,36 @@ class ServiceSerializer(serializers.ModelSerializer):
             'compensation_role',
         ]
 
+    def validate(self, attrs):
+        """Keep both price representations consistent from either input.
+
+        ``price_usd`` is authoritative for money. If only the Toman ``price`` is
+        sent it is converted at the current rate (never silently 0); if only
+        ``price_usd`` is sent the Toman value is derived; when both are sent
+        ``price_usd`` wins and ``price`` is rewritten consistently.
+        """
+        from finance.services.exchange_rates import convert_usd_to_toman, get_current_usd_to_toman_rate
+
+        price = attrs.get('price')
+        price_usd = attrs.get('price_usd')
+        rate = get_current_usd_to_toman_rate()
+        if price_usd is not None:
+            if price_usd == 0 and price is not None and Decimal(str(price)) > 0:
+                raise serializers.ValidationError(
+                    {'price_usd': 'price_usd is 0 while a positive Toman price was sent; provide a consistent pair.'}
+                )
+            if rate:
+                attrs['price'] = convert_usd_to_toman(Decimal(str(price_usd)), rate)
+        elif price is not None:
+            toman = Decimal(str(price))
+            if toman > 0 and not rate:
+                raise serializers.ValidationError({'price': 'Cannot derive USD price without an exchange rate.'})
+            if rate:
+                attrs['price_usd'] = (toman / rate).quantize(Decimal('0.01'))
+                if toman > 0 and attrs['price_usd'] == 0:
+                    raise serializers.ValidationError({'price': 'Toman price is too small to convert to a non-zero USD amount.'})
+        return attrs
+
     def _get_exchange_rate(self):
         """Resolve the current rate once per request/context to avoid N+1 external calls."""
         # Reuse context cache across list serialization

@@ -1,10 +1,12 @@
 from datetime import datetime
+from decimal import Decimal
 
 import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
+from finance.models import Sale
 from tests.helpers import admin_client, employee_client, make_admin
 
 
@@ -61,8 +63,14 @@ class ReportsAPIViewTests(TestCase):
             first_name='Ali', last_name='Rezaei',
             mobile_number='09121111111', national_id='001-0000001',
         )
-        Payment.objects.create(customer=self.customer, amount='150000', paid_at=timezone.now())
-        Payment.objects.create(customer=self.customer, amount='50000', paid_at=timezone.now())
+        Sale.objects.create(
+            customer=self.customer, amount_usd=Decimal('1.50'), amount_toman=Decimal('150000'),
+            exchange_rate=Decimal('100000'), status=Sale.Status.PAID,
+        )
+        Sale.objects.create(
+            customer=self.customer, amount_usd=Decimal('0.50'), amount_toman=Decimal('50000'),
+            exchange_rate=Decimal('100000'), status=Sale.Status.PAID,
+        )
 
     def test_response_contains_all_documented_keys(self):
         response = self.client.get('/api/reports/')
@@ -114,7 +122,10 @@ class PeriodReportTests(TestCase):
         )
 
     def _seed_payment_now(self):
-        Payment.objects.create(customer=self.customer, amount='25000', paid_at=timezone.now())
+        Sale.objects.create(
+            customer=self.customer, amount_usd=Decimal('0.25'), amount_toman=Decimal('25000'),
+            exchange_rate=Decimal('100000'), status=Sale.Status.PAID,
+        )
 
     def test_daily_report_period_and_total(self):
         self._seed_payment_now()

@@ -24,8 +24,8 @@ def make_rule(role=StaffCompensationRule.Role.DOCTOR, **overrides):
     base = {
         'role': role,
         'payout_type': StaffCompensationRule.PayoutType.CASH,
-        'calculation_type': StaffCompensationRule.CalculationType.PERCENT_PROFIT,
-        'percent_profit': Decimal('50.00'),
+        'calculation_type': StaffCompensationRule.CalculationType.PERCENT_REVENUE,
+        'percent_revenue': Decimal('50.00'),
     }
     base.update(overrides)
     # get_or_create: the clinic rules ship in a data migration, so the default
@@ -84,16 +84,16 @@ class CalculateVisitProfitTests(CompensationFixtureMixin, TestCase):
 
 
 class CalculateServicePayoutTests(CompensationFixtureMixin, TestCase):
-    PROFIT_USD = Decimal('150.00')
-    PROFIT_TOMAN = Decimal('15000000.00')
+    REVENUE_USD = Decimal('150.00')
+    REVENUE_TOMAN = Decimal('15000000.00')
 
     def _calc(self, rule):
         return staff_compensation.calculate_service_payout(
-            self.visit, self.service, rule, self.PROFIT_USD, self.PROFIT_TOMAN, RATE,
+            self.visit, self.service, rule, self.REVENUE_USD, self.REVENUE_TOMAN, RATE,
         )
 
-    def test_percent_of_profit(self):
-        result = self._calc(make_rule(percent_profit=Decimal('50.00')))
+    def test_percent_of_revenue(self):
+        result = self._calc(make_rule(percent_revenue=Decimal('50.00')))
         self.assertEqual(result['payout_cash_usd'], Decimal('75.00'))
         self.assertEqual(result['payout_cash_toman'], Decimal('7500000.00'))
         self.assertEqual(result['payout_product_value_usd'], Decimal('0'))
@@ -109,7 +109,7 @@ class CalculateServicePayoutTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(result['payout_cash_usd'], Decimal('78.00'))
 
     def test_percent_missing_yields_zero_cash(self):
-        result = self._calc(make_rule(percent_profit=None))
+        result = self._calc(make_rule(percent_revenue=None))
         self.assertEqual(result['payout_cash_usd'], Decimal('0'))
         self.assertEqual(result['payout_cash_toman'], Decimal('0'))
 
@@ -217,18 +217,18 @@ class GenerateVisitPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(payout.revenue_usd, Decimal('200.00'))
         self.assertEqual(payout.product_cost_usd, Decimal('50.00'))
         self.assertEqual(payout.profit_usd, Decimal('150.00'))
-        self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
-        self.assertEqual(payout.payout_cash_toman, Decimal('7500000.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
+        self.assertEqual(payout.payout_cash_toman, Decimal('10000000.00'))
 
     def test_regenerating_updates_instead_of_duplicating(self):
         make_rule()
         staff_compensation.generate_visit_payouts(self.visit)
         StaffCompensationRule.objects.filter(role=StaffCompensationRule.Role.DOCTOR).update(
-            percent_profit=Decimal('40.00'),
+            percent_revenue=Decimal('40.00'),
         )
         staff_compensation.generate_visit_payouts(self.visit)
         self.assertEqual(StaffPayout.objects.count(), 1)
-        self.assertEqual(StaffPayout.objects.get().payout_cash_usd, Decimal('60.00'))
+        self.assertEqual(StaffPayout.objects.get().payout_cash_usd, Decimal('80.00'))
 
     def test_product_payout_records_commission_usage_and_stock(self):
         make_rule(
@@ -358,8 +358,8 @@ class StaffCompensationRuleAPITests(TestCase):
         payload = {
             'role': StaffCompensationRule.Role.DOCTOR,
             'payout_type': StaffCompensationRule.PayoutType.CASH,
-            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_PROFIT,
-            'percent_profit': '50.00',
+            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_REVENUE,
+            'percent_revenue': '50.00',
         }
         created = self.admin.post(self.URL, payload, format='json')
         self.assertEqual(created.status_code, 201, created.data)
@@ -371,25 +371,25 @@ class StaffCompensationRuleAPITests(TestCase):
 
     def test_admin_can_update_rule(self):
         rule = make_rule()
-        response = self.admin.patch(f'{self.URL}{rule.id}/', {'percent_profit': '60.00'}, format='json')
+        response = self.admin.patch(f'{self.URL}{rule.id}/', {'percent_revenue': '60.00'}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
         rule.refresh_from_db()
-        self.assertEqual(rule.percent_profit, Decimal('60.00'))
+        self.assertEqual(rule.percent_revenue, Decimal('60.00'))
 
     def test_duplicate_role_is_rejected(self):
         make_rule()
         response = self.admin.post(self.URL, {
             'role': StaffCompensationRule.Role.DOCTOR,
-            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_PROFIT,
-            'percent_profit': '10.00',
+            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_REVENUE,
+            'percent_revenue': '10.00',
         }, format='json')
         self.assertEqual(response.status_code, 400)
 
     def test_employee_cannot_mutate_rules(self):
         response = self.employee.post(self.URL, {
             'role': StaffCompensationRule.Role.LASER,
-            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_PROFIT,
-            'percent_profit': '10.00',
+            'calculation_type': StaffCompensationRule.CalculationType.PERCENT_REVENUE,
+            'percent_revenue': '10.00',
         }, format='json')
         self.assertEqual(response.status_code, 403)
 
@@ -430,12 +430,12 @@ class StaffPayoutAPITests(CompensationFixtureMixin, TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['staff_name'], 'emp_user')
         self.assertEqual(response.data['service_name'], 'Botox')
-        self.assertEqual(response.data['total_payout_usd'], '75.00')
+        self.assertEqual(response.data['total_payout_usd'], '100.00')
 
     def test_summary_action(self):
         response = self.client.get(f'{self.LIST_URL}summary/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['total_payout_usd'], '75.00')
+        self.assertEqual(response.data['total_payout_usd'], '100.00')
         self.assertEqual(response.data['payout_count'], 1)
 
     def test_summary_action_accepts_explicit_range(self):
@@ -458,7 +458,7 @@ class StaffPayoutAPITests(CompensationFixtureMixin, TestCase):
     def test_reports_staff_payout_summary_endpoint(self):
         response = self.client.get('/api/finance/reports/staff-payout-summary/')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['total_payout_usd'], '75.00')
+        self.assertEqual(response.data['total_payout_usd'], '100.00')
 
     def test_employee_can_read_but_not_see_other_data(self):
         employee = employee_client()
@@ -488,7 +488,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         payout = StaffPayout.objects.get()
         self.assertEqual(payout.visit_id, self.visit.id)
         self.assertEqual(payout.staff, self.staff)
-        self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
 
     def test_completing_visit_without_rule_creates_nothing(self):
         StaffCompensationRule.objects.all().delete()
@@ -654,7 +654,7 @@ class MultiProductPayoutTests(CompensationFixtureMixin, TestCase):
         staff_compensation.generate_visit_payouts(self.visit)
 
         payout = StaffPayout.objects.get()
-        self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
         self.assertEqual(payout.payout_product_value_usd, Decimal('80.00'))
         self.assertEqual(payout.payout_product_value_toman, Decimal('8000000.00'))
         lines = list(payout.product_lines.all())

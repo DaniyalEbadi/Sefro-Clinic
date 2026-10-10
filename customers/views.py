@@ -102,23 +102,28 @@ class DashboardAPIView(APIView):
         return Response(data)
 
 
-def _filtered_payments(date_from=None, date_to=None):
-    qs = Payment.objects.all()
+def _filtered_sales(date_from=None, date_to=None):
+    """Authoritative revenue rows: sales ledger, net of refunds."""
+    from finance.models import Sale
+    from finance.services.financials import REVENUE_STATUSES
+
+    qs = Sale.objects.filter(status__in=REVENUE_STATUSES)
     if date_from:
-        qs = qs.filter(paid_at__gte=shamsi_to_greg_date(date_from))
+        qs = qs.filter(created_at__gte=shamsi_to_greg_date(date_from))
     if date_to:
-        qs = qs.filter(paid_at__lt=shamsi_to_greg_date(date_to) + timedelta(days=1))
+        qs = qs.filter(created_at__lt=shamsi_to_greg_date(date_to) + timedelta(days=1))
     return qs
 
 
-def _build_sales_chart(payments_qs, periods):
+def _build_sales_chart(sales_qs, periods):
+    """Bucket authoritative sale amounts (Toman) by Shamsi period."""
     buckets = {p: defaultdict(Decimal) for p in periods}
-    for payment in payments_qs.iterator():
-        shamsi_dt = jdatetime.datetime.fromgregorian(datetime=timezone.localtime(payment.paid_at))
+    for sale in sales_qs.iterator():
+        shamsi_dt = jdatetime.datetime.fromgregorian(datetime=timezone.localtime(sale.created_at))
         sdate = shamsi_dt.date()
         for period in buckets:
             key = _shamsi_period_key(sdate, period)
-            buckets[period][key] += payment.amount
+            buckets[period][key] += sale.amount_toman
     return {p: [{'period': k, 'total': float(v)} for k, v in sorted(d.items())] for p, d in buckets.items()}
 
 
@@ -189,12 +194,12 @@ class ReportsAPIView(APIView):
     def get(self, request):
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
-        qs = _filtered_payments(date_from, date_to)
+        qs = _filtered_sales(date_from, date_to)
         all_periods = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly']
         result = _build_sales_chart(qs, all_periods)
 
         # Total sales
-        result['total_sales'] = qs.aggregate(total=Sum('amount'))['total'] or 0
+        result['total_sales'] = qs.aggregate(total=Sum('amount_toman'))['total'] or 0
 
         # Average satisfaction
         avg = Customer.objects.exclude(satisfaction__isnull=True).aggregate(avg=Avg('satisfaction'))['avg']
@@ -225,12 +230,12 @@ class DailyReportView(APIView):
 
     def get(self, request):
         gs, ge = _shamsi_period_range('daily')
-        qs = _filtered_payments(None, None).filter(paid_at__gte=gs, paid_at__lt=ge)
+        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
         chart = _build_sales_chart(qs, ['daily'])
         return Response({
             'period': jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).strftime('%Y-%m-%d'),
             'sales': chart.get('daily', []),
-            'total': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
         })
 
@@ -241,12 +246,12 @@ class WeeklyReportView(APIView):
 
     def get(self, request):
         gs, ge = _shamsi_period_range('weekly')
-        qs = _filtered_payments(None, None).filter(paid_at__gte=gs, paid_at__lt=ge)
+        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
         chart = _build_sales_chart(qs, ['daily'])
         return Response({
             'period': f"{_shamsi_period_key(jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).date(), 'weekly')}",
             'days': chart.get('daily', []),
-            'total': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
         })
 
@@ -257,12 +262,12 @@ class MonthlyReportView(APIView):
 
     def get(self, request):
         gs, ge = _shamsi_period_range('monthly')
-        qs = _filtered_payments(None, None).filter(paid_at__gte=gs, paid_at__lt=ge)
+        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
         chart = _build_sales_chart(qs, ['daily'])
         return Response({
             'period': jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).strftime('%Y-%m'),
             'days': chart.get('daily', []),
-            'total': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
         })
 
@@ -273,12 +278,12 @@ class QuarterlyReportView(APIView):
 
     def get(self, request):
         gs, ge = _shamsi_period_range('quarterly')
-        qs = _filtered_payments(None, None).filter(paid_at__gte=gs, paid_at__lt=ge)
+        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
         chart = _build_sales_chart(qs, ['monthly'])
         return Response({
             'period': _shamsi_period_key(jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).date(), 'quarterly'),
             'months': chart.get('monthly', []),
-            'total': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
         })
 
@@ -289,12 +294,12 @@ class YearlyReportView(APIView):
 
     def get(self, request):
         gs, ge = _shamsi_period_range('yearly')
-        qs = _filtered_payments(None, None).filter(paid_at__gte=gs, paid_at__lt=ge)
+        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
         chart = _build_sales_chart(qs, ['monthly'])
         return Response({
             'period': str(jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).year),
             'months': chart.get('monthly', []),
-            'total': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
         })
 
@@ -304,7 +309,7 @@ class AllReportsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        qs = Payment.objects.all()
+        qs = _filtered_sales()
         all_periods = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly']
         chart = _build_sales_chart(qs, all_periods)
 
@@ -321,7 +326,7 @@ class AllReportsView(APIView):
 
         return Response({
             'sales_chart': chart,
-            'total_sales': qs.aggregate(total=Sum('amount'))['total'] or 0,
+            'total_sales': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
             'avg_satisfaction': float(avg) if avg else 0,
             'service_popularity': list(svc_pop),
             'customer_status': status_breakdown,

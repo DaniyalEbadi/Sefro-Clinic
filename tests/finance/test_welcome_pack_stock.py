@@ -183,7 +183,7 @@ class WelcomePackStockTests(TestCase):
         )
         row = next(r for r in rows if r['service_id'] == service.id)
         self.assertEqual(row['product_cost_usd'], Decimal('0.00'))
-        self.assertEqual(row['welcome_pack_cost_basis'], 'excluded')
+        self.assertEqual(row['welcome_pack_cost_basis'], 'allocated_by_revenue_share')
 
     def test_pack_consumption_is_excluded_from_dashboard_product_cost(self):
         issue_welcome_pack(welcome_pack=self.pack, customer=self.customer, quantity='1', rate=RATE)

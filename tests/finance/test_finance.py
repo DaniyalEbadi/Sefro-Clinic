@@ -343,6 +343,12 @@ class ApiAuthTests(FinanceBase):
 
 
 class WalletConcurrencyTests(TransactionTestCase):
+    # TransactionTestCase truncates every table after each test (no rollback),
+    # which wipes the data-migration seeds (expense/opex categories, comp rules).
+    # serialized_rollback restores the pre-test snapshot so later test classes
+    # still see the seeds.
+    serialized_rollback = True
+
     def setUp(self):
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test')
         WalletRewardRule.objects.create(

@@ -146,14 +146,53 @@ class PackageServiceSerializer(serializers.ModelSerializer):
 
 class WelcomePackItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField(read_only=True)
+    unit_cost_usd = serializers.SerializerMethodField(read_only=True)
+    unit_cost_toman = serializers.SerializerMethodField(read_only=True)
+    line_cost_usd = serializers.SerializerMethodField(read_only=True)
+    line_cost_toman = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = WelcomePackItem
-        fields = ['id', 'welcome_pack', 'product', 'product_name', 'quantity', 'created_at', 'updated_at']
+        fields = [
+            'id', 'welcome_pack', 'product', 'product_name', 'quantity', 'created_at', 'updated_at',
+            'unit_cost_usd', 'unit_cost_toman', 'line_cost_usd', 'line_cost_toman',
+        ]
         read_only_fields = ['created_at', 'updated_at']
 
     def get_product_name(self, obj):
         return str(obj.product) if obj.product else ''
+
+    def _unit_cost_usd(self, obj):
+        from .services.inventory import current_cost
+        try:
+            return current_cost(obj.product)
+        except Exception:
+            return None
+
+    def get_unit_cost_usd(self, obj):
+        cost = self._unit_cost_usd(obj)
+        return str(cost) if cost is not None else None
+
+    def get_unit_cost_toman(self, obj):
+        cost = self._unit_cost_usd(obj)
+        if cost is None:
+            return None
+        from .services.exchange_rates import convert_usd_to_toman, get_current_usd_to_toman_rate
+        rate = get_current_usd_to_toman_rate()
+        return str(convert_usd_to_toman(cost, rate)) if rate else None
+
+    def get_line_cost_usd(self, obj):
+        cost = self._unit_cost_usd(obj)
+        return str((cost * Decimal(str(obj.quantity))).quantize(Decimal('0.01'))) if cost is not None else None
+
+    def get_line_cost_toman(self, obj):
+        cost = self._unit_cost_usd(obj)
+        if cost is None:
+            return None
+        from .services.exchange_rates import convert_usd_to_toman, get_current_usd_to_toman_rate
+        rate = get_current_usd_to_toman_rate()
+        total = (cost * Decimal(str(obj.quantity))).quantize(Decimal('0.01'))
+        return str(convert_usd_to_toman(total, rate)) if rate else None
 
     def validate_quantity(self, value):
         if value is not None and value <= 0:
@@ -417,7 +456,7 @@ class StaffCompensationRuleSerializer(serializers.ModelSerializer):
         model = StaffCompensationRule
         fields = [
             'id', 'role', 'payout_type', 'calculation_type',
-            'percent_profit', 'fixed_amount_usd', 'fixed_amount_toman',
+            'percent_revenue', 'fixed_amount_usd', 'fixed_amount_toman',
             'transport_usd', 'transport_toman',
             'product', 'product_qty', 'products',
             'is_active', 'created_at', 'updated_at',

@@ -190,6 +190,16 @@ def checkout(
         rate=rate,
         description=f'Reward for sale {sale.id}',
     )
+
+    # Final settlement: the payout a visit earned must reflect what was actually
+    # collected, never the list price frozen at completion. Re-run settlement
+    # for the visit's sale now that revenue is final. Approved/paid payouts
+    # keep their settled amounts; refunded/cancelled ones are never revived.
+    if visit is not None and visit.status == 'completed':
+        from .staff_compensation import generate_visit_payouts
+
+        generate_visit_payouts(visit)
+
     return sale
 
 

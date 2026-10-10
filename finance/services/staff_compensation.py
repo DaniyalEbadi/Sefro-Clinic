@@ -64,15 +64,15 @@ def _rule_product_lines(rule):
     return [(product, quantity) for product, quantity in lines if product and quantity and quantity > 0]
 
 
-def calculate_service_payout(visit, service, rule, profit_usd, profit_toman, rate):
+def calculate_service_payout(visit, service, rule, revenue_usd, revenue_toman, rate):
     payout_cash_usd = Decimal('0')
     payout_cash_toman = Decimal('0')
 
-    if rule.calculation_type == StaffCompensationRule.CalculationType.PERCENT_PROFIT:
-        if rule.percent_profit:
-            pct = rule.percent_profit / Decimal('100')
-            payout_cash_usd = (profit_usd * pct).quantize(Decimal('0.01'))
-            payout_cash_toman = (profit_toman * pct).quantize(Decimal('0.01'))
+    if rule.calculation_type == StaffCompensationRule.CalculationType.PERCENT_REVENUE:
+        if rule.percent_revenue:
+            pct = rule.percent_revenue / Decimal('100')
+            payout_cash_usd = (revenue_usd * pct).quantize(Decimal('0.01'))
+            payout_cash_toman = (revenue_toman * pct).quantize(Decimal('0.01'))
 
             if rule.transport_usd:
                 payout_cash_usd += rule.transport_usd
@@ -225,7 +225,7 @@ def _upsert_session_payout(*, visit, staff, service, role, financials, rate, pay
         return payout, True
 
     # Already settled: leave the agreed amount alone.
-    if payout.status in SETTLED_STATUSES:
+    if payout.status in SETTLED_STATUSES or payout.status == StaffPayout.Status.CANCELLED:
         return payout, False
 
     changed = [field for field in _SESSION_AMOUNT_FIELDS if getattr(payout, field) != defaults[field]]
@@ -309,7 +309,7 @@ def generate_visit_payouts(visit, actor=None, strict_staff=True):
 
         payout_calc = calculate_service_payout(
             visit, service, rule,
-            service_financials['profit_usd'], service_financials['profit_toman'], rate,
+            service_financials['revenue_usd'], service_financials['revenue_toman'], rate,
         )
         payout_mode = (
             StaffPayout.PayoutMode.PRODUCT
@@ -383,7 +383,6 @@ def staff_payout_summary(start=None, end=None, staff_id=None, role=None):
         total_cash_toman=Sum('payout_cash_toman'),
         total_product_value_usd=Sum('payout_product_value_usd'),
         total_product_value_toman=Sum('payout_product_value_toman'),
-        count=Sum('id'),
     )
 
     return {

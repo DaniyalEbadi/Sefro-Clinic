@@ -146,6 +146,10 @@ class WalletRewardRuleTests(TestCase):
 
 
 class WalletConcurrencyTests(TransactionTestCase):
+    # See tests/finance/test_finance.py: TransactionTestCase truncates all tables,
+    # wiping migration seeds; serialized_rollback restores them.
+    serialized_rollback = True
+
     def setUp(self):
         set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test')
         WalletRewardRule.objects.create(

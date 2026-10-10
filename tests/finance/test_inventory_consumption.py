@@ -18,6 +18,10 @@ from tests.helpers import make_customer
 class ConcurrentVisitConsumptionTests(TransactionTestCase):
     """Regression coverage for row locking on treatment inventory."""
 
+    # See tests/finance/test_finance.py: TransactionTestCase truncates all tables,
+    # wiping migration seeds; serialized_rollback restores them.
+    serialized_rollback = True
+
     reset_sequences = True
 
     def setUp(self):

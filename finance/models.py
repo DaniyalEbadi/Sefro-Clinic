@@ -518,15 +518,15 @@ class StaffCompensationRule(models.Model):
         HYBRID = 'hybrid', 'Cash + Product'
 
     class CalculationType(models.TextChoices):
-        PERCENT_PROFIT = 'percent_profit', '% of Profit'
+        PERCENT_REVENUE = 'percent_revenue', '% of Revenue'
         FIXED_PER_SESSION = 'fixed_per_session', 'Fixed per Session'
         MONTHLY_SALARY = 'monthly_salary', 'Monthly Salary'
 
     role = models.CharField(max_length=20, choices=Role.choices, unique=True)
     payout_type = models.CharField(max_length=20, choices=PayoutType.choices, default=PayoutType.CASH)
-    calculation_type = models.CharField(max_length=20, choices=CalculationType.choices, default=CalculationType.PERCENT_PROFIT)
+    calculation_type = models.CharField(max_length=20, choices=CalculationType.choices, default=CalculationType.PERCENT_REVENUE)
 
-    percent_profit = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Percentage of profit (e.g., 50.00 for 50%)')
+    percent_revenue = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True, help_text='Percentage of the collected service revenue (e.g., 50.00 for 50%)')
     fixed_amount_usd = usd_field(null=True, blank=True, help_text='Fixed USD amount per session, or the monthly salary when calculation_type is monthly_salary')
     fixed_amount_toman = toman_field(null=True, blank=True, help_text='Fixed Toman amount per session, or the monthly salary when calculation_type is monthly_salary (alternative to USD)')
     transport_usd = usd_field(default=Decimal('0'), help_text='Transport allowance per session (USD)')
