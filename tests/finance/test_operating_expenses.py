@@ -31,6 +31,66 @@ from tests.helpers import admin_client, employee_client, make_admin, make_employ
 DEFAULT_RATE = Decimal('100000')
 
 
+def ensure_seed_categories():
+    """Re-create migration seeds when a TransactionTestCase wiped them.
+
+    TransactionTestCase truncates every table (no rollback), so the
+    0013/0005/0015 data-migration rows can disappear for later test classes
+    even though django_migrations still lists the migrations as applied.
+    All three seeds are idempotent get_or_create, so calling this in setUp
+    is safe whether the rows exist or not.
+    """
+    from finance.models import ExpenseCategory, OperatingExpenseCategory, StaffCompensationRule
+
+    for name in ('Transport', 'Meals', 'Supplies', 'Printing', 'Other'):
+        ExpenseCategory.objects.get_or_create(name=name, defaults={'is_active': True})
+    opex_seeds = [
+        ('Office Supplies', 'office-supplies', 10),
+        ('Cleaning & Hygiene', 'cleaning-hygiene', 20),
+        ('Customer Refreshments', 'customer-refreshments', 30),
+        ('Utilities', 'utilities', 40),
+        ('Rent', 'rent', 50),
+        ('Maintenance & Repairs', 'maintenance-repairs', 60),
+        ('Marketing', 'marketing', 70),
+        ('Equipment', 'equipment', 80),
+        ('Internet & Telephone', 'internet-telephone', 90),
+        ('Other', 'other', 100),
+    ]
+    for name, slug, sort_order in opex_seeds:
+        OperatingExpenseCategory.objects.get_or_create(
+            slug=slug, defaults={'name': name, 'sort_order': sort_order, 'is_active': True},
+        )
+    for role, percent in (
+        (StaffCompensationRule.Role.DOCTOR, Decimal('50.00')),
+        (StaffCompensationRule.Role.FACIAL, Decimal('30.00')),
+    ):
+        rule, _ = StaffCompensationRule.objects.get_or_create(role=role)
+        changed = False
+        if rule.calculation_type != StaffCompensationRule.CalculationType.PERCENT_REVENUE:
+            rule.calculation_type = StaffCompensationRule.CalculationType.PERCENT_REVENUE
+            changed = True
+        if rule.percent_revenue is None:
+            rule.percent_revenue = percent
+            changed = True
+        if rule.payout_type != StaffCompensationRule.PayoutType.CASH:
+            rule.payout_type = StaffCompensationRule.PayoutType.CASH
+            changed = True
+        if not rule.is_active:
+            rule.is_active = True
+            changed = True
+        if changed:
+            rule.save()
+    rule, _ = StaffCompensationRule.objects.get_or_create(role=StaffCompensationRule.Role.LASER)
+    if rule.calculation_type != StaffCompensationRule.CalculationType.MONTHLY_SALARY:
+        if rule.fixed_amount_toman is None and rule.fixed_amount_usd is None:
+            rule.calculation_type = StaffCompensationRule.CalculationType.MONTHLY_SALARY
+            rule.fixed_amount_toman = Decimal('18000000')
+            rule.transport_toman = Decimal('8000000')
+            rule.payout_type = StaffCompensationRule.PayoutType.CASH
+            rule.is_active = True
+            rule.save()
+
+
 def make_category(name='Test Refreshments', slug='test-refreshments', **overrides):
     """Test category using non-seeded names/slugs.
 
@@ -44,6 +104,7 @@ def make_category(name='Test Refreshments', slug='test-refreshments', **override
 
 class OpexBase(TestCase):
     def setUp(self):
+        ensure_seed_categories()
         set_rate('USD', 'TOMAN', DEFAULT_RATE, effective_at=timezone.now(), source='test')
         self.category = make_category()
         self.admin = make_admin()

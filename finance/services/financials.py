@@ -8,12 +8,15 @@ The financial chain is:
     Revenue (actually collected, Sale ledger)
       - Product/material cost (actual ProductUsage snapshots)
       - Welcome-pack cost (WelcomePackUsage snapshots)
-    = Gross Profit                      <- staff and overhead are BELOW this line
-
       - Staff compensation (StaffPayout cash + product value)
+    = Clinic Share                    <- the clinic's take per service
+
       - Operating expenses (OperatingExpense)
       - Approved/paid staff claims (Expense)
     = Net Profit
+
+    gross_profit is reported as revenue minus product cost and welcome-pack
+    cost (staff and overhead sit below that line, as before).
 
 Cost basis rule: consumption cost always comes from the immutable
 ``ProductUsage.total_cost_usd_snapshot`` captured at the moment of use. Live
@@ -23,7 +26,7 @@ silently disagree.
 """
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Count, Sum
 
 from ..models import (
     Expense,
@@ -52,7 +55,11 @@ EXPENSE_STATUSES = [Expense.Status.APPROVED, Expense.Status.PAID]
 
 REVENUE_BASIS_LEDGER = 'sale_ledger'
 REVENUE_BASIS_LIST_PRICE = 'list_price'
-WELCOME_PACK_COST_BASIS_EXCLUDED = 'excluded'
+#: Welcome-pack cost attribution label: visit packs are split across the
+#: visit's services by revenue share (see reporting.profit_by_service), so
+#: rows sum back to the visit total. Kept for backward-compatible imports.
+WELCOME_PACK_COST_BASIS_ALLOCATED = 'allocated_by_revenue_share'
+WELCOME_PACK_COST_BASIS_EXCLUDED = WELCOME_PACK_COST_BASIS_ALLOCATED
 
 # Cash is recorded under three codes; all of them are real cash.
 CASH_METHODS = (
@@ -151,6 +158,26 @@ def calculate_visit_financials(visit, rate=None):
     revenue_usd, revenue_toman, basis = visit_revenue(visit, rate=rate)
     costs, unattributed_usd, unattributed_toman = service_costs_for_visit(visit, rate=rate)
 
+    # Compensation owed for this visit, read from the payout ledger (the same
+    # source the period report uses) rather than recomputed, so the per-visit
+    # figures and the financial summary cannot disagree.
+    payout_rows = StaffPayout.objects.filter(
+        visit=visit, status__in=PAYOUT_OBLIGATION_STATUSES,
+    ).values_list('service_id', 'payout_cash_usd', 'payout_cash_toman', 'payout_product_value_usd', 'payout_product_value_toman')
+    payout_usd = {}
+    payout_toman = {}
+    for sid, cash_usd, cash_toman, prod_usd, prod_toman in payout_rows:
+        payout_usd[sid] = payout_usd.get(sid, ZERO) + _q(cash_usd) + _q(prod_usd)
+        payout_toman[sid] = payout_toman.get(sid, ZERO) + _q(cash_toman) + _q(prod_toman)
+
+    # Welcome-pack cost issued on this visit: a clinic cost (never a customer
+    # charge), snapshotted at issuance time.
+    wp_agg = WelcomePackUsage.objects.filter(visit=visit).aggregate(
+        usd=Sum('total_cost_usd_snapshot'), toman=Sum('total_cost_toman_snapshot'),
+    )
+    welcome_pack_cost_usd = _q(wp_agg['usd']).quantize(Decimal('0.01'))
+    welcome_pack_cost_toman = _q(wp_agg['toman']).quantize(Decimal('0.01'))
+
     weights = [_q(service.price_usd) for service in services]
     weight_total = sum(weights, ZERO)
 
@@ -169,22 +196,39 @@ def calculate_visit_financials(visit, rate=None):
         else:
             share = share_toman = ZERO
 
+        # The recipe estimate is always computed so it can be compared with the
+        # actual consumption snapshot, even when the actual cost was recorded.
+        estimate_usd = ZERO
+        for item in service.items.select_related('product').all():
+            product_cost = _q(item.product.cost_usd) if item.product else ZERO
+            estimate_usd += (_q(item.quantity) * product_cost).quantize(Decimal('0.01'))
+        estimate_usd = estimate_usd.quantize(Decimal('0.01'))
+
         recorded = costs.get(service.id)
         if recorded is not None:
             cost_usd, cost_toman = recorded
             cost_basis = 'product_usage_snapshot'
         else:
             # Consumption not recorded for this service. Estimate from the
-            # recipe so compensation is still computable, and say so.
-            cost_usd = ZERO
-            for item in service.items.select_related('product').all():
-                product_cost = _q(item.product.cost_usd) if item.product else ZERO
-                cost_usd += (_q(item.quantity) * product_cost).quantize(Decimal('0.01'))
-            cost_usd = cost_usd.quantize(Decimal('0.01'))
+            # recipe so compensation and reporting still work, and say so.
+            cost_usd = estimate_usd
             cost_toman = (cost_usd * rate).quantize(Decimal('0.01'))
             cost_basis = 'service_item_estimate'
 
+        operator_compensation_usd = payout_usd.get(service.id, ZERO).quantize(Decimal('0.01'))
+        operator_compensation_toman = payout_toman.get(service.id, ZERO).quantize(Decimal('0.01'))
+        # Welcome-pack cost has no natural service owner; allocating it by the
+        # same revenue weight used for the revenue split keeps the per-service
+        # rows additive: they sum to the visit's exact totals.
+        if revenue_usd > 0:
+            wp_share_usd = (welcome_pack_cost_usd * (share / revenue_usd)).quantize(Decimal('0.01'))
+            wp_share_toman = (welcome_pack_cost_toman * (share_toman / revenue_toman)).quantize(Decimal('0.01')) if revenue_toman > 0 else ZERO
+        else:
+            wp_share_usd = wp_share_toman = ZERO
+
         profit_usd = (share - cost_usd).quantize(Decimal('0.01'))
+        clinic_share_usd = (share - cost_usd - operator_compensation_usd - wp_share_usd).quantize(Decimal('0.01'))
+        clinic_share_toman = (share_toman - cost_toman - operator_compensation_toman - wp_share_toman).quantize(Decimal('0.01'))
         summed_cost_usd += cost_usd
         summed_cost_toman += cost_toman
         rows[service.id] = {
@@ -196,8 +240,16 @@ def calculate_visit_financials(visit, rate=None):
             'revenue_toman': share_toman,
             'product_cost_usd': cost_usd,
             'product_cost_toman': cost_toman,
+            'recipe_estimate_cost_usd': estimate_usd,
+            'recipe_estimate_cost_toman': (estimate_usd * rate).quantize(Decimal('0.01')),
+            'operator_compensation_usd': operator_compensation_usd,
+            'operator_compensation_toman': operator_compensation_toman,
+            'welcome_pack_cost_usd': wp_share_usd,
+            'welcome_pack_cost_toman': wp_share_toman,
             'profit_usd': profit_usd,
             'profit_toman': (share_toman - cost_toman).quantize(Decimal('0.01')),
+            'clinic_share_usd': clinic_share_usd,
+            'clinic_share_toman': clinic_share_toman,
             'cost_basis': cost_basis,
             'revenue_basis': basis,
         }
@@ -214,6 +266,20 @@ def calculate_visit_financials(visit, rate=None):
         # add back up to this figure.
         'product_cost_usd': summed_cost_usd.quantize(Decimal('0.01')),
         'product_cost_toman': summed_cost_toman.quantize(Decimal('0.01')),
+        'welcome_pack_cost_usd': welcome_pack_cost_usd,
+        'welcome_pack_cost_toman': welcome_pack_cost_toman,
+        'operator_compensation_usd': sum(p.quantize(Decimal('0.01')) for p in payout_usd.values()),
+        'operator_compensation_toman': sum(p.quantize(Decimal('0.01')) for p in payout_toman.values()),
+        'clinic_share_usd': (
+            revenue_usd - summed_cost_usd.quantize(Decimal('0.01'))
+            - welcome_pack_cost_usd
+            - sum(p.quantize(Decimal('0.01')) for p in payout_usd.values())
+        ).quantize(Decimal('0.01')),
+        'clinic_share_toman': (
+            revenue_toman - summed_cost_toman.quantize(Decimal('0.01'))
+            - welcome_pack_cost_toman
+            - sum(p.quantize(Decimal('0.01')) for p in payout_toman.values())
+        ).quantize(Decimal('0.01')),
         'services': rows,
     }
 
@@ -286,7 +352,7 @@ def staff_compensation_totals(start, end):
         cash_toman=Sum('payout_cash_toman'),
         product_usd=Sum('payout_product_value_usd'),
         product_toman=Sum('payout_product_value_toman'),
-        count=Sum('id'),
+        count=Count('id'),
     ):
         by_role[row['role']] = {
             'role': row['role'],
@@ -417,6 +483,16 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
     net_usd = (gross_usd - below_line_usd).quantize(Decimal('0.01'))
     net_toman = (gross_toman - below_line_toman).quantize(Decimal('0.01'))
 
+    # The clinic's immediate take: what is left after material cost, welcome
+    # packs and the compensation owed to operators. Operating expenses and
+    # staff claims are reported below this line (see net_profit).
+    clinic_share_usd = (
+        revenue_usd - product_cost_usd - welcome_pack_cost['usd'] - staff['total_usd']
+    ).quantize(Decimal('0.01'))
+    clinic_share_toman = (
+        revenue_toman - product_cost_toman - welcome_pack_cost['toman'] - staff['total_toman']
+    ).quantize(Decimal('0.01'))
+
     comps = PaymentComponent.objects.filter(sale__in=sales)
     method_breakdown, method_by_method = payment_method_breakdown(comps)
 
@@ -440,6 +516,7 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
             'usd': welcome_pack_cost['usd'], 'toman': welcome_pack_cost['toman'],
         },
         'gross_profit': {'usd': gross_usd, 'toman': gross_toman},
+        'clinic_share': {'usd': clinic_share_usd, 'toman': clinic_share_toman},
         # Original key, preserved: 'expenses' has always meant staff expense
         # claims here. Kept alongside the explicit name so existing clients
         # keep working while the distinction from operating expenses is clear.

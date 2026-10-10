@@ -16,6 +16,7 @@ from ..models import (
     PaymentComponent,
     ProductUsage,
     Sale,
+    StaffPayout,
     Wallet,
     WalletTransaction,
     WelcomePackUsage,
@@ -29,6 +30,7 @@ EXPENSE_STATUSES = financials.EXPENSE_STATUSES
 CASH_METHODS = financials.CASH_METHODS
 REVENUE_BASIS_LIST_PRICE = financials.REVENUE_BASIS_LIST_PRICE
 REVENUE_BASIS_LEDGER = financials.REVENUE_BASIS_LEDGER
+WELCOME_PACK_COST_BASIS_ALLOCATED = financials.WELCOME_PACK_COST_BASIS_ALLOCATED
 WELCOME_PACK_COST_BASIS_EXCLUDED = financials.WELCOME_PACK_COST_BASIS_EXCLUDED
 
 ZERO = Decimal('0')
@@ -69,8 +71,9 @@ def profit_by_service(start=None, end=None):
     that service on that visit. Services sold with no consumable recipe, and
     services whose consumption was never recorded, both still appear.
 
-    Welcome-pack cost is excluded (packs belong to no service) and only
-    accounted for in the summary's Net Profit.
+    Welcome-pack cost issued on each visit is attributed to that visit's
+    services by the same revenue weight used to split the revenue, so per-service
+    rows add back up to the visit (and clinic-share) totals.
     """
     from customers.models import Visit
 
@@ -92,18 +95,33 @@ def profit_by_service(start=None, end=None):
                 'service_name': service_row['service_name'],
                 'revenue_usd': ZERO,
                 'product_cost_usd': ZERO,
+                'operator_compensation_usd': ZERO,
+                'welcome_pack_cost_usd': ZERO,
+                'recipe_estimate_cost_usd': ZERO,
                 'count': 0,
                 'revenue_basis': service_row['revenue_basis'],
-                'welcome_pack_cost_basis': WELCOME_PACK_COST_BASIS_EXCLUDED,
+                'welcome_pack_cost_basis': 'allocated_by_revenue_share',
             })
             row['revenue_usd'] += service_row['revenue_usd']
             row['product_cost_usd'] += service_row['product_cost_usd']
+            row['operator_compensation_usd'] += service_row['operator_compensation_usd']
+            row['welcome_pack_cost_usd'] += service_row['welcome_pack_cost_usd']
+            row['recipe_estimate_cost_usd'] += service_row['recipe_estimate_cost_usd']
             row['count'] += 1
 
     for row in rows.values():
         row['revenue_usd'] = row['revenue_usd'].quantize(Decimal('0.01'))
         row['product_cost_usd'] = row['product_cost_usd'].quantize(Decimal('0.01'))
+        row['operator_compensation_usd'] = row['operator_compensation_usd'].quantize(Decimal('0.01'))
+        row['welcome_pack_cost_usd'] = row['welcome_pack_cost_usd'].quantize(Decimal('0.01'))
+        row['recipe_estimate_cost_usd'] = row['recipe_estimate_cost_usd'].quantize(Decimal('0.01'))
         row['profit_usd'] = (row['revenue_usd'] - row['product_cost_usd']).quantize(Decimal('0.01'))
+        row['clinic_share_usd'] = (
+            row['revenue_usd']
+            - row['product_cost_usd']
+            - row['operator_compensation_usd']
+            - row['welcome_pack_cost_usd']
+        ).quantize(Decimal('0.01'))
         row['profit_margin_percent'] = (
             (row['profit_usd'] / row['revenue_usd'] * 100).quantize(Decimal('0.01'))
             if row['revenue_usd'] else ZERO
@@ -132,9 +150,11 @@ def profit_by_package(start=None, end=None):
                 'package_name': pkg.name,
                 'revenue_usd': ZERO,
                 'product_cost_usd': ZERO,
+                'operator_compensation_usd': ZERO,
+                'welcome_pack_cost_usd': ZERO,
                 'count': 0,
                 'revenue_basis': REVENUE_BASIS_LEDGER,
-                'welcome_pack_cost_basis': WELCOME_PACK_COST_BASIS_EXCLUDED,
+                'welcome_pack_cost_basis': 'allocated_by_visit_linkage',
             }
         rows[key]['revenue_usd'] += sale.amount_usd
         rows[key]['count'] += 1
@@ -145,10 +165,46 @@ def profit_by_package(start=None, end=None):
         )
     ).values_list('package_sale__package_id', 'total_cost_usd_snapshot'):
         usage_cost[package_id] = usage_cost.get(package_id, ZERO) + (cost or ZERO)
+
+    # Staff compensation owed on the visits behind these package sales, from
+    # the same payout ledger the summary reads.
+    visit_to_packages: dict[int, set] = {}
+    for pkg_id, visit_id in Sale.objects.filter(
+        created_at__gte=start, created_at__lte=end, package__isnull=False,
+        status=Sale.Status.PAID, visit_id__isnull=False,
+    ).values_list('package_id', 'visit_id'):
+        visit_to_packages.setdefault(visit_id, set()).add(pkg_id)
+
+    payout_cost: dict[int, Decimal] = {}
+    if visit_to_packages:
+        for visit_id, cash_usd, prod_usd in StaffPayout.objects.filter(
+            visit_id__in=visit_to_packages.keys(),
+            status__in=financials.PAYOUT_OBLIGATION_STATUSES,
+        ).values_list('visit_id', 'payout_cash_usd', 'payout_product_value_usd'):
+            total = (cash_usd or ZERO) + (prod_usd or ZERO)
+            for pkg_id in visit_to_packages[visit_id]:
+                payout_cost[pkg_id] = payout_cost.get(pkg_id, ZERO) + total
+
+    # Welcome-pack cost of the visits behind these package sales (clinic cost,
+    # never a customer charge), attributed by the sale's own visit.
+    wp_cost_by_package: dict[int, Decimal] = {}
+    if visit_to_packages:
+        for visit_id, usd in WelcomePackUsage.objects.filter(
+            visit_id__in=visit_to_packages.keys(),
+        ).values_list('visit_id', 'total_cost_usd_snapshot'):
+            for pkg_id in visit_to_packages[visit_id]:
+                wp_cost_by_package[pkg_id] = wp_cost_by_package.get(pkg_id, ZERO) + (usd or ZERO)
+
     for key, row in rows.items():
         row['product_cost_usd'] = usage_cost.get(key, ZERO).quantize(Decimal('0.01'))
         row['revenue_usd'] = row['revenue_usd'].quantize(Decimal('0.01'))
+        row['operator_compensation_usd'] = payout_cost.get(key, ZERO).quantize(Decimal('0.01'))
+        row['welcome_pack_cost_usd'] = wp_cost_by_package.get(key, ZERO).quantize(Decimal('0.01'))
         row['profit_usd'] = (row['revenue_usd'] - row['product_cost_usd']).quantize(Decimal('0.01'))
+        row['clinic_share_usd'] = (
+            row['revenue_usd'] - row['product_cost_usd'] - row['operator_compensation_usd']
+            - row['welcome_pack_cost_usd']
+        ).quantize(Decimal('0.01'))
         row['profit_margin_percent'] = (
             (row['profit_usd'] / row['revenue_usd'] * 100).quantize(Decimal('0.01'))
             if row['revenue_usd'] else ZERO
@@ -239,7 +295,8 @@ def welcome_pack_report(start=None, end=None):
 
 __all__ = [
     'REVENUE_STATUSES', 'EXPENSE_STATUSES', 'CASH_METHODS',
-    'REVENUE_BASIS_LIST_PRICE', 'REVENUE_BASIS_LEDGER', 'WELCOME_PACK_COST_BASIS_EXCLUDED',
+    'REVENUE_BASIS_LIST_PRICE', 'REVENUE_BASIS_LEDGER',
+    'WELCOME_PACK_COST_BASIS_ALLOCATED', 'WELCOME_PACK_COST_BASIS_EXCLUDED',
     'payment_method_breakdown', 'financial_summary', 'profit_by_service',
     'profit_by_package', 'wallet_summary', 'operating_expense_summary', 'welcome_pack_report',
     'Expense', 'PaymentComponent', 'get_rate',

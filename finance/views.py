@@ -767,25 +767,6 @@ class BackupExchangeRateReportView(APIView):
         return Response(data)
 
 
-def calculate_service_profit(service, rate):
-    revenue_usd = service.price_usd or Decimal('0')
-    cost_usd = Decimal('0')
-    for item in service.items.select_related('product').all():
-        qty = item.quantity
-        cost = item.product.cost_usd if item.product else Decimal('0')
-        cost_usd += (Decimal(str(qty)) * Decimal(str(cost))).quantize(Decimal('0.01'))
-    revenue_toman = (revenue_usd * rate).quantize(Decimal('0.01'))
-    cost_toman = (cost_usd * rate).quantize(Decimal('0.01'))
-    return {
-        'revenue_usd': revenue_usd,
-        'revenue_toman': revenue_toman,
-        'product_cost_usd': cost_usd,
-        'product_cost_toman': cost_toman,
-        'profit_usd': (revenue_usd - cost_usd).quantize(Decimal('0.01')),
-        'profit_toman': (revenue_toman - cost_toman).quantize(Decimal('0.01')),
-    }
-
-
 @extend_schema(tags=['Staff Compensation'])
 class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
     queryset = StaffCompensationRule.objects.prefetch_related('product_lines__product')
@@ -934,6 +915,13 @@ class ProfitByStaffView(APIView):
                     'revenue_toman': Decimal('0'),
                     'product_cost_usd': Decimal('0'),
                     'product_cost_toman': Decimal('0'),
+                    'operator_compensation_usd': Decimal('0'),
+                    'operator_compensation_toman': Decimal('0'),
+                    'welcome_pack_cost_usd': Decimal('0'),
+                    'welcome_pack_cost_toman': Decimal('0'),
+                    'recipe_estimate_cost_usd': Decimal('0'),
+                    'clinic_share_usd': Decimal('0'),
+                    'clinic_share_toman': Decimal('0'),
                     'profit_usd': Decimal('0'),
                     'profit_toman': Decimal('0'),
                     'visit_count': 0,
@@ -954,6 +942,13 @@ class ProfitByStaffView(APIView):
                 staff_data[staff_id]['revenue_toman'] += service_row['revenue_toman']
                 staff_data[staff_id]['product_cost_usd'] += service_row['product_cost_usd']
                 staff_data[staff_id]['product_cost_toman'] += service_row['product_cost_toman']
+                staff_data[staff_id]['operator_compensation_usd'] += service_row['operator_compensation_usd']
+                staff_data[staff_id]['operator_compensation_toman'] += service_row['operator_compensation_toman']
+                staff_data[staff_id]['welcome_pack_cost_usd'] += service_row['welcome_pack_cost_usd']
+                staff_data[staff_id]['welcome_pack_cost_toman'] += service_row['welcome_pack_cost_toman']
+                staff_data[staff_id]['recipe_estimate_cost_usd'] += service_row['recipe_estimate_cost_usd']
+                staff_data[staff_id]['clinic_share_usd'] += service_row['clinic_share_usd']
+                staff_data[staff_id]['clinic_share_toman'] += service_row['clinic_share_toman']
                 staff_data[staff_id]['profit_usd'] += service_row['profit_usd']
                 staff_data[staff_id]['profit_toman'] += service_row['profit_toman']
 
@@ -964,13 +959,20 @@ class ProfitByStaffView(APIView):
             data['product_cost_toman'] = str(data['product_cost_toman'].quantize(Decimal('0.01')))
             data['profit_usd'] = str(data['profit_usd'].quantize(Decimal('0.01')))
             data['profit_toman'] = str(data['profit_toman'].quantize(Decimal('0.01')))
+            data['operator_compensation_usd'] = str(data['operator_compensation_usd'].quantize(Decimal('0.01')))
+            data['operator_compensation_toman'] = str(data['operator_compensation_toman'].quantize(Decimal('0.01')))
+            data['welcome_pack_cost_usd'] = str(data['welcome_pack_cost_usd'].quantize(Decimal('0.01')))
+            data['welcome_pack_cost_toman'] = str(data['welcome_pack_cost_toman'].quantize(Decimal('0.01')))
+            data['recipe_estimate_cost_usd'] = str(data['recipe_estimate_cost_usd'].quantize(Decimal('0.01')))
+            data['clinic_share_usd'] = str(data['clinic_share_usd'].quantize(Decimal('0.01')))
+            data['clinic_share_toman'] = str(data['clinic_share_toman'].quantize(Decimal('0.01')))
             # Revenue here is list price of services delivered, not collected
             # money. The key is kept for backward compatibility; this label lets
             # the UI present it as potential revenue.
             data['revenue_basis'] = basis_by_staff.get(
                     data['staff_id'], financials.REVENUE_BASIS_LEDGER,
                 )
-            data['welcome_pack_cost_basis'] = reporting.WELCOME_PACK_COST_BASIS_EXCLUDED
+            data['welcome_pack_cost_basis'] = 'allocated_by_revenue_share'
 
         rows = sorted(staff_data.values(), key=lambda x: x['staff_name'])
         # The response stays a bare list of per-staff rows (backward compatible);
@@ -1010,7 +1012,7 @@ class ProfitByStaffCoverageView(APIView):
             'visits_with_staff': total_visits - unassigned_visits,
             'unassigned_visits': unassigned_visits,
             'revenue_basis': reporting.REVENUE_BASIS_LIST_PRICE,
-            'welcome_pack_cost_basis': reporting.WELCOME_PACK_COST_BASIS_EXCLUDED,
+            'welcome_pack_cost_basis': 'allocated_by_revenue_share',
         })
 
 
@@ -1078,6 +1080,8 @@ class DashboardView(APIView):
                 'operating_expenses_toman': str(report['operating_expenses']['toman']),
                 'staff_compensation_usd': str(report['staff_compensation']['total']['usd']),
                 'staff_compensation_toman': str(report['staff_compensation']['total']['toman']),
+                'clinic_share_usd': str(report['clinic_share']['usd']),
+                'clinic_share_toman': str(report['clinic_share']['toman']),
                 'below_the_line_total_usd': str(report['below_the_line_total']['usd']),
                 'below_the_line_total_toman': str(report['below_the_line_total']['toman']),
                 'net_profit_breakdown': {

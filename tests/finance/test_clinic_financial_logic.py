@@ -53,8 +53,12 @@ def make_pack_usage(*, welcome_pack, customer, cost_usd=Decimal('2.00')):
     )
 
 
+from tests.finance.test_operating_expenses import ensure_seed_categories
+
+
 class FinancialTestBase(TestCase):
     def setUp(self):
+        ensure_seed_categories()
         set_rate('USD', 'TOMAN', RATE, effective_at=timezone.now(), source='clinic-financial-test')
         self.client = admin_client()
         self.customer = make_customer()
@@ -93,8 +97,8 @@ class FinancialTestBase(TestCase):
 
         for role, pct in (('doctor', '50.00'), ('facial', '30.00')):
             StaffCompensationRule.objects.update_or_create(role=role, defaults={
-                'calculation_type': StaffCompensationRule.CalculationType.PERCENT_PROFIT,
-                'percent_profit': Decimal(pct),
+                'calculation_type': StaffCompensationRule.CalculationType.PERCENT_REVENUE,
+                'percent_revenue': Decimal(pct),
                 'payout_type': StaffCompensationRule.PayoutType.CASH,
                 'is_active': True,
             })
@@ -131,9 +135,9 @@ class FinancialTestBase(TestCase):
 
 
 class DoctorAndFacialPayoutTests(FinancialTestBase):
-    """Each role is paid a percentage of ITS OWN service profit."""
+    """Each role is paid a percentage of ITS OWN service revenue."""
 
-    def test_doctor_service_alone_pays_50_percent_of_its_profit(self):
+    def test_doctor_service_alone_pays_50_percent_of_its_revenue(self):
         visit = self.make_visit(self.doctor_service)
         self.complete(visit)
 
@@ -141,9 +145,9 @@ class DoctorAndFacialPayoutTests(FinancialTestBase):
         self.assertEqual(payout.revenue_usd, Decimal('500.00'))
         self.assertEqual(payout.product_cost_usd, Decimal('100.00'))
         self.assertEqual(payout.profit_usd, Decimal('400.00'))
-        self.assertEqual(payout.payout_cash_usd, Decimal('200.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('250.00'))
 
-    def test_facial_service_alone_pays_30_percent_of_its_profit(self):
+    def test_facial_service_alone_pays_30_percent_of_its_revenue(self):
         visit = self.make_visit(self.facial_service)
         self.complete(visit)
 
@@ -151,9 +155,9 @@ class DoctorAndFacialPayoutTests(FinancialTestBase):
         self.assertEqual(payout.revenue_usd, Decimal('300.00'))
         self.assertEqual(payout.product_cost_usd, Decimal('50.00'))
         self.assertEqual(payout.profit_usd, Decimal('250.00'))
-        self.assertEqual(payout.payout_cash_usd, Decimal('75.00'))
+        self.assertEqual(payout.payout_cash_usd, Decimal('90.00'))
 
-    def test_doctor_and_facial_each_paid_on_their_own_service_profit(self):
+    def test_doctor_and_facial_each_paid_on_their_own_service_revenue(self):
         # One visit, both services, collected 800 (the sum of the two prices).
         visit = self.make_visit(self.doctor_service, self.facial_service)
         self.pay(visit, Decimal('800'))
@@ -163,14 +167,14 @@ class DoctorAndFacialPayoutTests(FinancialTestBase):
         facial = StaffPayout.objects.get(visit=visit, service=self.facial_service)
 
         self.assertEqual(doctor.profit_usd, Decimal('400.00'))
-        self.assertEqual(doctor.payout_cash_usd, Decimal('200.00'))
+        self.assertEqual(doctor.payout_cash_usd, Decimal('250.00'))
         self.assertEqual(facial.profit_usd, Decimal('250.00'))
-        self.assertEqual(facial.payout_cash_usd, Decimal('75.00'))
-        # Total 275, NOT doctor 325 / facial 195 (the whole-visit-profit bug).
+        self.assertEqual(facial.payout_cash_usd, Decimal('90.00'))
+        # Total 340, NOT one role paid a percentage of the whole-visit profit.
         total = sum(
             (p.payout_cash_usd for p in StaffPayout.objects.filter(visit=visit)), Decimal('0'),
         )
-        self.assertEqual(total, Decimal('275.00'))
+        self.assertEqual(total, Decimal('340.00'))
 
     def test_two_doctor_services_are_not_paid_twice_on_the_visit_total(self):
         second = Service.objects.create(
@@ -181,12 +185,12 @@ class DoctorAndFacialPayoutTests(FinancialTestBase):
 
         payouts = list(StaffPayout.objects.filter(visit=visit).order_by('service_id'))
         self.assertEqual(len(payouts), 2)
-        visit_profit = Decimal('700') - Decimal('100')
+        visit_revenue = Decimal('700')
         total = sum((p.payout_cash_usd for p in payouts), Decimal('0'))
-        # 50% of each service's own profit, which sums to exactly 50% of the visit.
-        self.assertEqual(total, (visit_profit * Decimal('0.5')).quantize(Decimal('0.01')))
+        # 50% of each service's own revenue, which sums to exactly 50% of the visit.
+        self.assertEqual(total, (visit_revenue * Decimal('0.5')).quantize(Decimal('0.01')))
         for payout in payouts:
-            expected = (payout.profit_usd * Decimal('0.5')).quantize(Decimal('0.01'))
+            expected = (payout.revenue_usd * Decimal('0.5')).quantize(Decimal('0.01'))
             self.assertEqual(payout.payout_cash_usd, expected)
 
     def test_payouts_are_not_duplicated_when_completion_runs_again(self):
@@ -265,9 +269,9 @@ class LaserSalaryTests(FinancialTestBase):
         doctor = StaffCompensationRule.objects.get(role='doctor')
         facial = StaffCompensationRule.objects.get(role='facial')
         laser = StaffCompensationRule.objects.get(role='laser')
-        self.assertEqual(doctor.calculation_type, 'percent_profit')
-        self.assertEqual(doctor.percent_profit, Decimal('50.00'))
-        self.assertEqual(facial.percent_profit, Decimal('30.00'))
+        self.assertEqual(doctor.calculation_type, 'percent_revenue')
+        self.assertEqual(doctor.percent_revenue, Decimal('50.00'))
+        self.assertEqual(facial.percent_revenue, Decimal('30.00'))
         self.assertEqual(laser.calculation_type, 'monthly_salary')
         self.assertEqual(laser.fixed_amount_toman, LASER_BASE_TOMAN)
         self.assertEqual(laser.transport_toman, LASER_TRANSPORT_TOMAN)
@@ -437,12 +441,14 @@ class GrossAndNetProfitTests(FinancialTestBase):
         staff_compensation.generate_visit_payouts(laser_visit)
 
         category = ExpenseCategory.objects.first()
+        self.assertIsNotNone(category, 'ExpenseCategory seeds must exist; ensure_seed_categories() should have restored them.')
         expense = Expense.objects.create(
             created_by=self.staff, category=category, amount_usd=Decimal('30'),
             amount_toman=Decimal('3000000'), exchange_rate_snapshot=RATE,
             expense_date=timezone.localtime(timezone.now()).date(), status=Expense.Status.APPROVED,
         )
         opex_cat = OperatingExpenseCategory.objects.first()
+        self.assertIsNotNone(opex_cat, 'OperatingExpenseCategory seeds must exist; ensure_seed_categories() should have restored them.')
         OperatingExpense.objects.create(
             category=opex_cat, title='Rent', amount_usd=Decimal('200'),
             amount_toman=Decimal('20000000'), exchange_rate=RATE,
@@ -470,16 +476,16 @@ class GrossAndNetProfitTests(FinancialTestBase):
         report = financials.build_report(start, end)
 
         gross = Decimal('398.00')
-        # Doctor 50% of 400 = 200, plus the laser operator's 26,000,000 Toman
+        # Doctor 50% of the 500 revenue = 250, plus the laser operator's 26,000,000 Toman
         # monthly salary (260.00 USD at this test rate).
         laser_usd = ((LASER_BASE_TOMAN + LASER_TRANSPORT_TOMAN) / RATE).quantize(Decimal('0.01'))
         staff = report['staff_compensation']['total']['usd']
         opex = report['operating_expenses']['usd']
         claims = report['staff_expense_claims']['usd']
 
-        self.assertEqual(report['staff_compensation']['by_role']['doctor']['total_usd'], Decimal('200.00'))
+        self.assertEqual(report['staff_compensation']['by_role']['doctor']['total_usd'], Decimal('250.00'))
         self.assertEqual(report['staff_compensation']['by_role']['laser']['total_usd'], laser_usd)
-        self.assertEqual(staff, Decimal('200.00') + laser_usd)
+        self.assertEqual(staff, Decimal('250.00') + laser_usd)
         self.assertEqual(report['operating_expenses']['usd'], Decimal('200.00'))
         self.assertEqual(report['staff_expense_claims']['usd'], Decimal('30.00'))
         self.assertEqual(report['net_profit']['usd'], gross - staff - opex - claims)
@@ -522,7 +528,7 @@ class GrossAndNetProfitTests(FinancialTestBase):
         self._seed_full_period()
         start, end = window()
         before = financials.build_report(start, end)
-        self.assertEqual(before['staff_compensation']['by_role']['doctor']['total_usd'], Decimal('200.00'))
+        self.assertEqual(before['staff_compensation']['by_role']['doctor']['total_usd'], Decimal('250.00'))
 
         StaffPayout.objects.filter(role='doctor').update(status=StaffPayout.Status.CANCELLED)
 

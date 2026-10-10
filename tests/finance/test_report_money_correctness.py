@@ -295,7 +295,7 @@ class ProfitByServiceRevenueTests(TestCase):
         self.assertEqual(response.status_code, 200)
         row = next(r for r in response.data if r['service_id'] == self.service.id)
         self.assertEqual(row['revenue_basis'], 'list_price')
-        self.assertEqual(row['welcome_pack_cost_basis'], 'excluded')
+        self.assertEqual(row['welcome_pack_cost_basis'], 'allocated_by_revenue_share')
         # Backward compatible keys are all still present.
         for key in ('service_id', 'service_name', 'revenue_usd', 'product_cost_usd', 'count', 'profit_usd'):
             self.assertIn(key, row)
@@ -344,7 +344,7 @@ class ProfitByStaffTests(TestCase):
         self._visit(self.staff, self.service)
         row = self.client.get(PROFIT_BY_STAFF_URL).data[0]
         self.assertEqual(row['revenue_basis'], 'list_price')
-        self.assertEqual(row['welcome_pack_cost_basis'], 'excluded')
+        self.assertEqual(row['welcome_pack_cost_basis'], 'allocated_by_revenue_share')
 
     def test_response_is_still_a_bare_list(self):
         self._visit(self.staff, self.service)
@@ -379,6 +379,9 @@ class WelcomePackCostVisibilityTests(TestCase):
     """P1 #7: per-service/package reports state that pack cost is excluded."""
 
     def setUp(self):
+        from tests.finance.test_operating_expenses import ensure_seed_categories
+
+        ensure_seed_categories()
         set_rate('USD', 'TOMAN', RATE, effective_at=timezone.now(), source='pack-vis-test')
         self.client = admin_client()
         self.customer = make_customer()
@@ -394,7 +397,7 @@ class WelcomePackCostVisibilityTests(TestCase):
             total_cost_toman_snapshot=Decimal('300000.00'),
         )
 
-    def test_profit_by_package_states_pack_cost_is_excluded(self):
+    def test_profit_by_package_states_pack_cost_is_attributed(self):
         response = self.client.get('/api/finance/reports/profit-by-package/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data, [])

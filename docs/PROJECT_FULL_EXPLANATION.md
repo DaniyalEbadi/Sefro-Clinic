@@ -301,7 +301,7 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 | **`ProductPurchase`** | Restock record; updates `Product.cost_usd` + `count` and closes/opens cost-history range |
 | **`PurchaseOrder`** | **Buying products (purchase order) workflow**: `supplier`, `status` (`draft`→`ordered`→`received` / `cancelled`), `order_date` (Gregorian, defaults to today), `received_date`, `notes`, `created_by`, `total_cost_usd`, `exchange_rate_snapshot` + `total_cost_toman` (written **only on receive**), `idempotency_key` (unique). Indexes on `status+order_date`, `supplier`. Draft/ordered rows are pure paperwork — no stock, cost or ledger effect |
 | **`PurchaseOrderItem`** | Product line of an order (`order` CASCADE `items`, `product` **PROTECT** `purchase_order_items`): `quantity` (> 0, ≤ 3 decimals), `unit_cost_usd`, computed `total_cost_usd`, receive-time `unit_cost_toman`/`total_cost_toman` snapshots. Unique per order+product (duplicate lines are also rejected in the service layer) |
-| **`StaffCompensationRule`** | Per-role commission config (unique `role`): `calculation_type` (`percent_profit`/`fixed_per_session`/`monthly_salary`), `payout_type` (`cash`/`product`/`hybrid`), percent/fixed amounts, transport allowance, commission product+qty |
+| **`StaffCompensationRule`** | Per-role commission config (unique `role`): `calculation_type` (`percent_revenue`/`fixed_per_session`/`monthly_salary`), `payout_type` (`cash`/`product`/`hybrid`), percent/fixed amounts, transport allowance, commission product+qty |
 | **`StaffPayout`** | Generated per (visit, staff, service) — **unique constraint**; snapshots revenue/cost/profit in USD+Toman, cash and/or product payout, `status` (`pending`/`approved`/`paid`/`cancelled`), `payout_mode`, approval fields |
 | **`WelcomePack`** | Named gift-bundle definition: `name` (unique), `description`, `is_active`, `created_by`. Creating it has **no** financial effect |
 | **`WelcomePackItem`** | Product line inside a pack (`welcome_pack` + `product` unique, `quantity` > 0) |
@@ -754,7 +754,7 @@ scoped to their own expenses; admins see all. Only `approved`/`paid` expenses co
 
 - Triggered by visit completion. `calculate_visit_profit()` sums service `price_usd` minus
   recipe product costs (current `cost_usd`), converted with the current rate.
-- `calculate_service_payout()` applies the role's rule: `percent_profit` (% of visit profit)
+- `calculate_service_payout()` applies the role's rule: `percent_revenue` (% of collected service revenue)
   or `fixed_per_session` (USD or Toman), plus transport allowance; `product`/`hybrid` rules add
   a product payout whose value is snapshotted and whose stock is decremented as commission usage.
 - `StaffPayout` rows are idempotent per (visit, staff, service). Lifecycle
