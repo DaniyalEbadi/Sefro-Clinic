@@ -115,7 +115,10 @@ class EndpointQueryBudgetTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         # Only one exchange-rate query despite many services
         rate_qs = probe.statements_matching('exchange')
-        self.assertLessEqual(len(rate_qs), 1, f'Exchange rate queried {len(rate_qs)} times')
+        self.assertLessEqual(
+            len(rate_qs), 1,
+            f'Exchange rate queried {len(rate_qs)} times:\n' + '\n'.join(rate_qs),
+        )
         # Only one serviceitems query
         item_qs = probe.statements_matching('serviceitem')
         self.assertLessEqual(len(item_qs), 1, 'ServiceItem prefetched more than once')

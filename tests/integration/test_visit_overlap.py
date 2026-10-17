@@ -4,8 +4,9 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
 
+from accounts.models import ClinicUser
 from customers.models import Customer, Service
-from tests.helpers import admin_client
+from tests.helpers import admin_client, make_employee
 
 
 def at(year, month, day, hour=10, minute=0):
@@ -99,10 +100,44 @@ class VisitOverlapPreventionTests(TestCase):
         conflict = self.client.put(url, payload, format='json')
         self.assertEqual(conflict.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_staff_field_is_not_writable(self):
+    def test_staff_with_unknown_id_is_rejected(self):
         start, end = future_slot(hour=16)
         url, payload = self._payload(self.customer.id, start, end)
         payload['staff'] = 999999
         response = self.client.post(url, payload, format='json')
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertIsNone(response.data.get('staff'))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('staff', response.data)
+
+    def test_staff_with_inactive_user_is_rejected(self):
+        inactive = ClinicUser.objects.create_user(
+            username='fired_user', password='x', role=ClinicUser.Role.EMPLOYEE,
+            is_active=False,
+        )
+        start, end = future_slot(hour=16)
+        url, payload = self._payload(self.customer.id, start, end)
+        payload['staff'] = inactive.id
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('staff', response.data)
+
+    def test_staff_assigned_on_create_persists(self):
+        employee = make_employee(username='staffed_user')
+        start, end = future_slot(hour=16)
+        url, payload = self._payload(self.customer.id, start, end)
+        payload['staff'] = employee.id
+        response = self.client.post(url, payload, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['staff'], employee.id)
+
+    def test_staff_assigned_on_patch_before_completion(self):
+        employee = make_employee(username='staffed_user')
+        start, end = future_slot(hour=16)
+        create = self.client.post('/api/visits/', self._payload(self.customer.id, start, end)[1], format='json')
+        self.assertEqual(create.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(create.data['staff'])
+
+        patch = self.client.patch(
+            f'/api/visits/{create.data["id"]}/', {'staff': employee.id}, format='json',
+        )
+        self.assertEqual(patch.status_code, status.HTTP_200_OK, patch.data)
+        self.assertEqual(patch.data['staff'], employee.id)

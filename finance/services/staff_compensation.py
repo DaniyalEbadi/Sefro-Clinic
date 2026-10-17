@@ -283,11 +283,11 @@ def cancel_payouts_for_visit(visit, reason=''):
 def generate_visit_payouts(visit, actor=None, strict_staff=True):
     """Create/update the staff compensation owed for one completed visit.
 
-    Every compensable service is paid on **its own** profit: the collected
-    revenue allocated to that service minus the material cost actually recorded
-    against it. A visit mixing a doctor service and a facial service therefore
-    pays each role a percentage of its own profit, never a share of one
-    visit-level total applied repeatedly.
+    Every compensable service is paid on **its own** revenue: the collected
+    revenue allocated to that service (by list-price weight) times the role's
+    ``percent_revenue``. A visit mixing a doctor service and a facial service
+    therefore pays each role a percentage of its own allocated revenue, never
+    a share of one visit-level total applied repeatedly.
 
     Idempotent: session payouts are keyed on (visit, staff, service) and monthly
     salaries on (staff, role, month), so re-running updates rather than

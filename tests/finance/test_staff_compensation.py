@@ -376,6 +376,22 @@ class StaffCompensationRuleAPITests(TestCase):
         rule.refresh_from_db()
         self.assertEqual(rule.percent_revenue, Decimal('60.00'))
 
+    def test_percent_revenue_above_100_is_rejected(self):
+        response = self.admin.patch(f'{self.URL}{make_rule().id}/', {'percent_revenue': '150.00'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('percent_revenue', response.data)
+
+    def test_percent_revenue_negative_is_rejected(self):
+        response = self.admin.patch(f'{self.URL}{make_rule().id}/', {'percent_revenue': '-5.00'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('percent_revenue', response.data)
+
+    def test_percent_revenue_bounds_are_accepted(self):
+        rule = make_rule()
+        for value in ('0.00', '100.00'):
+            response = self.admin.patch(f'{self.URL}{rule.id}/', {'percent_revenue': value}, format='json')
+            self.assertEqual(response.status_code, 200, response.data)
+
     def test_duplicate_role_is_rejected(self):
         make_rule()
         response = self.admin.post(self.URL, {
@@ -536,6 +552,98 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         payout = StaffPayout.objects.get()
         self.assertEqual(payout.payout_kind, StaffPayout.PayoutKind.MONTHLY_SALARY)
         self.assertEqual(payout.payout_cash_usd, Decimal('500.00'))
+
+    def test_api_created_visit_with_staff_completes_into_percent_payout(self):
+        """Full API path: staff assigned on POST (not ORM) flows into the payout.
+
+        The serializer used to expose staff as read-only, so no API client
+        could ever assign the operator and the percent was unreachable in
+        production. Create → confirm → complete must end in the payout row.
+        """
+        from Sefro_Clinic.fields import greg_to_shamsi_dt
+
+        make_rule()
+        start = timezone.now() + timedelta(days=7)
+        end = start + timedelta(hours=1)
+        create = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'staff': self.staff.id,
+            'services': [self.service.id],
+            'start_at': greg_to_shamsi_dt(start),
+            'end_at': greg_to_shamsi_dt(end),
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        self.assertEqual(create.data['staff'], self.staff.id)
+
+        confirm = self.client.post(f"/api/visits/{create.data['id']}/confirm/")
+        self.assertEqual(confirm.status_code, 200, confirm.data)
+        complete = self.client.post(f"/api/visits/{create.data['id']}/complete/")
+        self.assertEqual(complete.status_code, 200, complete.data)
+
+        payout = StaffPayout.objects.get(visit_id=create.data['id'])
+        self.assertEqual(payout.staff, self.staff)
+        # 50% doctor rule on the visit's allocated revenue ($200 service).
+        self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
+
+    def test_api_created_compensable_visit_without_staff_cannot_complete(self):
+        from Sefro_Clinic.fields import greg_to_shamsi_dt
+
+        make_rule()
+        start = timezone.now() + timedelta(days=7)
+        end = start + timedelta(hours=1)
+        create = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'services': [self.service.id],
+            'start_at': greg_to_shamsi_dt(start),
+            'end_at': greg_to_shamsi_dt(end),
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        self.assertIsNone(create.data['staff'])
+
+        complete = self.client.post(f"/api/visits/{create.data['id']}/complete/")
+        self.assertEqual(complete.status_code, 400)
+        self.assertIn('staff', complete.data['error'])
+        self.assertEqual(StaffPayout.objects.count(), 0)
+
+    def test_posting_visit_already_completed_settles_payout(self):
+        """A POST carrying ``status: completed`` must settle like PATCH does."""
+        from Sefro_Clinic.fields import greg_to_shamsi_dt
+
+        make_rule()
+        start = timezone.now() + timedelta(days=7)
+        end = start + timedelta(hours=1)
+        create = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'staff': self.staff.id,
+            'services': [self.service.id],
+            'start_at': greg_to_shamsi_dt(start),
+            'end_at': greg_to_shamsi_dt(end),
+            'status': 'completed',
+        }, format='json')
+        self.assertEqual(create.status_code, 201, create.data)
+        payout = StaffPayout.objects.get(visit_id=create.data['id'])
+        self.assertEqual(payout.staff, self.staff)
+        self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
+
+    def test_posting_completed_compensable_visit_without_staff_is_rejected(self):
+        """The rejected create must roll back — no staff-less completed row."""
+        from Sefro_Clinic.fields import greg_to_shamsi_dt
+
+        make_rule()
+        start = timezone.now() + timedelta(days=7)
+        end = start + timedelta(hours=1)
+        before = Visit.objects.count()
+        create = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'services': [self.service.id],
+            'start_at': greg_to_shamsi_dt(start),
+            'end_at': greg_to_shamsi_dt(end),
+            'status': 'completed',
+        }, format='json')
+        self.assertEqual(create.status_code, 400, create.data)
+        self.assertIn('status', create.data)
+        self.assertEqual(Visit.objects.count(), before)
+        self.assertEqual(StaffPayout.objects.count(), 0)
 
 
 class MonthlySalaryPayoutTests(CompensationFixtureMixin, TestCase):

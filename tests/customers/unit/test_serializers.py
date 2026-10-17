@@ -1,13 +1,14 @@
-from decimal import Decimal
-
 from datetime import timedelta
+from decimal import Decimal
 
 import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 
+from accounts.models import ClinicUser
 from customers.models import Customer, Payment, Service, Visit
 from customers.serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
+from tests.helpers import make_employee
 
 
 def shamsi_str(greg_dt):
@@ -96,6 +97,68 @@ class VisitSerializerTest(TestCase):
         data = VisitSerializer(visit).data
         self.assertEqual(data['payments'], [])
         self.assertEqual(Decimal(str(data['total_paid'])), Decimal('0'))
+
+    def test_visit_serializer_accepts_active_staff(self):
+        employee = make_employee(username='serializer_staff')
+        serializer = VisitSerializer(data={
+            'customer': self.customer.id, 'services': [self.service.id],
+            'start_at': _START, 'end_at': _END, 'staff': employee.id,
+        })
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        visit = serializer.save()
+        self.assertEqual(visit.staff, employee)
+
+    def test_visit_serializer_rejects_unknown_staff(self):
+        serializer = VisitSerializer(data={
+            'customer': self.customer.id, 'services': [self.service.id],
+            'start_at': _START, 'end_at': _END, 'staff': 999999,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('staff', serializer.errors)
+
+    def test_visit_serializer_rejects_inactive_staff(self):
+        inactive = ClinicUser.objects.create_user(
+            username='inactive_staff', password='x',
+            role=ClinicUser.Role.EMPLOYEE, is_active=False,
+        )
+        serializer = VisitSerializer(data={
+            'customer': self.customer.id, 'services': [self.service.id],
+            'start_at': _START, 'end_at': _END, 'staff': inactive.id,
+        })
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('staff', serializer.errors)
+
+    def _completed_visit(self, staff):
+        return Visit.objects.create(
+            customer=self.customer, staff=staff,
+            start_at=timezone.now(), end_at=timezone.now() + timedelta(minutes=30),
+            status=Visit.Status.COMPLETED,
+        )
+
+    def test_visit_serializer_rejects_staff_change_on_completed_visit(self):
+        original = make_employee(username='original_staff')
+        replacement = make_employee(username='replacement_staff')
+        visit = self._completed_visit(original)
+
+        serializer = VisitSerializer(instance=visit, data={'staff': replacement.id}, partial=True)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('staff', serializer.errors)
+
+    def test_visit_serializer_allows_same_staff_on_completed_visit(self):
+        employee = make_employee(username='unchanged_staff')
+        visit = self._completed_visit(employee)
+
+        serializer = VisitSerializer(instance=visit, data={'staff': employee.id}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_visit_serializer_allows_staff_backfill_on_staffless_completed_visit(self):
+        employee = make_employee(username='backfill_staff')
+        visit = self._completed_visit(None)
+
+        serializer = VisitSerializer(instance=visit, data={'staff': employee.id}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        updated = serializer.save()
+        self.assertEqual(updated.staff, employee)
 
 
 class PaymentSerializerTest(TestCase):

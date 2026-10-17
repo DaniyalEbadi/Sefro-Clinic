@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from accounts.models import ClinicUser
 from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
 from .models import Customer, Payment, Service, ServiceCategory, Visit
@@ -170,7 +171,15 @@ class VisitSerializer(serializers.ModelSerializer):
     service_names = serializers.StringRelatedField(source='services', many=True, read_only=True)
     start_at = ShamsiDateTimeField()
     end_at = ShamsiDateTimeField()
-    staff = serializers.PrimaryKeyRelatedField(read_only=True)
+    # Writable against the actual person the visit is served by (the payout
+    # goes to them), but validated against the active-user queryset so a
+    # payload can never inject an unknown or deactivated account (OWASP
+    # F-07a mass-assignment concern — this is the intended input, checked).
+    staff = serializers.PrimaryKeyRelatedField(
+        queryset=ClinicUser.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
     customer_name = serializers.SerializerMethodField()
     payments = VisitPaymentSerializer(many=True, read_only=True)
     total_paid = serializers.SerializerMethodField()
@@ -208,6 +217,22 @@ class VisitSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {'start_at': 'این بازه زمانی با ویزیت دیگری از همین مشتری تداخل دارد.'}
                 )
+
+        # Staff on a completed visit that already carries payouts is settled:
+        # payouts are keyed on (visit, staff, service), so re-keying would
+        # orphan rows that may already be approved or paid. Backfilling staff
+        # that was never set is allowed (a compensable visit cannot complete
+        # staff-less, so no payout can exist to orphan).
+        if (
+            self.instance is not None
+            and 'staff' in attrs
+            and self.instance.status == Visit.Status.COMPLETED
+            and self.instance.staff is not None
+            and attrs['staff'] != self.instance.staff
+        ):
+            raise serializers.ValidationError(
+                {'staff': 'Cannot reassign staff on a completed visit.'}
+            )
         return attrs
 
 

@@ -4,6 +4,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 import jdatetime
+from django.db import transaction
 from django.db.models import (
     Avg,
     Count,
@@ -548,7 +549,25 @@ class VisitViewSet(viewsets.ModelViewSet):
     ordering = ['-start_at']
 
     def perform_create(self, serializer):
-        serializer.save()
+        """Save, then settle compensation if the visit arrives completed.
+
+        A payload may carry ``status: "completed"`` in its POST; without this
+        the visit reached COMPLETED with no payout at all — the same bypass
+        ``perform_update`` closes for PATCH. The atomic block keeps a
+        rejected visit (compensable services, no staff) from persisting.
+        """
+        from finance.services import financials, staff_compensation
+
+        with transaction.atomic():
+            visit = serializer.save()
+            if visit.status != Visit.Status.COMPLETED:
+                return
+            if visit.staff:
+                staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
+            elif financials.visit_requires_staff(visit):
+                raise ValidationError(
+                    {'status': 'This visit has a service that requires a staff member. Assign staff before completing it.'}
+                )
 
     def perform_update(self, serializer):
         """Update, then settle compensation if this write completed the visit.

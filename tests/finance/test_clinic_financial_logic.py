@@ -28,6 +28,7 @@ from finance.models import (
 from finance.services import accounting, financials, payments, staff_compensation
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
+from tests.finance.test_operating_expenses import ensure_seed_categories
 from tests.helpers import admin_client, make_customer, make_employee
 
 RATE = Decimal('100000')
@@ -51,9 +52,6 @@ def make_pack_usage(*, welcome_pack, customer, cost_usd=Decimal('2.00')):
         total_cost_toman_snapshot=cost_usd * RATE,
         issued_at=timezone.now(),
     )
-
-
-from tests.finance.test_operating_expenses import ensure_seed_categories
 
 
 class FinancialTestBase(TestCase):
