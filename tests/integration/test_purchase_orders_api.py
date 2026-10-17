@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
@@ -13,6 +14,11 @@ from tests.helpers import admin_client, employee_client, make_admin, make_employ
 RATE = Decimal('100000')
 URL = '/api/finance/purchase-orders/'
 REPORT_URL = '/api/finance/reports/product-purchases/'
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 
 class PurchaseOrderAPITests(TestCase):
@@ -33,7 +39,7 @@ class PurchaseOrderAPITests(TestCase):
     def payload(self, **overrides):
         data = {
             'supplier': 'Beauty Supply Co',
-            'order_date': '2026-09-20',
+            'order_date': _shamsi(date.today()),
             'items': [
                 {'product': self.product.id, 'quantity': '3', 'unit_cost_usd': '12.50'},
             ],
@@ -78,7 +84,7 @@ class PurchaseOrderAPITests(TestCase):
         response = self.client.post(URL, payload, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         body = response.data
-        self.assertEqual(body['order_date'], timezone.now().date().isoformat())
+        self.assertEqual(body['order_date'], _shamsi(timezone.now().date()))
         self.assertEqual(body['created_by'], self.admin.id)
         expected_name = f'{self.admin.first_name} {self.admin.last_name}'.strip() or self.admin.username
         self.assertEqual(body['created_by_name'], expected_name)
@@ -139,7 +145,7 @@ class PurchaseOrderAPITests(TestCase):
         self.assertEqual(received.status_code, status.HTTP_200_OK, received.data)
         body = received.data
         self.assertEqual(body['status'], 'received')
-        self.assertEqual(body['received_date'], timezone.now().date().isoformat())
+        self.assertEqual(body['received_date'], _shamsi(timezone.now().date()))
         self.assertEqual(Decimal(body['exchange_rate']), RATE)
         self.assertEqual(Decimal(body['exchange_rate_snapshot']), RATE)
         self.assertEqual(Decimal(body['total_cost_toman']), (Decimal('37.50') * RATE).quantize(Decimal('0.01')))
@@ -222,10 +228,12 @@ class PurchaseOrderAPITests(TestCase):
 
     # --- filters -------------------------------------------------------
     def test_list_filters(self):
-        first_id = self.create().data['id']
+        shamsi_order_day = _shamsi(date(2026, 9, 20))
+        first_id = self.create(order_date=shamsi_order_day).data['id']
         second_id = self.create(
             supplier='Beta Traders', idempotency_key='beta',
             items=[{'product': self.other_product.id, 'quantity': '10', 'unit_cost_usd': '1.00'}],
+            order_date=shamsi_order_day,
         ).data['id']
         self.client.post(f'{URL}{second_id}/receive/')
 
@@ -238,10 +246,13 @@ class PurchaseOrderAPITests(TestCase):
         by_product = self.client.get(f'{URL}?product={self.other_product.id}')
         self.assertEqual([row['id'] for row in by_product.data['results']], [second_id])
 
-        in_range = self.client.get(f'{URL}?date_from=2026-09-01&date_to=2026-09-30')
+        # Write-side order_date stays Gregorian in the DB; the list filter
+        # takes its Jalali form and converts back — same stored day, one
+        # calendar on the wire.
+        in_range = self.client.get(f'{URL}?date_from={shamsi_order_day}&date_to={shamsi_order_day}')
         self.assertEqual({row['id'] for row in in_range.data['results']}, {first_id, second_id})
 
-        out_of_range = self.client.get(f'{URL}?date_from=2020-01-01&date_to=2020-12-31')
+        out_of_range = self.client.get(f'{URL}?date_from=1300-01-01&date_to=1300-01-02')
         self.assertEqual(out_of_range.data['count'], 0)
 
     # --- report --------------------------------------------------------
@@ -274,7 +285,7 @@ class PurchaseOrderAPITests(TestCase):
         by_supplier = self.client.get(f'{REPORT_URL}?supplier=alpha')
         self.assertEqual(Decimal(by_supplier.data['total_cost_usd']), Decimal('37.50'))
 
-        out_of_range = self.client.get(f'{REPORT_URL}?start_date=2020-01-01&end_date=2020-12-31')
+        out_of_range = self.client.get(f'{REPORT_URL}?start_date=1300-01-01&end_date=1300-01-02')
         self.assertEqual(Decimal(out_of_range.data['total_cost_usd']), Decimal('0'))
         self.assertEqual(out_of_range.data['order_count'], 0)
 
@@ -285,7 +296,7 @@ class PurchaseOrderAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['order_count'], 1)
 
-        response = self.client.get(f'{REPORT_URL}?start_date=2026-01-01&end_date=2026-01-02')
+        response = self.client.get(f'{REPORT_URL}?start_date=1300-01-01&end_date=1300-01-02')
         self.assertEqual(response.data['order_count'], 0)
 
     def test_report_requires_authentication(self):
@@ -294,6 +305,8 @@ class PurchaseOrderAPITests(TestCase):
         self.assertEqual(APIClient().get(REPORT_URL).status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_order_date_filter_accepts_iso_dates(self):
-        order_id = self.create(order_date=date(2026, 3, 5)).data['id']
-        hit = self.client.get(f'{URL}?date_from=2026-03-01&date_to=2026-03-31')
+        # Serializer expects Shamsi strings; convert the Gregorian date to Shamsi for the payload.
+        order_id = self.create(order_date=_shamsi(date(2026, 3, 5))).data['id']
+        shamsi = _shamsi(date(2026, 3, 5))
+        hit = self.client.get(f'{URL}?date_from={shamsi}&date_to={shamsi}')
         self.assertEqual([row['id'] for row in hit.data['results']], [order_id])

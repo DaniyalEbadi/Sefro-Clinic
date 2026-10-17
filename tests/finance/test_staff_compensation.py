@@ -439,13 +439,21 @@ class StaffPayoutAPITests(CompensationFixtureMixin, TestCase):
         self.assertEqual(response.data['payout_count'], 1)
 
     def test_summary_action_accepts_explicit_range(self):
-        today = timezone.localtime(timezone.now()).date().isoformat()
+        import jdatetime
+
+        today = jdatetime.date.fromgregorian(
+            date=timezone.localtime(timezone.now()).date(),
+        ).strftime('%Y-%m-%d')
         response = self.client.get(f'{self.LIST_URL}summary/?start_date={today}&end_date={today}')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['payout_count'], 1)
 
     def test_summary_action_out_of_range_is_empty(self):
-        yesterday = (timezone.localtime(timezone.now()).date() - timedelta(days=1)).isoformat()
+        import jdatetime
+
+        yesterday = jdatetime.date.fromgregorian(
+            date=(timezone.localtime(timezone.now()).date() - timedelta(days=1)),
+        ).strftime('%Y-%m-%d')
         response = self.client.get(f'{self.LIST_URL}summary/?start_date={yesterday}&end_date={yesterday}')
         self.assertEqual(response.data['payout_count'], 0)
 

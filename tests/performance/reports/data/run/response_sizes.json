@@ -1,12 +1,12 @@
 {
-  "/api/customers/": 14028,
-  "/api/visits/": 11184,
-  "/api/payments/": 4404,
-  "/api/services/": 6207,
-  "/api/inventory/products/": 5688,
+  "/api/customers/": 13701,
+  "/api/visits/": 10306,
+  "/api/payments/": 4423,
+  "/api/services/": 6222,
+  "/api/inventory/products/": 5670,
   "/api/dashboard/": 108,
-  "/api/reports/": 5750,
+  "/api/reports/": 1116,
   "/api/finance/operating-expenses/": 52,
-  "/api/finance/operating-expenses/summary/": 173,
-  "/api/finance/operating-expense-categories/": 2060
+  "/api/finance/operating-expenses/summary/": 148,
+  "/api/finance/operating-expense-categories/": 52
 }

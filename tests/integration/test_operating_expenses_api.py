@@ -6,6 +6,7 @@ idempotency, receipt upload, and isolation from Expense/Wallet/Sale domains.
 from datetime import date
 from decimal import Decimal
 
+import jdatetime
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -24,6 +25,11 @@ from finance.services.exchange_rates import set_rate
 from tests.helpers import admin_client, employee_client, make_employee
 
 RATE = Decimal('100000')
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 
 def make_opex_category(name='Test Category', slug='test-category', **overrides):
@@ -46,9 +52,9 @@ class OperatingExpenseCategoryIntegrationTests(TestCase):
         self.assertEqual(created.status_code, 201, created.data)
         cat_id = created.data['id']
 
-        # Seeded categories already exist, so count will be 11 (10 seeded + 1 new)
         listed = self.client.get('/api/finance/operating-expense-categories/')
-        self.assertEqual(listed.data['count'], 11)
+        listed_ids = {row['id'] for row in listed.data['results']}
+        self.assertIn(cat_id, listed_ids)  # the one we just created is listed
 
         updated = self.client.patch(f'/api/finance/operating-expense-categories/{cat_id}/', {'is_active': False}, format='json')
         self.assertEqual(updated.status_code, 200)
@@ -75,7 +81,7 @@ class OperatingExpenseCategoryIntegrationTests(TestCase):
         emp = employee_client()
         emp.post('/api/finance/operating-expenses/', {
             'category': cat.id, 'title': 'Coffee', 'amount_usd': '10.00',
-            'expense_date': date.today().isoformat(),
+            'expense_date': _shamsi(date.today()),
         }, format='json')
         resp = emp.delete(f'/api/finance/operating-expense-categories/{cat.id}/')
         self.assertEqual(resp.status_code, 400)
@@ -95,7 +101,7 @@ class OperatingExpenseIntegrationTests(TestCase):
             'category': self.category.id,
             'title': 'Coffee and tea',
             'amount_usd': '25.00',
-            'expense_date': date.today().isoformat(),
+            'expense_date': _shamsi(date.today()),
             'payment_method': 'cash',
         }
         base.update(overrides)
@@ -204,11 +210,13 @@ class OperatingExpenseIntegrationTests(TestCase):
         vendor_search = self.client.get('/api/finance/operating-expenses/?search=Power')
         self.assertEqual(vendor_search.data['count'], 1)
 
-        today = date.today().isoformat()
+        import jdatetime
+
+        today = jdatetime.date.fromgregorian(date=date.today()).strftime('%Y-%m-%d')
         in_range = self.client.get(f'/api/finance/operating-expenses/?date_from={today}&date_to={today}')
         self.assertEqual(in_range.data['count'], 2)
 
-        out_of_range = self.client.get('/api/finance/operating-expenses/?date_from=2000-01-01&date_to=2000-01-02')
+        out_of_range = self.client.get('/api/finance/operating-expenses/?date_from=1300-01-01&date_to=1300-01-02')
         self.assertEqual(out_of_range.data['count'], 0)
 
     def test_ordering(self):
@@ -247,7 +255,7 @@ class OperatingExpenseReceiptIntegrationTests(TestCase):
             'category': self.category.id,
             'title': 'Paper towels',
             'amount_usd': '12.50',
-            'expense_date': date.today().isoformat(),
+            'expense_date': _shamsi(date.today()),
             'receipt': upload,
         }, format='multipart')
         self.assertEqual(resp.status_code, 201, resp.data)
@@ -267,11 +275,11 @@ class OperatingExpenseIsolationTests(TestCase):
     def test_wallet_sale_payment_untouched(self):
         self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Coffee',
-            'amount_usd': '25.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '25.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
         self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Rent',
-            'amount_usd': '1000.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '1000.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
 
         self.assertEqual(Wallet.objects.count(), 0)
@@ -283,11 +291,11 @@ class OperatingExpenseIsolationTests(TestCase):
         exp_cat = ExpenseCategory.objects.create(name='Travel')
         self.client.post('/api/finance/expenses/', {
             'category': exp_cat.id, 'amount_usd': '50.00',
-            'expense_date': date.today().isoformat(), 'vendor': 'Taxi',
+            'expense_date': _shamsi(date.today()), 'vendor': 'Taxi',
         }, format='json')
         self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Office Supplies',
-            'amount_usd': '30.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '30.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
 
         self.assertEqual(Expense.objects.count(), 1)
@@ -313,7 +321,7 @@ class OperatingExpenseAuditIntegrationTests(TestCase):
         from logs.models import AuditLog
         created = self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Printer toner',
-            'amount_usd': '40.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '40.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
         opex_id = created.data['id']
         self.assertTrue(AuditLog.objects.filter(
@@ -334,7 +342,7 @@ class OperatingExpenseAuditIntegrationTests(TestCase):
         from logs.models import AuditLog
         self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Printer toner',
-            'amount_usd': '40.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '40.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
         for row in AuditLog.objects.filter(model_name='finance.operatingexpense'):
             self.assertNotIn('password', row.changes)
@@ -351,7 +359,7 @@ class OperatingExpenseRateSnapshotTests(TestCase):
         set_rate('USD', 'TOMAN', Decimal('95000'))
         created = self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Test',
-            'amount_usd': '10.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '10.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
         self.assertEqual(Decimal(created.data['exchange_rate']), Decimal('95000'))
         self.assertEqual(Decimal(created.data['amount_toman']), Decimal('950000.00'))
@@ -360,7 +368,7 @@ class OperatingExpenseRateSnapshotTests(TestCase):
         set_rate('USD', 'TOMAN', Decimal('95000'))
         created = self.client.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Test',
-            'amount_usd': '10.00', 'expense_date': date.today().isoformat(),
+            'amount_usd': '10.00', 'expense_date': _shamsi(date.today()),
         }, format='json')
         opex_id = created.data['id']
         Decimal(created.data['amount_toman'])

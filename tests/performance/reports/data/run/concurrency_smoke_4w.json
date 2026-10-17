@@ -1,13 +1,13 @@
 {
   "n": 20,
-  "min_ms": 10.55,
-  "p50_ms": 16.83,
-  "p75_ms": 35.71,
-  "p90_ms": 59.56,
-  "p95_ms": 65.66,
-  "p99_ms": 77.24,
-  "max_ms": 77.24,
-  "mean_ms": 27.98,
+  "min_ms": 8.38,
+  "p50_ms": 21.71,
+  "p75_ms": 40.35,
+  "p90_ms": 62.31,
+  "p95_ms": 72.22,
+  "p99_ms": 121.46,
+  "max_ms": 121.46,
+  "mean_ms": 31.34,
   "workers": 4,
   "requests_per_worker": 5,
   "expected_requests": 20,
@@ -15,6 +15,6 @@
   "worker_errors": 0,
   "fatals": [],
   "error_rate": 0.0,
-  "wall_seconds": 0.64,
-  "aggregate_rps": 31.5
+  "wall_seconds": 0.42,
+  "aggregate_rps": 48.2
 }

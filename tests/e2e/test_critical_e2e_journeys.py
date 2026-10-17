@@ -3,7 +3,7 @@ E2E Critical Journeys — covers skill §101 checklist & §75 critical suite
 Uses real HTTP API via APIClient (API E2E) as frontend is API-only.
 Verifies user-visible result + API + DB + financial invariants per §35, §58.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +25,11 @@ from finance.models import (
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 
 def _unique_customer(suffix, birthday=None):
@@ -115,8 +120,16 @@ class AdminCustomerWalletCheckoutReportE2ETests(TestCase):
         from finance.services import reporting
         summary = reporting.financial_summary(start, end)
         self.assertEqual(summary['revenue']['usd'], Decimal('100.00'))
-        # Also via API
-        api_report = client.get(f'/api/finance/reports/financial-summary/?start_date={(timezone.now()-timedelta(days=1)).strftime("%Y-%m-%d")}&end_date={(timezone.now()+timedelta(days=1)).strftime("%Y-%m-%d")}')
+        # Also via API (query dates are Shamsi, like every date in the app)
+        api_start = jdatetime.date.fromgregorian(
+            date=(timezone.now() - timedelta(days=1)).date(),
+        ).strftime('%Y-%m-%d')
+        api_end = jdatetime.date.fromgregorian(
+            date=(timezone.now() + timedelta(days=1)).date(),
+        ).strftime('%Y-%m-%d')
+        api_report = client.get(
+            f'/api/finance/reports/financial-summary/?start_date={api_start}&end_date={api_end}',
+        )
         self.assertEqual(api_report.status_code, 200)
         # Verify visit_number regression in customer serializer still present
         cust_get = client.get(f'/api/customers/{cid}/')
@@ -222,7 +235,7 @@ class ExpenseWorkflowE2ETests(TestCase):
         cat = ExpenseCategory.objects.create(name='E2E-Rent')
         # employee creates via UI flow (API)
         create = emp.post('/api/finance/expenses/', {
-            'category': cat.id, 'amount_usd': '200.00', 'expense_date': '2025-06-01', 'vendor': 'Shop',
+            'category': cat.id, 'amount_usd': '200.00', 'expense_date': _shamsi(date(2025, 6, 1)), 'vendor': 'Shop',
         }, format='json')
         self.assertEqual(create.status_code, 201)
         eid = create.data['id']
@@ -366,7 +379,7 @@ class OperatingExpenseE2ETests(TestCase):
         cat_id = cat_resp.data['id']
 
         # 2. Create operating expense (employee can)
-        today = timezone.now().date().isoformat()
+        today = _shamsi(timezone.now().date())
         create = emp.post('/api/finance/operating-expenses/', {
             'category': cat_id,
             'title': 'Monthly coffee supply',
@@ -424,7 +437,7 @@ class OperatingExpenseE2ETests(TestCase):
     def test_opex_idempotency_via_api_e2e(self):
         emp = employee_client(username='emp_idem')
         cat = OperatingExpenseCategory.objects.create(name='Idem Cat', slug='idem-cat')
-        today = timezone.now().date().isoformat()
+        today = _shamsi(timezone.now().date())
         payload = {
             'category': cat.id, 'title': 'Idempotent', 'amount_usd': '50.00',
             'expense_date': today, 'idempotency_key': 'e2e-idem-opex-1',
@@ -439,7 +452,7 @@ class OperatingExpenseE2ETests(TestCase):
     def test_opex_rate_snapshot_not_repriced_e2e(self):
         emp = employee_client(username='emp_rate')
         cat = OperatingExpenseCategory.objects.create(name='Rate Cat', slug='rate-cat')
-        today = timezone.now().date().isoformat()
+        today = _shamsi(timezone.now().date())
 
         # Create at rate 100000 (set in class setUp)
         create = emp.post('/api/finance/operating-expenses/', {
@@ -464,7 +477,7 @@ class OperatingExpenseE2ETests(TestCase):
     def test_opex_isolation_from_wallet_and_sale_e2e(self):
         emp = employee_client(username='emp_isolation')
         cat = OperatingExpenseCategory.objects.create(name='Isolation', slug='isolation')
-        today = timezone.now().date().isoformat()
+        today = _shamsi(timezone.now().date())
 
         emp.post('/api/finance/operating-expenses/', {
             'category': cat.id, 'title': 'Test', 'amount_usd': '100.00',

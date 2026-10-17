@@ -26,7 +26,6 @@ class ReportsAccessTests(TestCase):
         '/api/reports/weekly/',
         '/api/reports/monthly/',
         '/api/reports/quarterly/',
-        '/api/reports/yearly/',
         '/api/reports/all/',
         '/api/reports/visits/',
         '/api/reports/customers/',
@@ -54,6 +53,12 @@ class ReportsAccessTests(TestCase):
         for url in self.ENDPOINTS:
             response = client.get(url)
             self.assertEqual(response.status_code, 200, url)
+
+    def test_yearly_is_deprecated_and_points_at_monthly_close(self):
+        client = employee_client()
+        response = client.get('/api/reports/yearly/')
+        self.assertEqual(response.status_code, 410)
+        self.assertIn('monthly-close', str(response.data))
 
 
 class ReportsAPIViewTests(TestCase):
@@ -155,12 +160,11 @@ class PeriodReportTests(TestCase):
         self.assertRegex(response.data['period'], r'^\d{4}-Q[1-4]$')
         self.assertEqual(float(response.data['total']), 25000.0)
 
-    def test_yearly_report_shape(self):
+    def test_yearly_report_is_deprecated(self):
         self._seed_payment_now()
         response = self.client.get('/api/reports/yearly/')
-        self.assertEqual(response.status_code, 200)
-        self.assertRegex(response.data['period'], r'^\d{4}$')
-        self.assertEqual(float(response.data['total']), 25000.0)
+        self.assertEqual(response.status_code, 410)
+        self.assertIn('monthly-close', str(response.data))
 
 
 class VisitReportViewTests(TestCase):

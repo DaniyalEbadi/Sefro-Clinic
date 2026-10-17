@@ -1,9 +1,11 @@
 from django.contrib import admin
 
+from .admin_guards import ClosedPeriodGuardAdminMixin
 from .models import (
     ExchangeRate,
     Expense,
     ExpenseCategory,
+    MonthlyClose,
     OperatingExpense,
     OperatingExpenseCategory,
     Package,
@@ -15,6 +17,8 @@ from .models import (
     ProductUsage,
     Sale,
     ServiceItem,
+    StaffPayout,
+    StaffPayoutProduct,
     Wallet,
     WalletRewardRule,
     WalletTransaction,
@@ -76,19 +80,20 @@ class ProductCostHistoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(ProductUsage)
-class ProductUsageAdmin(admin.ModelAdmin):
-    list_display = ['product', 'visit', 'service', 'package_sale', 'quantity', 'total_cost_usd_snapshot', 'created_at']
+class ProductUsageAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
+    list_display = ['product', 'customer', 'visit', 'service', 'package_sale', 'quantity',
+                    'total_cost_usd_snapshot', 'total_cost_toman_snapshot', 'created_at']
     list_filter = ['product']
 
 
 @admin.register(Sale)
-class SaleAdmin(admin.ModelAdmin):
+class SaleAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
     list_display = ['id', 'customer', 'visit', 'package', 'amount_usd', 'status', 'created_at']
     list_filter = ['status']
 
 
 @admin.register(PaymentComponent)
-class PaymentComponentAdmin(admin.ModelAdmin):
+class PaymentComponentAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
     list_display = ['sale', 'method', 'amount_usd', 'created_at']
 
 
@@ -98,15 +103,17 @@ class ExpenseCategoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(Expense)
-class ExpenseAdmin(admin.ModelAdmin):
+class ExpenseAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
     list_display = ['id', 'created_by', 'category', 'amount_usd', 'status', 'expense_date']
     list_filter = ['status', 'category']
+    closed_anchor_field = 'expense_date'
 
 
 @admin.register(ProductPurchase)
-class ProductPurchaseAdmin(admin.ModelAdmin):
+class ProductPurchaseAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
     list_display = ['product', 'quantity', 'unit_cost_usd', 'total_cost_usd', 'purchase_date']
     list_filter = ['product']
+    closed_anchor_field = 'purchase_date'
 
 
 @admin.register(OperatingExpenseCategory)
@@ -117,7 +124,35 @@ class OperatingExpenseCategoryAdmin(admin.ModelAdmin):
 
 
 @admin.register(OperatingExpense)
-class OperatingExpenseAdmin(admin.ModelAdmin):
+class OperatingExpenseAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
     list_display = ['id', 'title', 'category', 'amount_usd', 'amount_toman', 'expense_date', 'payment_method', 'created_by']
     list_filter = ['category', 'payment_method', 'expense_date']
     search_fields = ['title', 'vendor', 'description', 'notes']
+    closed_anchor_field = 'expense_date'
+
+
+@admin.register(StaffPayout)
+class StaffPayoutAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
+    list_display = ['id', 'staff', 'role', 'payout_kind', 'payout_cash_usd',
+                    'payout_product_value_usd', 'status', 'created_at']
+    list_filter = ['status', 'role', 'payout_kind']
+
+
+@admin.register(StaffPayoutProduct)
+class StaffPayoutProductAdmin(ClosedPeriodGuardAdminMixin, admin.ModelAdmin):
+    list_display = ['id', 'payout', 'product', 'quantity', 'value_usd']
+
+
+@admin.register(MonthlyClose)
+class MonthlyCloseAdmin(admin.ModelAdmin):
+    """Read-mostly view of the closed books; reopening goes through the API."""
+    list_display = ['period_key', 'status', 'net_profit_usd', 'closed_at',
+                    'closed_by', 'reopened_at', 'reopened_by']
+    list_filter = ['status', 'shamsi_year']
+    readonly_fields = [f.name for f in MonthlyClose._meta.fields]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from finance.models import ProductPurchase, PurchaseOrder
 from finance.services.exchange_rates import set_rate
-from finance.services.inventory import current_cost
+from finance.services.inventory import current_cost, record_product_purchase
 from finance.services.purchases import (
     PurchaseOrderError,
     cancel_purchase_order,
@@ -251,3 +251,31 @@ class PurchaseOrderServiceTests(TestCase):
         summary = purchase_summary(date(2026, 1, 1), date(2026, 12, 31))
         self.assertEqual(summary['order_count'], 0)
         self.assertEqual(summary['total_cost_usd'], Decimal('0'))
+
+    def test_summary_reads_both_buying_ledgers_without_double_counting(self):
+        order, _ = self.create_order()  # purchase orders: 3 x 12.50
+        receive_purchase_order(order)
+        record_product_purchase(        # direct restock: 2 x 5.00
+            product=self.other_product, quantity=Decimal('2'),
+            unit_cost_usd=Decimal('5'), supplier='Direct Traders', rate=RATE,
+        )
+
+        summary = purchase_summary(timezone.now().date(), timezone.now().date())
+
+        self.assertEqual(summary['total_cost_usd'], Decimal('47.50'))
+        self.assertEqual(
+            summary['total_cost_toman'], (Decimal('47.50') * RATE).quantize(Decimal('0.01')),
+        )
+        self.assertEqual(
+            summary['by_source']['purchase_order']['total_cost_usd'], Decimal('37.50'),
+        )
+        self.assertEqual(summary['by_source']['purchase_order']['line_count'], 1)
+        self.assertEqual(summary['by_source']['direct']['total_cost_usd'], Decimal('10.00'))
+        self.assertEqual(summary['by_source']['direct']['row_count'], 1)
+        self.assertEqual(summary['line_count'], 2)
+        # One line per product in the merged list: neither flow hides the other.
+        self.assertEqual(len(summary['by_product']), 2)
+        self.assertEqual(
+            {row['supplier'] for row in summary['by_supplier']},
+            {'Beauty Supply Co', 'Direct Traders'},
+        )

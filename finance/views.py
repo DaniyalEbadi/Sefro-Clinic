@@ -1,6 +1,7 @@
-from datetime import date, datetime, time
+from datetime import date, datetime
 from decimal import Decimal
 
+import jdatetime
 from django.db.models import Sum
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
@@ -10,6 +11,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdmin, IsAdminOrReadOnly
+from Sefro_Clinic.fields import greg_to_shamsi_date, greg_to_shamsi_dt, shamsi_to_greg_date
+from Sefro_Clinic.periods import (
+    SHAMSI_YEAR_MAX,
+    SHAMSI_YEAR_MIN,
+    parse_shamsi_date,
+    shamsi_day_bounds,
+    shamsi_month_bounds,
+    shamsi_of,
+    shamsi_period_bounds,
+    shamsi_prev_month,
+)
 
 from .models import (
     ExchangeRate,
@@ -41,6 +53,8 @@ from .serializers import (
     ExchangeRateSerializer,
     ExpenseCategorySerializer,
     ExpenseSerializer,
+    MonthlyCloseReopenSerializer,
+    MonthlyCloseRequestSerializer,
     OperatingExpenseCategorySerializer,
     OperatingExpenseSerializer,
     PackageItemSerializer,
@@ -62,76 +76,106 @@ from .serializers import (
     WelcomePackSerializer,
     WelcomePackUsageSerializer,
 )
-from .services import accounting, financials, payments, reporting, staff_compensation
+from .services import accounting, closing, financials, payments, reporting, staff_compensation
 from .services import expenses as expense_svc
 from .services import operating_expenses as opex_svc
 from .services import purchases as purchase_svc
 from .services import welcome_pack as welcome_pack_svc
 from .services.exchange_rates import get_rate
+from .services.periods_guard import PeriodClosedError, ensure_open
 from .services.wallet import InsufficientFunds
 
 
 def _stringify(obj):
+    """JSON-safe rendering for report payloads.
+
+    Dates and datetimes render as **Shamsi** strings — the same calendar
+    every request parameter uses — never as Gregorian ISO.
+    """
     if isinstance(obj, Decimal):
         return str(obj)
     if isinstance(obj, dict):
         return {k: _stringify(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_stringify(v) for v in obj]
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
+    if isinstance(obj, datetime):
+        return greg_to_shamsi_dt(obj)
+    if isinstance(obj, date):
+        return greg_to_shamsi_date(obj)
     return obj
 
 
 def _resolve_range(request):
-    start = request.query_params.get('start_date')
-    end = request.query_params.get('end_date')
+    """The window a report request asks for, as aware ``(start, end)``.
+
+    **Every calendar in here is Shamsi.** Priority order:
+
+    1. ``?year=&month=`` — any Shamsi month, ever (month navigation);
+    2. ``?period=`` — Shamsi windows of *now*: ``today``, ``this_week``
+       (Saturday-start), ``this_month``, ``prev_month``, ``this_year``
+       (Farvardin..Esfand);
+    3. ``?start_date=&end_date=`` — explicit **Shamsi** ``YYYY-MM-DD`` days;
+    4. fallback: the current Shamsi day.
+    """
     period = request.query_params.get('period')
 
-    def _parse(value):
+    # Shamsi month navigation (?year=1405&month=5), the same convention the
+    # customers report endpoints already use. Checked before `period` so a
+    # caller can jump to any past month, not just the built-in windows.
+    shamsi_year = request.query_params.get('year')
+    shamsi_month = request.query_params.get('month')
+    if shamsi_year and shamsi_month:
         try:
-            return timezone.make_aware(datetime.combine(datetime.strptime(value, '%Y-%m-%d').date(), time.min))
-        except (ValueError, TypeError):
+            month_number = int(str(shamsi_month).split('-')[-1])
+            return shamsi_month_bounds(int(shamsi_year), month_number)
+        except (TypeError, ValueError):
+            pass
+
+    now = timezone.localtime(timezone.now())
+    if period == 'today':
+        return shamsi_period_bounds('daily', now)
+    if period == 'this_week':
+        return shamsi_period_bounds('weekly', now)
+    if period == 'this_month':
+        return shamsi_period_bounds('monthly', now)
+    if period == 'prev_month':
+        return shamsi_month_bounds(*shamsi_prev_month(*shamsi_of(now)))
+    if period == 'this_year':
+        return shamsi_period_bounds('yearly', now)
+
+    def _shamsi_bound(value, *, as_end=False):
+        """An explicit query date as one end of a Shamsi-day window.
+
+        Garbage (``not-a-date``) is ignored so the fallback below applies —
+        that tolerance is a tested contract. A structurally valid date whose
+        year falls outside the Shamsi window is rejected loudly: it is a
+        Gregorian date, and silently reinterpreting it would shift the report
+        by centuries.
+        """
+        day = parse_shamsi_date(value)
+        if day is None:
             return None
+        if not SHAMSI_YEAR_MIN <= day.year <= SHAMSI_YEAR_MAX:
+            raise serializers.ValidationError(
+                f'Invalid Shamsi (Jalali) date: "{value}". Shamsi year must be '
+                f'between {SHAMSI_YEAR_MIN} and {SHAMSI_YEAR_MAX}; {day.year} '
+                f'looks like a Gregorian year. Send a Jalali date (e.g. 1405-07-08).'
+            )
+        start_dt, end_dt = shamsi_day_bounds(day)
+        return end_dt if as_end else start_dt
 
-    if period:
-        now = timezone.localtime(timezone.now())
-        today = now.date()
-        if period == 'today':
-            start_dt = timezone.make_aware(datetime.combine(today, time.min))
-            end_dt = timezone.make_aware(datetime.combine(today, time.max))
-        elif period == 'this_week':
-            start_dt = timezone.make_aware(datetime.combine(today - timezone.timedelta(days=today.weekday()), time.min))
-            end_dt = timezone.make_aware(datetime.combine(start_dt.date() + timezone.timedelta(days=7), time.max))
-        elif period == 'this_month':
-            start_dt = timezone.make_aware(datetime.combine(today.replace(day=1), time.min))
-            end_dt = timezone.make_aware(datetime.combine((start_dt.date().replace(month=start_dt.month % 12 + 1, day=1) if start_dt.month != 12 else start_dt.replace(year=start_dt.year + 1, month=1, day=1)), time.max))
-        elif period == 'prev_month':
-            first_this = today.replace(day=1)
-            last_prev = first_this - timezone.timedelta(days=1)
-            start_dt = timezone.make_aware(datetime.combine(last_prev.replace(day=1), time.min))
-            end_dt = timezone.make_aware(datetime.combine(last_prev, time.max))
-        elif period == 'this_year':
-            start_dt = timezone.make_aware(datetime.combine(today.replace(month=1, day=1), time.min))
-            end_dt = timezone.make_aware(datetime.combine(today.replace(month=12, day=31), time.max))
-        else:
-            start_dt = end_dt = None
-        if start_dt and end_dt:
-            return start_dt, end_dt
+    start_dt = _shamsi_bound(request.query_params.get('start_date'))
+    end_dt = _shamsi_bound(request.query_params.get('end_date'), as_end=True)
 
-    start_dt = _parse(start)
-    end_dt = _parse(end)
-    if end_dt:
-        end_dt = timezone.make_aware(datetime.combine(end_dt.date(), time.max))
-
-    # Fall back to today when no usable range was supplied. This mirrors the
-    # service-layer convention (services/reporting.py::_range and
-    # services/staff_compensation.py::staff_payout_summary). Returning None here
-    # made the views that filter inline raise "Cannot use None as a query value".
+    # Fall back to the current Shamsi day when no usable range was supplied.
+    # This mirrors the service-layer convention (services/reporting.py::_range
+    # and services/staff_compensation.py::staff_payout_summary).
     if not start_dt or not end_dt:
-        today = timezone.localtime(timezone.now()).date()
-        start_dt = start_dt or timezone.make_aware(datetime.combine(today, time.min))
-        end_dt = end_dt or timezone.make_aware(datetime.combine(today, time.max))
+        fallback_start, fallback_end = shamsi_day_bounds(
+            jdatetime.date.fromgregorian(date=now.date()),
+        )
+        start_dt = start_dt or fallback_start
+        end_dt = end_dt or fallback_end
 
     return start_dt, end_dt
 
@@ -198,23 +242,36 @@ DATE_PARAMS = [
                      description='Jalali (Shamsi) date YYYY-MM-DD, inclusive.'),
     OpenApiParameter('date_to', OpenApiTypes.STR, OpenApiParameter.QUERY,
                      description='Jalali (Shamsi) date YYYY-MM-DD, inclusive.'),
-    OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY,
-                     description='Gregorian inclusive start (same convention as the report views).'),
-    OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY,
-                     description='Gregorian inclusive end (same convention as the report views).'),
+    OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                     description='Jalali (Shamsi) inclusive start — same calendar as date_from.'),
+    OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                     description='Jalali (Shamsi) inclusive end — same calendar as date_to.'),
+]
+
+
+#: Shamsi year/month navigation, shared by every period report that accepts it.
+SHAMSI_MONTH_PARAMS = [
+    OpenApiParameter(
+        'year', OpenApiTypes.INT, OpenApiParameter.QUERY,
+        description='Shamsi (Jalali) year, e.g. 1405. Only used together with `month`.',
+    ),
+    OpenApiParameter(
+        'month', OpenApiTypes.STR, OpenApiParameter.QUERY,
+        description="Shamsi month: 1-12, or a full key such as '1405-05'. Only used with `year`.",
+    ),
 ]
 
 
 def _apply_date_range(qs, request, field='created_at'):
     """Narrow ``qs`` by the period the caller asked for.
 
-    ``date_from``/``date_to`` are Jalali ``YYYY-MM-DD`` strings (the convention
-    the dashboard reports and the PWA already use), and are inclusive.
-    ``start_date``/``end_date`` are Gregorian and keep working as aliases so
-    callers of the report endpoints are not surprised. Omitting every parameter
-    leaves the queryset untouched, so unfiltered list calls are unaffected.
+    All four date parameters are Jalali ``YYYY-MM-DD`` strings and inclusive:
+    ``date_from``/``date_to`` are the list-filter names, ``start_date``/
+    ``end_date`` are the same Shamsi dates under the report-window names —
+    one calendar everywhere. A Gregorian value is rejected with 400 rather
+    than silently reinterpreted. Omitting every parameter leaves the
+    queryset untouched, so unfiltered list calls are unaffected.
     """
-    from Sefro_Clinic.fields import shamsi_to_greg_date
 
     params = request.query_params
     date_from = params.get('date_from')
@@ -224,9 +281,9 @@ def _apply_date_range(qs, request, field='created_at'):
     if date_to:
         qs = qs.filter(**{f'{field}__date__lte': shamsi_to_greg_date(date_to)})
     if params.get('start_date'):
-        qs = qs.filter(**{f'{field}__date__gte': params['start_date']})
+        qs = qs.filter(**{f'{field}__date__gte': shamsi_to_greg_date(params['start_date'])})
     if params.get('end_date'):
-        qs = qs.filter(**{f'{field}__date__lte': params['end_date']})
+        qs = qs.filter(**{f'{field}__date__lte': shamsi_to_greg_date(params['end_date'])})
     return qs
 
 
@@ -247,8 +304,12 @@ class ProductUsageViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(product_id=params['product'])
         if params.get('package_sale'):
             qs = qs.filter(package_sale_id=params['package_sale'])
+        if params.get('customer'):
+            qs = qs.filter(customer_id=params['customer'])
         qs = _apply_date_range(qs, self.request)
-        return qs.select_related('product', 'visit', 'service', 'package_sale', 'welcome_pack_usage')
+        return qs.select_related(
+            'product', 'visit', 'service', 'package_sale', 'welcome_pack_usage', 'customer',
+        )
 
 
 @extend_schema(tags=['Wallet'])
@@ -344,9 +405,13 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
                 sale,
                 refund_amount_usd=serializer.validated_data.get('refund_amount_usd'),
                 reason=serializer.validated_data.get('reason', ''),
+                user=request.user,
             )
         except payments.PaymentError as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except PeriodClosedError as exc:
+            # The sale's month is closed: refunds are frozen until reopened.
+            return Response({'error': str(exc)}, status=status.HTTP_409_CONFLICT)
         return Response(SaleSerializer(refund).data, status=status.HTTP_201_CREATED)
 
 
@@ -404,6 +469,12 @@ class ExpenseViewSet(viewsets.ModelViewSet):
         """
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        # Guard BEFORE serializer.save(): otherwise a PATCH into a closed
+        # month would write the fields first and only then fail on re-price.
+        ensure_open(
+            instance.expense_date, action='edit an expense claim',
+            user=request.user, object_repr=f'Expense#{instance.id}',
+        )
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -424,6 +495,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return self._update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        # Deleting a claim rewrites the month it was booked into; the default
+        # ModelViewSet path would bypass the service guard entirely.
+        expense = self.get_object()
+        ensure_open(
+            expense.expense_date, action='delete an expense claim',
+            user=request.user, object_repr=f'Expense#{expense.id}',
+        )
+        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=['post'], permission_classes=[IsEmployeeOrAdmin])
     def submit(self, request, pk=None):
@@ -492,6 +573,14 @@ class ProductPurchaseViewSet(viewsets.ModelViewSet):
             purchase_date=data.get('purchase_date'),
         )
         serializer.instance = purchase
+
+    def destroy(self, request, *args, **kwargs):
+        purchase = self.get_object()
+        ensure_open(
+            purchase.purchase_date, action='delete a product purchase',
+            user=request.user, object_repr=f'ProductPurchase#{purchase.id}',
+        )
+        return super().destroy(request, *args, **kwargs)
 
 
 @extend_schema(tags=['Finance'])
@@ -594,8 +683,9 @@ class FinancialSummaryView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            *SHAMSI_MONTH_PARAMS,
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('service', OpenApiTypes.INT, OpenApiParameter.QUERY),
             OpenApiParameter('package', OpenApiTypes.INT, OpenApiParameter.QUERY),
@@ -621,8 +711,8 @@ class ProfitByServiceView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -637,8 +727,8 @@ class ProfitByPackageView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -692,7 +782,7 @@ class ExchangeRateReportView(APIView):
             'currency_to': 'TOMAN',
             'rate': str(rate),
             'rate_toman_per_usd': str(rate),
-            'effective_at': latest.effective_at.isoformat() if latest else None,
+            'effective_at': greg_to_shamsi_dt(latest.effective_at) if latest else None,
             'source': latest.source if latest and latest.source else 'fallback',
         }
         # Optional conversion: ?usd=100 or ?amount=100
@@ -750,7 +840,7 @@ class BackupExchangeRateReportView(APIView):
             'currency_to': 'TOMAN',
             'rate': str(rate),
             'rate_toman_per_usd': str(rate),
-            'effective_at': timezone.now().isoformat(),
+            'effective_at': greg_to_shamsi_dt(timezone.now()),
             'source': 'brsapi',
             'provider': 'BrsApi.ir',
         }
@@ -774,6 +864,47 @@ class StaffCompensationRuleViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdmin]
     filter_backends = [filters.OrderingFilter]
     ordering = ['role']
+
+
+#: Date/period query parameters shared by every payout report.
+PAYOUT_RANGE_PARAMS = [
+    OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+    OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+    OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
+]
+#: ``status`` documents the default: only payouts still owed.
+PAYOUT_STATUS_PARAM = OpenApiParameter(
+    'status', OpenApiTypes.STR, OpenApiParameter.QUERY,
+    description="Defaults to the payouts still owed (pending, approved, paid). "
+                "Pass 'all' to include cancelled rows in the ledger.",
+)
+PAYOUT_SUMMARY_PARAMS = PAYOUT_RANGE_PARAMS + [
+    OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
+    OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY),
+    PAYOUT_STATUS_PARAM,
+]
+PAYOUT_DETAIL_PARAMS = PAYOUT_RANGE_PARAMS + [
+    OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
+    PAYOUT_STATUS_PARAM,
+]
+
+
+def _staff_payout_summary_payload(request):
+    """The single implementation behind both payout-summary routes.
+
+    ``/api/finance/reports/staff-payout-summary/`` (Reports) and
+    ``/api/finance/staff-payouts/summary/`` (Staff Compensation) are two
+    documented doors onto the same number, so the range resolution and
+    parameter parsing live here rather than drifting apart in two views.
+    """
+    start, end = _resolve_range(request)
+    params = request.query_params
+    return _stringify(staff_compensation.staff_payout_summary(
+        start, end,
+        staff_id=params.get('staff'),
+        role=params.get('role'),
+        status=params.get('status'),
+    ))
 
 
 @extend_schema(tags=['Staff Compensation'], parameters=DATE_PARAMS)
@@ -801,13 +932,7 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         return _apply_date_range(qs, self.request)
 
     @extend_schema(
-        parameters=[
-            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
-            OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
-        ],
+        parameters=PAYOUT_SUMMARY_PARAMS,
         responses=inline_serializer(
             name='StaffPayoutSummary',
             fields={
@@ -824,23 +949,9 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=False, methods=['get'])
     def summary(self, request):
-        start, end = _resolve_range(request)
-        params = request.query_params
-        result = staff_compensation.staff_payout_summary(
-            start, end,
-            staff_id=params.get('staff'),
-            role=params.get('role'),
-        )
-        return Response(_stringify(result))
+        return Response(_staff_payout_summary_payload(request))
 
-    @extend_schema(
-        parameters=[
-            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
-        ],
-    )
+    @extend_schema(parameters=PAYOUT_DETAIL_PARAMS)
     @action(detail=False, methods=['get'])
     def detail_report(self, request):
         start, end = _resolve_range(request)
@@ -848,42 +959,57 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         data = staff_compensation.staff_payout_detail(
             start, end,
             staff_id=params.get('staff'),
+            status=params.get('status'),
         )
         return Response(_stringify(data))
 
 
 @extend_schema(tags=['Reports'])
 class StaffPayoutSummaryView(APIView):
+    """Reports-tagged door onto the same payout summary.
+
+    Kept because clients already call it; the numbers come from
+    :func:`_staff_payout_summary_payload`, shared with
+    ``/api/finance/staff-payouts/summary/``.
+    """
+
     permission_classes = [IsEmployeeOrAdmin]
 
-    @extend_schema(
-        parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
-            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY),
-            OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY),
-        ],
-    )
+    @extend_schema(parameters=PAYOUT_SUMMARY_PARAMS)
     def get(self, request):
-        start, end = _resolve_range(request)
-        params = request.query_params
-        result = staff_compensation.staff_payout_summary(
-            start, end,
-            staff_id=params.get('staff'),
-            role=params.get('role'),
-        )
-        return Response(_stringify(result))
+        return Response(_staff_payout_summary_payload(request))
 
 
 @extend_schema(tags=['Reports'])
 class ProfitByStaffView(APIView):
+    """Clinic profitability per staff member -- not a payslip.
+
+    Reads completed visits in the window and answers "what did this person's
+    work earn the clinic": revenue, material cost, welcome-pack cost and the
+    clinic's share. ``operator_compensation_usd`` is the obligation recorded in
+    the payout ledger (pending/approved/paid only), so it lines up with
+    ``/reports/staff-payout-summary/`` for the same window -- but the two are
+    deliberately not forced to match:
+
+    * this report is keyed on ``Visit.start_at`` (when the work happened),
+      the payout summary on ``StaffPayout.created_at`` (when the debt was
+      recorded), so a payout booked for a visit outside the window will
+      differ;
+    * this report only sees visits with a staff member; the summary counts
+      every payout, including monthly salaries that have no visit.
+
+    For what is actually owed, use the payout endpoints in the Staff
+    Compensation category. For a whole Shamsi year, month by month, with the
+    P&L and the operator pay side by side, use ``/reports/monthly-close/``.
+    """
+
     permission_classes = [IsEmployeeOrAdmin]
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            *SHAMSI_MONTH_PARAMS,
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -992,8 +1118,8 @@ class ProfitByStaffCoverageView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -1007,7 +1133,7 @@ class ProfitByStaffCoverageView(APIView):
         total_visits = completed.count()
         unassigned_visits = completed.filter(staff__isnull=True).count()
         return Response({
-            'period': {'start': start, 'end': end},
+            'period': _stringify({'start': start, 'end': end}),
             'total_visits': total_visits,
             'visits_with_staff': total_visits - unassigned_visits,
             'unassigned_visits': unassigned_visits,
@@ -1017,13 +1143,144 @@ class ProfitByStaffCoverageView(APIView):
 
 
 @extend_schema(tags=['Reports'])
+class MonthlyCloseView(APIView):
+    """A Shamsi year of monthly P&L, each month next to its operator pay.
+
+    The "close this month, move to the next one" report. For every month of
+    the requested Shamsi year it returns:
+
+    * the full P&L for that month -- revenue, product cost, welcome-pack cost,
+      gross profit, staff compensation, operating expenses, staff claims,
+      clinic share and **net profit** -- all from the same
+      ``financials.build_report`` that backs ``/reports/financial-summary/``;
+    * **purchases** (both stock-buying ledgers) and **net profit after
+      purchases**, the cash view. Purchases are never subtracted from net
+      profit, because inventory is charged once, at consumption;
+    * one row per operator (doctor / facial / laser) with the revenue and
+      material profit they produced, what they are owed, how much of that is
+      per-visit earnings versus monthly salary, and paid / pending / approved
+      splits;
+    * ``role_totals`` (laser, facial, doctor) and ``year_total``.
+
+    Payout figures are anchored on ``StaffPayout.created_at``, the same anchor
+    ``build_report`` uses, so a month's operator rows add back up to that
+    month's ``staff_compensation.total``.
+    """
+
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                'year', OpenApiTypes.INT, OpenApiParameter.QUERY,
+                description='Shamsi year. Defaults to the current Shamsi year.',
+            ),
+            OpenApiParameter(
+                'month', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                description="Return a single Shamsi month: 1-12 or '1405-05'.",
+            ),
+            OpenApiParameter(
+                'status', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                description="Payout status filter. Defaults to the payouts still "
+                            "owed (pending, approved, paid); 'all' includes cancelled.",
+            ),
+            OpenApiParameter('staff', OpenApiTypes.INT, OpenApiParameter.QUERY,
+                             description='Restrict the operator rows to one staff member.'),
+            OpenApiParameter('role', OpenApiTypes.STR, OpenApiParameter.QUERY,
+                             description='Restrict the operator rows to one role '
+                                         '(doctor | facial | laser).'),
+        ],
+    )
+    def get(self, request):
+        params = request.query_params
+        return Response(_stringify(reporting.monthly_close(
+            year=params.get('year'),
+            month=params.get('month'),
+            status=params.get('status'),
+            staff_id=params.get('staff') or None,
+            role=params.get('role') or None,
+        )))
+
+
+@extend_schema(tags=['Reports'])
+class MonthlyCloseCloseView(APIView):
+    """POST: freeze one past Shamsi month.
+
+    Renders the month's full P&L + outstanding obligations into an immutable
+    snapshot and marks the month closed; every write path for that month then
+    answers 409 until it is reopened. Idempotent: re-closing an already
+    closed month returns the existing snapshot untouched.
+    """
+
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(request=MonthlyCloseRequestSerializer,
+                   responses={200: MonthlyCloseRequestSerializer})
+    def post(self, request):
+        serializer = MonthlyCloseRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            row, already = closing.close_month(
+                int(serializer.validated_data['year']),
+                int(serializer.validated_data['month']),
+                user=request.user,
+                note=serializer.validated_data.get('note', ''),
+            )
+        except closing.ClosingError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_stringify(_close_row_payload(row, already)), status=status.HTTP_200_OK)
+
+
+@extend_schema(tags=['Reports'])
+class MonthlyCloseReopenView(APIView):
+    """POST: reopen a closed month. Requires a reason (audited); the closing
+    row is kept with status 'reopened', and re-closing refreshes it."""
+
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(request=MonthlyCloseReopenSerializer,
+                   responses={200: MonthlyCloseRequestSerializer})
+    def post(self, request):
+        serializer = MonthlyCloseReopenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            row = closing.reopen_month(
+                int(serializer.validated_data['year']),
+                int(serializer.validated_data['month']),
+                user=request.user,
+                reason=serializer.validated_data['reason'],
+            )
+        except closing.ClosingError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(_stringify(_close_row_payload(row, False)), status=status.HTTP_200_OK)
+
+
+def _close_row_payload(row, already_closed):
+    """Response body shared by the close/reopen endpoints."""
+    return {
+        'period': row.period_key,
+        'status': row.status,
+        'already_closed': already_closed,
+        'closed_at': row.closed_at,
+        'closed_by': row.closed_by.username if row.closed_by_id else None,
+        'close_note': row.close_note,
+        'reopened_at': row.reopened_at,
+        'reopened_by': row.reopened_by.username if row.reopened_by_id else None,
+        'reopen_reason': row.reopen_reason,
+        'net_profit_usd': str(row.net_profit_usd),
+        'rate_used': str(row.rate_used) if row.rate_used is not None else None,
+        'schema_version': row.schema_version,
+    }
+
+
+@extend_schema(tags=['Reports'])
 class DashboardView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -1037,15 +1294,12 @@ class DashboardView(APIView):
         # is how the two endpoints drifted apart.
         report = financials.build_report(start, end)
 
+        # Wallet rewards and payments come from the same report as everything
+        # else here. The dashboard used to re-query them, which put a second
+        # definition of "wallet payments" next to the one financial-summary
+        # reports. Only the liability is read locally: it is a balance, not a
+        # period figure, so build_report has no equivalent.
         wallet_liability = Wallet.objects.aggregate(total=Sum('balance'))['total'] or Decimal('0')
-        wallet_rewards = WalletTransaction.objects.filter(
-            transaction_type=WalletTransaction.Type.REWARD,
-            created_at__gte=start, created_at__lte=end,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
-        wallet_payments = WalletTransaction.objects.filter(
-            transaction_type=WalletTransaction.Type.PAYMENT,
-            created_at__gte=start, created_at__lte=end,
-        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
         new_customers = Customer.objects.filter(
             created_at__gte=start, created_at__lte=end,
@@ -1092,14 +1346,18 @@ class DashboardView(APIView):
                     'net_profit_usd': str(report['net_profit']['usd']),
                 },
             },
+            # Cash view: stock bought in the period, and net profit with it
+            # deducted. Never replaces net_profit (that would double count).
+            'purchases': report['purchases'],
+            'net_profit_after_purchases': report['net_profit_after_purchases'],
             'staff_compensation': report['staff_compensation'],
             'operating_expenses': report['operating_expenses'],
             'staff_expense_claims': report['staff_expense_claims'],
             'cost_coverage': report['cost_coverage'],
             'wallet_summary': {
                 'total_liability_usd': str(wallet_liability),
-                'rewards_issued_usd': str(wallet_rewards),
-                'wallet_payments_usd': str(abs(wallet_payments)),
+                'rewards_issued_usd': str(report['wallet']['rewards_issued']),
+                'wallet_payments_usd': str(abs(report['wallet']['wallet_payments'])),
             },
             'operational': {
                 'visits_completed': report['counts']['appointments'],
@@ -1140,8 +1398,8 @@ class OperatingExpenseCategoryViewSet(viewsets.ModelViewSet):
         OpenApiParameter('category', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Filter by category id'),
         OpenApiParameter('payment_method', OpenApiTypes.STR, OpenApiParameter.QUERY, description='cash | card | bank_transfer | other'),
         OpenApiParameter('created_by', OpenApiTypes.INT, OpenApiParameter.QUERY, description='Filter by staff user id'),
-        OpenApiParameter('date_from', OpenApiTypes.DATE, OpenApiParameter.QUERY, description='Gregorian YYYY-MM-DD (finance convention)'),
-        OpenApiParameter('date_to', OpenApiTypes.DATE, OpenApiParameter.QUERY, description='Gregorian YYYY-MM-DD (finance convention)'),
+        OpenApiParameter('date_from', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Jalali (Shamsi) YYYY-MM-DD, inclusive'),
+        OpenApiParameter('date_to', OpenApiTypes.STR, OpenApiParameter.QUERY, description='Jalali (Shamsi) YYYY-MM-DD, inclusive'),
     ],
 )
 class OperatingExpenseViewSet(viewsets.ModelViewSet):
@@ -1168,16 +1426,10 @@ class OperatingExpenseViewSet(viewsets.ModelViewSet):
             qs = qs.filter(created_by_id=params['created_by'])
         date_from = params.get('date_from')
         if date_from:
-            try:
-                qs = qs.filter(expense_date__gte=datetime.strptime(date_from, '%Y-%m-%d').date())
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(expense_date__gte=shamsi_to_greg_date(date_from))
         date_to = params.get('date_to')
         if date_to:
-            try:
-                qs = qs.filter(expense_date__lte=datetime.strptime(date_to, '%Y-%m-%d').date())
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(expense_date__lte=shamsi_to_greg_date(date_to))
         return qs
 
     def create(self, request, *args, **kwargs):
@@ -1213,10 +1465,17 @@ class OperatingExpenseViewSet(viewsets.ModelViewSet):
             raise serializers.ValidationError({'error': str(exc)})
         serializer.instance = expense
 
+    def destroy(self, request, *args, **kwargs):
+        # Route through the service so the closed-month guard (and the audit
+        # trail) sees the deletion instead of a silent ORM delete.
+        expense = self.get_object()
+        opex_svc.delete_operating_expense(expense)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
     )
@@ -1379,19 +1638,9 @@ class WelcomePackUsageViewSet(viewsets.ReadOnlyModelViewSet):
         if params.get('visit'):
             qs = qs.filter(visit_id=params['visit'])
         if params.get('date_from'):
-            try:
-                from datetime import datetime
-                date_from = datetime.strptime(params['date_from'], '%Y-%m-%d').date()
-                qs = qs.filter(issued_at__date__gte=date_from)
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(issued_at__date__gte=shamsi_to_greg_date(params['date_from']))
         if params.get('date_to'):
-            try:
-                from datetime import datetime
-                date_to = datetime.strptime(params['date_to'], '%Y-%m-%d').date()
-                qs = qs.filter(issued_at__date__lte=date_to)
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(issued_at__date__lte=shamsi_to_greg_date(params['date_to']))
         return qs
 
 
@@ -1402,8 +1651,8 @@ class WelcomePackReportView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
         ],
         responses=inline_serializer(
@@ -1470,16 +1719,10 @@ class PurchaseOrderViewSet(viewsets.ModelViewSet):
             qs = qs.filter(items__product_id=params['product'])
         date_from = params.get('date_from')
         if date_from:
-            try:
-                qs = qs.filter(order_date__gte=datetime.strptime(date_from, '%Y-%m-%d').date())
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(order_date__gte=shamsi_to_greg_date(date_from))
         date_to = params.get('date_to')
         if date_to:
-            try:
-                qs = qs.filter(order_date__lte=datetime.strptime(date_to, '%Y-%m-%d').date())
-            except (ValueError, TypeError):
-                pass
+            qs = qs.filter(order_date__lte=shamsi_to_greg_date(date_to))
         return qs.distinct()
 
     def perform_create(self, serializer):
@@ -1557,8 +1800,8 @@ class ProductPurchaseReportView(APIView):
 
     @extend_schema(
         parameters=[
-            OpenApiParameter('start_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
-            OpenApiParameter('end_date', OpenApiTypes.DATE, OpenApiParameter.QUERY),
+            OpenApiParameter('start_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
+            OpenApiParameter('end_date', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('period', OpenApiTypes.STR, OpenApiParameter.QUERY),
             OpenApiParameter('product', OpenApiTypes.INT, OpenApiParameter.QUERY),
             OpenApiParameter('supplier', OpenApiTypes.STR, OpenApiParameter.QUERY),

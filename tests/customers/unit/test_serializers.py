@@ -1,10 +1,25 @@
 from decimal import Decimal
 
+from datetime import timedelta
+
+import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Customer, Payment, Service, Visit
 from customers.serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
+
+
+def shamsi_str(greg_dt):
+    """A Gregorian datetime as its Jalali ``YYYY-MM-DD HH:MM``."""
+    if timezone.is_aware(greg_dt):
+        greg_dt = timezone.localtime(greg_dt)
+    return jdatetime.datetime.fromgregorian(datetime=greg_dt).strftime('%Y-%m-%d %H:%M')
+
+
+_NOW = timezone.now()
+_START = shamsi_str(_NOW)
+_END = shamsi_str(_NOW + timedelta(minutes=30))
 
 
 class ServiceSerializerTest(TestCase):
@@ -35,7 +50,7 @@ class VisitSerializerTest(TestCase):
     def test_visit_serializer_valid_data(self):
         serializer = VisitSerializer(data={
             'customer': self.customer.id, 'services': [self.service.id],
-            'start_at': '2024-01-01 10:00', 'end_at': '2024-01-01 10:30',
+            'start_at': _START, 'end_at': _END,
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         visit = serializer.save()
@@ -44,7 +59,7 @@ class VisitSerializerTest(TestCase):
     def test_visit_serializer_invalid_missing_customer(self):
         serializer = VisitSerializer(data={
             'services': [self.service.id],
-            'start_at': '2024-01-01 10:00', 'end_at': '2024-01-01 10:30',
+            'start_at': _START, 'end_at': _END,
         })
         self.assertFalse(serializer.is_valid())
         self.assertIn('customer', serializer.errors)
@@ -52,7 +67,7 @@ class VisitSerializerTest(TestCase):
     def test_visit_serializer_exposes_payments_and_total(self):
         visit = VisitSerializer(data={
             'customer': self.customer.id, 'services': [self.service.id],
-            'start_at': '2024-01-01 10:00', 'end_at': '2024-01-01 10:30',
+            'start_at': _START, 'end_at': _END,
         })
         self.assertTrue(visit.is_valid(), visit.errors)
         visit = visit.save()
@@ -73,7 +88,7 @@ class VisitSerializerTest(TestCase):
     def test_visit_serializer_total_paid_zero_without_payments(self):
         visit = VisitSerializer(data={
             'customer': self.customer.id, 'services': [self.service.id],
-            'start_at': '2024-01-01 10:00', 'end_at': '2024-01-01 10:30',
+            'start_at': _START, 'end_at': _END,
         })
         self.assertTrue(visit.is_valid(), visit.errors)
         visit = visit.save()
@@ -93,7 +108,7 @@ class PaymentSerializerTest(TestCase):
     def test_payment_serializer_valid_data(self):
         serializer = PaymentSerializer(data={
             'customer': self.customer.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': '2024-01-01 10:00',
+            'paid_at': _START,
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         payment = serializer.save()
@@ -102,7 +117,7 @@ class PaymentSerializerTest(TestCase):
     def test_payment_serializer_invalid_missing_customer(self):
         serializer = PaymentSerializer(data={
             'amount': '50000', 'payment_method': 'cash',
-            'paid_at': '2024-01-01 10:00',
+            'paid_at': _START,
         })
         self.assertFalse(serializer.is_valid())
         self.assertIn('customer', serializer.errors)
@@ -114,7 +129,7 @@ class PaymentSerializerTest(TestCase):
         )
         serializer = PaymentSerializer(data={
             'visit': visit.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': '2024-01-01 10:00',
+            'paid_at': _START,
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         payment = serializer.save()
@@ -133,7 +148,7 @@ class PaymentSerializerTest(TestCase):
         serializer = PaymentSerializer(data={
             'customer': other.id,
             'visit': visit.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': '2024-01-01 10:00',
+            'paid_at': _START,
         })
         self.assertFalse(serializer.is_valid())
         self.assertIn('customer', serializer.errors)
@@ -141,7 +156,7 @@ class PaymentSerializerTest(TestCase):
     def test_payment_serializer_allows_payment_without_visit(self):
         serializer = PaymentSerializer(data={
             'customer': self.customer.id, 'amount': '50000',
-            'payment_method': 'cash', 'paid_at': '2024-01-01 10:00',
+            'payment_method': 'cash', 'paid_at': _START,
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         payment = serializer.save()

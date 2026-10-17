@@ -1,4 +1,5 @@
 from .accounting import record_visit_consumption
+from .closing import ClosingError, close_month, reopen_month
 from .exchange_rates import (
     convert_usd_to_toman,
     get_current_usd_to_toman_rate,
@@ -24,6 +25,7 @@ from .operating_expenses import (
     update_operating_expense,
 )
 from .payments import checkout
+from .periods_guard import PeriodClosedError, audit_event, ensure_open
 from .pricing import service_pricing_payload as service_pricing_breakdown
 from .reporting import (
     financial_summary,
@@ -64,6 +66,12 @@ __all__ = [
     'profit_by_service',
     'profit_by_package',
     'wallet_summary',
+    'close_month',
+    'reopen_month',
+    'ClosingError',
+    'PeriodClosedError',
+    'ensure_open',
+    'audit_event',
     'credit',
     'debit',
     'current_balance',

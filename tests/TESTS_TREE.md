@@ -45,16 +45,26 @@ tests/
 │
 ├── finance/                                # Finance app tests
 │   ├── __init__.py
+│   ├── test_clinic_financial_logic.py      # End-to-end clinic money logic (revenue/cost/profit)
+│   ├── test_closing.py                     # Monthly closing system (freeze/reopen, closed-month guards + BLOCKED audits, frozen report, admin guards) (22 tests)
 │   ├── test_finance.py                    # Finance API & checkout tests
 │   ├── test_inventory_consumption.py      # Inventory consumption/accounting tests
+│   ├── test_list_dates_and_expense_update.py  # Shamsi list-date filters (date_from/date_to + start_date/end_date; Gregorian rejected 400) & expense update
 │   ├── test_models.py                     # Finance model constraint tests
 │   ├── test_operating_expenses.py         # OperatingExpense domain tests (38 tests)
+│   ├── test_product_usage_snapshot.py     # ProductUsage USD/Toman price + customer snapshot tests (15 tests)
 │   ├── test_purchase_orders.py            # Purchase order service tests (draft/ordered/received)
-│   ├── test_services.py                   # Finance service layer tests
+│   ├── test_report_money_correctness.py   # Report money-correctness (snapshots, rates, rounding)
+│   ├── test_report_consistency.py         # Cross-endpoint report consistency (dashboard ≡ summary, operator tie-out, cash view)
+│   ├── test_monthly_close.py              # Monthly close Shamsi-year report (year payload, month filter, purchases, operators, tie-outs)
+│   ├── test_services.py                   # Finance service layer tests (incl. package checkout pricing)
 │   ├── test_staff_compensation.py         # Staff compensation/payout tests
+│   ├── test_staff_payout_summary.py       # Payout summary/detail date+status filters, dedup, profit tie-out (15 tests)
 │   ├── test_wallets.py                    # Wallet & transaction tests
 │   ├── test_welcome_pack_models.py        # Welcome pack model tests
-│   └── test_welcome_pack_services.py      # Welcome pack service tests
+│   ├── test_welcome_pack_reports.py       # Welcome-pack cost in summary/net profit/profit-by-* (8 tests)
+│   ├── test_welcome_pack_services.py      # Welcome pack service tests
+│   └── test_welcome_pack_stock.py         # Welcome pack stock draw-down tests
 │
 ├── integration/                            # Cross-app integration tests
 │   ├── __init__.py
@@ -68,7 +78,7 @@ tests/
 │   ├── test_operating_expenses_api.py     # Operating expense endpoint API tests
 │   ├── test_payments_by_service.py        # Payment aggregation tests
 │   ├── test_purchase_orders_api.py        # Purchase orders endpoint API tests
-│   ├── test_reports_api.py                # Reports API integration tests
+│   ├── test_reports_api.py                # Reports API tests; /api/reports/yearly/ returns 410 Gone (deprecated → monthly-close)
 │   ├── test_service_category_and_pricing_api.py
 │   ├── test_visit_overlap.py             # Visit overlap prevention tests
 │   ├── test_wallet_checkout_integration.py # Wallet + checkout integration tests
@@ -191,7 +201,7 @@ tests/
 │   ├── test_currency.py                   # Currency validation tests
 │   ├── test_exchange_rate_helpers.py      # Exchange rate provider & conversion tests
 │   ├── test_face_analyzer_services.py     # Face analyzer service unit tests
-│   ├── test_period_keys.py               # Shamsi period key & range tests
+│   ├── test_period_keys.py               # Shamsi period key & range tests (weekly = Saturday-start, W01 = week of 1 Farvardin)
 │   ├── test_service_pricing.py           # Service cost/profit calculation tests
 │   └── test_shamsi_fields.py            # Shamsi/Jalali date field tests
 │
@@ -206,22 +216,25 @@ tests/
 
 ## Test Categories Summary
 
+Counts are exact (`DiscoverRunner.build_suite(['tests'])` walk). The **E2E**
+row spans three locations, so it overlaps the Accounts and Customers rows.
+
 | Category | Location | Test Count | Description |
 |---|---|---|---|
-| **Unit** | `tests/unit/` | ~167 | Currency, exchange rates, Shamsi dates, pricing, period keys, face analyzer |
-| **Integration** | `tests/integration/` | ~264 | API endpoints, constraints, dashboard, reports, wallet+checkout, purchase orders |
-| **E2E** | `tests/e2e/` + `*/e2e/` | ~87 | Full workflow journeys: reserve → confirm → complete → pay → audit |
-| **Security** | `tests/security/` | ~126 | Auth, authorization, CSRF, headers, injection, XSS, secrets hygiene |
-| **Finance** | `tests/finance/` | ~232 | Checkout, wallet, expenses, operating expenses, staff compensation, purchase orders |
-| **Performance** | `tests/performance/` | ~87 | Smoke, stress, spike, endurance, scalability, cache, query plans |
-| **Accounts** | `tests/accounts/` | ~22 | User model, permissions, serializers, auth endpoints |
-| **Customers** | `tests/customers/` | ~65 | Customer model, serializers, visit validation, visit↔payment link |
-| **Logic** | `tests/logic/` | ~89 | Admin/employee permission boundary tests |
-| **Logs** | `tests/logs/` | ~6 | AuditLog model & signal tests |
-| **Website** | `tests/website/` | ~33 | Public catalog, contact intake, visitor journey |
-| **API** | `tests/api/` | ~10 | API versioning tests |
+| **Unit** | `tests/unit/` | 169 | Currency, exchange rates, Shamsi dates, pricing, period keys, face analyzer |
+| **Integration** | `tests/integration/` | 279 | API endpoints, constraints, dashboard, reports (incl. yearly 410 deprecation), wallet+checkout, purchase orders |
+| **E2E** | `tests/e2e/` + `*/e2e/` | 36 | Full workflow journeys: reserve → confirm → complete → pay → audit |
+| **Security** | `tests/security/` | 126 | Auth, authorization, CSRF, headers, injection, XSS, secrets hygiene |
+| **Finance** | `tests/finance/` | 424 | Checkout, wallet, expenses, operating expenses, staff compensation, purchase orders, monthly close report, monthly closing (freeze/reopen), Shamsi report-date filters, report consistency |
+| **Performance** | `tests/performance/` | 87 | Smoke, stress, spike, endurance, scalability, cache, query plans |
+| **Accounts** | `tests/accounts/` | 30 | User model, permissions, serializers, auth endpoints |
+| **Customers** | `tests/customers/` | 83 | Customer model, serializers, visit validation, visit↔payment link |
+| **Logic** | `tests/logic/` | 89 | Admin/employee permission boundary tests |
+| **Logs** | `tests/logs/` | 6 | AuditLog model & signal tests |
+| **Website** | `tests/website/` | 33 | Public catalog, contact intake, visitor journey |
+| **API** | `tests/api/` | 10 | API versioning tests |
 
-**Total: 1123 tests** (17 skipped — performance suite runs only when `SEFRO_PERF=1`)
+**Total: 1358 tests** (17 skipped — performance suite runs only when `SEFRO_PERF=1`)
 
 Coverage of the whole project: **91%** (`coverage report`; `customers` 92–97%,
 `finance/services/purchases.py` 100%).

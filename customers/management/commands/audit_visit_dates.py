@@ -8,14 +8,14 @@ Usage:
 Outputs: for each visit, customer, staff, services, status, created timestamp
 (from audit log), and the stored start_at/end_at. Does NOT modify data.
 """
+
 import json
-from datetime import datetime
 
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
 
 from customers.models import Visit
 from logs.models import AuditLog
+from Sefro_Clinic.fields import greg_to_shamsi_dt, shamsi_to_greg_dt
 
 
 class Command(BaseCommand):
@@ -31,7 +31,7 @@ class Command(BaseCommand):
         parser.add_argument(
             '--since',
             type=str,
-            help='ISO date (YYYY-MM-DD); inspect visits with start_at >= this date.',
+            help='Shamsi date (YYYY-MM-DD); inspect visits with start_at >= this date.',
         )
         parser.add_argument(
             '--output',
@@ -62,11 +62,9 @@ class Command(BaseCommand):
 
         if since_str:
             try:
-                since = datetime.fromisoformat(since_str)
-                if timezone.is_naive(since):
-                    since = timezone.make_aware(since)
+                since = shamsi_to_greg_dt(since_str + ' 00:00')
             except ValueError as e:
-                raise CommandError(f'--since must be ISO date (YYYY-MM-DD): {e}')
+                raise CommandError(f'--since must be Shamsi date (YYYY-MM-DD): {e}')
             qs = qs.filter(start_at__gte=since)
 
         visits = list(qs.order_by('id'))
@@ -98,11 +96,11 @@ class Command(BaseCommand):
                     'staff_name': str(v.staff) if v.staff else None,
                     'services': [s.name for s in v.services.all()],
                     'status': v.status,
-                    'start_at': v.start_at.isoformat() if v.start_at else None,
-                    'end_at': v.end_at.isoformat() if v.end_at else None,
+                    'start_at': greg_to_shamsi_dt(v.start_at) if v.start_at else None,
+                    'end_at': greg_to_shamsi_dt(v.end_at) if v.end_at else None,
                 },
                 'audit': {
-                    'created_at': created_at.isoformat() if created_at else None,
+                    'created_at': greg_to_shamsi_dt(created_at) if created_at else None,
                     'created_changes': created_changes,
                     'entry_count': len(audit_entries),
                 },

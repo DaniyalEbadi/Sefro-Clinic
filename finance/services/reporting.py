@@ -7,21 +7,27 @@ endpoints can never disagree about Gross or Net Profit.
 from datetime import datetime, time
 from decimal import Decimal
 
+import jdatetime
+from django.contrib.auth import get_user_model
 from django.db.models import Count, Sum
 from django.utils import timezone
 
+from Sefro_Clinic.periods import shamsi_months_of_year
+
 from ..models import (
     Expense,
+    MonthlyClose,
     OperatingExpense,
     PaymentComponent,
     ProductUsage,
     Sale,
+    StaffCompensationRule,
     StaffPayout,
     Wallet,
     WalletTransaction,
     WelcomePackUsage,
 )
-from . import financials
+from . import financials, staff_compensation
 from .exchange_rates import get_rate
 
 # Re-exported so existing imports keep working.
@@ -61,6 +67,30 @@ def financial_summary(start=None, end=None, *, service_id=None, package_id=None,
         service_id=service_id, package_id=package_id,
         product_id=product_id, personnel_id=personnel_id,
     )
+
+
+def _annotate_profit_basis(row):
+    """Name the several "profit" numbers a row carries so they cannot be confused.
+
+    ``profit_usd`` keeps its historical key but is *material profit*: revenue
+    minus product cost only. It excludes welcome-pack cost and the operator's
+    own pay, both of which the clinic actually spends. ``material_profit_usd``
+    is that same value under an honest name, ``after_welcome_pack_profit_usd``
+    also removes the pack, and ``clinic_share_usd`` is what is left for the
+    clinic once every cost on the row is paid.
+    """
+    row['profit_basis'] = 'revenue_minus_product_cost'
+    row['material_profit_usd'] = row['profit_usd']
+    row['after_welcome_pack_profit_usd'] = (
+        row['revenue_usd'] - row['product_cost_usd'] - row['welcome_pack_cost_usd']
+    ).quantize(Decimal('0.01'))
+    if row['revenue_usd']:
+        row['clinic_share_margin_percent'] = (
+            (row['clinic_share_usd'] / row['revenue_usd'] * 100).quantize(Decimal('0.01'))
+        )
+    else:
+        row['clinic_share_margin_percent'] = ZERO
+    return row
 
 
 def profit_by_service(start=None, end=None):
@@ -126,6 +156,7 @@ def profit_by_service(start=None, end=None):
             (row['profit_usd'] / row['revenue_usd'] * 100).quantize(Decimal('0.01'))
             if row['revenue_usd'] else ZERO
         )
+        _annotate_profit_basis(row)
         if row['revenue_basis'] == financials.REVENUE_BASIS_LIST_PRICE:
             row['revenue_basis'] = REVENUE_BASIS_LIST_PRICE
     if list_price_only and rows:
@@ -209,7 +240,434 @@ def profit_by_package(start=None, end=None):
             (row['profit_usd'] / row['revenue_usd'] * 100).quantize(Decimal('0.01'))
             if row['revenue_usd'] else ZERO
         )
+        _annotate_profit_basis(row)
     return sorted(rows.values(), key=lambda r: r['profit_usd'], reverse=True)
+
+
+def _empty_attribution():
+    """A zeroed production row, for filters that leave nothing attributed."""
+    zero = lambda: Decimal('0.00')  # noqa: E731 - one-line zero factory
+    return {
+        'revenue_usd': zero(), 'revenue_toman': zero(),
+        'product_cost_usd': zero(), 'product_cost_toman': zero(),
+        'material_profit_usd': zero(), 'material_profit_toman': zero(),
+    }
+
+
+def _coerce_staff_id(value):
+    """Query strings reach this layer as text; the keys they filter are ints."""
+    if value in (None, ''):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _empty_operator(staff_id):
+    money = lambda: Decimal('0')  # noqa: E731 - one-line zero factory
+    return {
+        'staff_id': staff_id,
+        'staff_name': '',
+        'roles': [],
+        'revenue_usd': money(), 'revenue_toman': money(),
+        'product_cost_usd': money(), 'product_cost_toman': money(),
+        'material_profit_usd': money(), 'material_profit_toman': money(),
+        'session_payout_usd': money(), 'session_payout_toman': money(),
+        'salary_payout_usd': money(), 'salary_payout_toman': money(),
+        'cash_payout_usd': money(), 'cash_payout_toman': money(),
+        'product_payout_usd': money(), 'product_payout_toman': money(),
+        'owed_usd': money(), 'owed_toman': money(),
+        'paid_usd': money(), 'paid_toman': money(),
+        'pending_usd': money(), 'pending_toman': money(),
+        'approved_usd': money(), 'approved_toman': money(),
+        'payout_count': 0,
+        'by_role': {},
+        'by_status': {},
+        'calculation': {},
+    }
+
+
+#: Per-role payout figures, carried identically in each operator's
+#: ``by_role`` bucket and in the month's ``role_totals``. One tuple so the two
+#: can never drift apart.
+ROLE_PAYOUT_FIELDS = (
+    'owed_usd', 'owed_toman',
+    'session_usd', 'session_toman',
+    'salary_usd', 'salary_toman',
+    'paid_usd', 'paid_toman',
+    'pending_usd', 'pending_toman',
+    'approved_usd', 'approved_toman',
+)
+
+
+def _merge_operators(attribution, payouts):
+    """One row per operator: what they produced + what they are owed.
+
+    Revenue comes from the sale/usage attribution, money owed from the payout
+    ledger. They are kept on separate rows joined by staff because a
+    ``monthly_salary`` payout carries no revenue at all (it is stored as zero),
+    so joining them inside the payout query would erase the laser tech's
+    production for the month.
+    """
+    rules = {
+        rule.role: {
+            'calculation_type': rule.calculation_type,
+            'percent_revenue': rule.percent_revenue,
+            'fixed_amount_usd': rule.fixed_amount_usd,
+            'fixed_amount_toman': rule.fixed_amount_toman,
+        }
+        for rule in StaffCompensationRule.objects.filter(is_active=True)
+    }
+
+    by_staff: dict = {}
+    for staff_id, attr in attribution.items():
+        if staff_id is None:
+            continue
+        entry = by_staff[staff_id] = _empty_operator(staff_id)
+        for field in (
+            'revenue_usd', 'revenue_toman', 'product_cost_usd', 'product_cost_toman',
+            'material_profit_usd', 'material_profit_toman',
+        ):
+            entry[field] = attr[field]
+
+    for row in payouts['rows']:
+        entry = by_staff.setdefault(row['staff_id'], _empty_operator(row['staff_id']))
+        entry['staff_name'] = entry['staff_name'] or row['staff_name']
+        if row['role'] not in entry['roles']:
+            entry['roles'].append(row['role'])
+            entry['calculation'][row['role']] = rules.get(row['role'], {})
+
+        entry['session_payout_usd'] += row['session_usd']
+        entry['session_payout_toman'] += row['session_toman']
+        entry['salary_payout_usd'] += row['salary_usd']
+        entry['salary_payout_toman'] += row['salary_toman']
+        entry['cash_payout_usd'] += row['cash_usd']
+        entry['cash_payout_toman'] += row['cash_toman']
+        entry['product_payout_usd'] += row['product_usd']
+        entry['product_payout_toman'] += row['product_toman']
+        entry['owed_usd'] += row['owed_usd']
+        entry['owed_toman'] += row['owed_toman']
+        entry['payout_count'] += row['payout_count']
+
+        role_bucket = entry['by_role'].setdefault(row['role'], {
+            'role': row['role'], 'count': 0,
+            **{field: Decimal('0') for field in ROLE_PAYOUT_FIELDS},
+        })
+        for field in ROLE_PAYOUT_FIELDS:
+            role_bucket[field] += row[field]
+        role_bucket['count'] += row['payout_count']
+
+        for status_key, bucket in row['by_status'].items():
+            entry['by_status'].setdefault(
+                status_key, {'usd': Decimal('0'), 'toman': Decimal('0'), 'count': 0},
+            )
+            status_entry = entry['by_status'][status_key]
+            status_entry['usd'] += bucket['usd']
+            status_entry['toman'] += bucket['toman']
+            status_entry['count'] += bucket['count']
+
+        entry['paid_usd'] += row['paid_usd']
+        entry['paid_toman'] += row['paid_toman']
+        entry['pending_usd'] += row['pending_usd']
+        entry['pending_toman'] += row['pending_toman']
+        entry['approved_usd'] += row['approved_usd']
+        entry['approved_toman'] += row['approved_toman']
+
+    # Operators who produced revenue but were owed nothing this month still
+    # belong on the report, under their own name.
+    missing = [sid for sid, entry in by_staff.items() if not entry['staff_name']]
+    if missing:
+        user_model = get_user_model()
+        for user in user_model.objects.filter(id__in=missing).only(
+            'id', 'username', 'first_name', 'last_name',
+        ):
+            full = ' '.join(p for p in (user.first_name, user.last_name) if p)
+            by_staff[user.id]['staff_name'] = full or user.username
+
+    for entry in by_staff.values():
+        for bucket in entry['by_status'].values():
+            bucket['usd'] = bucket['usd'].quantize(Decimal('0.01'))
+            bucket['toman'] = bucket['toman'].quantize(Decimal('0.01'))
+            bucket['count'] = int(bucket['count'])
+        for bucket in entry['by_role'].values():
+            for field in ROLE_PAYOUT_FIELDS:
+                bucket[field] = bucket[field].quantize(Decimal('0.01'))
+            bucket['count'] = int(bucket['count'])
+        for field in (
+            'revenue_usd', 'revenue_toman', 'product_cost_usd', 'product_cost_toman',
+            'material_profit_usd', 'material_profit_toman',
+            'session_payout_usd', 'session_payout_toman',
+            'salary_payout_usd', 'salary_payout_toman',
+            'cash_payout_usd', 'cash_payout_toman',
+            'product_payout_usd', 'product_payout_toman',
+            'owed_usd', 'owed_toman', 'paid_usd', 'paid_toman',
+            'pending_usd', 'pending_toman', 'approved_usd', 'approved_toman',
+        ):
+            entry[field] = entry[field].quantize(Decimal('0.01'))
+
+    rows = sorted(by_staff.values(), key=lambda r: (r['roles'], r['staff_name'], r['staff_id']))
+
+    role_totals: dict = {}
+    for entry in rows:
+        for bucket in entry['by_role'].values():
+            totals = role_totals.setdefault(bucket['role'], {
+                'role': bucket['role'], 'operator_count': 0, 'payout_count': 0,
+                **{field: Decimal('0') for field in ROLE_PAYOUT_FIELDS},
+            })
+            for field in ROLE_PAYOUT_FIELDS:
+                totals[field] += bucket[field]
+            totals['payout_count'] += bucket['count']
+            totals['operator_count'] += 1
+
+    for totals in role_totals.values():
+        for field in ROLE_PAYOUT_FIELDS:
+            totals[field] = totals[field].quantize(Decimal('0.01'))
+
+    return rows, sorted(role_totals.values(), key=lambda r: r['role'])
+
+
+def _sum_months(months, fields):
+    total = {}
+    for field in fields:
+        # Frozen months carry stringified Decimals (JSON snapshot); live ones
+        # carry Decimals. Coerce both so the year total never mixes types.
+        usd = sum((Decimal(str(m[field]['usd'])) for m in months), Decimal('0'))
+        toman = sum((Decimal(str(m[field]['toman'])) for m in months), Decimal('0'))
+        total[field] = {
+            'usd': usd.quantize(Decimal('0.01')),
+            'toman': toman.quantize(Decimal('0.01')),
+        }
+    return total
+
+
+#: P&L keys summed into the year total.
+MONTHLY_SUM_KEYS = (
+    'revenue', 'product_cost', 'welcome_pack_cost', 'gross_profit',
+    'clinic_share', 'staff_compensation_total', 'operating_expenses',
+    'staff_expense_claims', 'below_the_line_total', 'net_profit',
+    'purchases', 'net_profit_after_purchases',
+)
+
+
+def _render_month(bounds, *, status=None, staff_id=None, role=None):
+    """One month's full report row, computed live from the ledgers.
+
+    The single renderer shared by the GET report (open months) and
+    ``closing.close_month`` (the snapshot it stores), so what a user sees on
+    screen is byte-for-byte what closing freezes.
+    """
+    year = bounds['year']
+    start, end = bounds['start'], bounds['end']
+    report = financials.build_report(start, end)
+    attribution = financials.operator_attribution(start, end, totals=report)
+    narrowed = staff_id is not None or role not in (None, '')
+    if staff_id is not None:
+        # ?staff= narrows the operator *rows*, not just their pay: without
+        # this the other staff's production would still be listed.
+        attribution = {
+            sid: row for sid, row in attribution.items() if sid == staff_id
+        }
+    payouts = staff_compensation.operator_month_payouts(
+        start, end, status=status, staff_id=staff_id, role=role,
+    )
+    operators, role_totals = _merge_operators(attribution, payouts)
+    if role:
+        # Production is attributed to people, not to roles, so the only
+        # rows that can honestly claim a role are the ones that carry one.
+        operators = [row for row in operators if role in row['by_role']]
+
+    # The residual explains the whole month's revenue; once a filter has
+    # deliberately dropped part of it, there is nothing left to explain.
+    unattributed = attribution.get(None) if not narrowed else None
+    unattributed = unattributed or _empty_attribution()
+    return {
+        'key': bounds['key'],
+        'year': year,
+        'month': bounds['month'],
+        'month_name': bounds['month_name'],
+        'shamsi_start': jdatetime.date.fromgregorian(date=start.date()).strftime('%Y-%m-%d'),
+        'shamsi_end': jdatetime.date.fromgregorian(date=end.date()).strftime('%Y-%m-%d'),
+        # Kept for existing consumers; new code should read shamsi_start/end.
+        'gregorian_start': start.date().isoformat(),
+        'gregorian_end': end.date().isoformat(),
+        'period': {'start': start, 'end': end},
+        'is_current': start <= timezone.now() <= end,
+        'is_closed': False,
+        'closed_at': None,
+        'closed_by': None,
+        'closed_by_name': '',
+        'close_note': '',
+        'was_reopened': False,
+        'reopened_at': None,
+        'reopen_reason': '',
+        'revenue': report['revenue'],
+        'product_cost': report['product_cost'],
+        'welcome_pack_cost': report['welcome_pack_cost'],
+        'gross_profit': report['gross_profit'],
+        'clinic_share': report['clinic_share'],
+        'staff_compensation': report['staff_compensation'],
+        'staff_compensation_total': report['staff_compensation']['total'],
+        'operating_expenses': report['operating_expenses'],
+        'staff_expense_claims': report['staff_expense_claims'],
+        'below_the_line_total': report['below_the_line_total'],
+        'net_profit': report['net_profit'],
+        'purchases': report['purchases'],
+        'net_profit_after_purchases': report['net_profit_after_purchases'],
+        'payment_methods': report['payment_methods'],
+        'counts': report['counts'],
+        'cost_coverage': report['cost_coverage'],
+        'operators': operators,
+        'role_totals': role_totals,
+        'unattributed': unattributed,
+        'payout_total': {
+            'usd': payouts['total_usd'],
+            'toman': payouts['total_toman'],
+            'payout_count': payouts['payout_count'],
+        },
+    }
+
+
+def _frozen_month(row, bounds):
+    """A closed month's row: the stored snapshot, verbatim, plus its history.
+
+    The payload was JSON-encoded at close time, so its money values are
+    strings -- exactly the shape the API already returns -- and its period
+    timestamps are ISO strings. Nothing is recomputed: that is the point of a
+    closed book. Only the closure metadata and the live ``is_current`` flag
+    (always false for a past month) are added here.
+    """
+    month_row = dict(row.payload)
+    month_row.update({
+        'key': bounds['key'],
+        'year': row.shamsi_year,
+        'month': row.shamsi_month,
+        'month_name': bounds['month_name'],
+        'is_current': bounds['start'] <= timezone.now() <= bounds['end'],
+        'is_closed': True,
+        'closed_at': _shamsi_dt(row.closed_at),
+        'closed_by': row.closed_by_id,
+        'closed_by_name': (
+            row.closed_by.get_username() if row.closed_by_id and row.closed_by else ''
+        ),
+        'close_note': row.close_note or '',
+        # The reopen history belongs to the ROW, not the snapshot: after a
+        # reopen followed by a re-close, the frozen month must not pretend it
+        # was never opened again.
+        'was_reopened': row.reopened_at is not None,
+        'reopened_at': _shamsi_dt(row.reopened_at),
+        'reopen_reason': row.reopen_reason or '',
+    })
+    return month_row
+
+
+def _shamsi_dt(value):
+    """An aware datetime as a Shamsi 'YYYY-MM-DD HH:MM' string (Tehran local)."""
+    if not value:
+        return None
+    return jdatetime.datetime.fromgregorian(
+        datetime=value.astimezone(timezone.get_current_timezone()),
+    ).strftime('%Y-%m-%d %H:%M')
+
+
+def _reopened_month(bounds, row):
+    """A reopened month: live numbers again, but its closing history stays visible."""
+    month_row = _render_month(bounds)
+    month_row.update({
+        'is_closed': False,
+        'was_reopened': True,
+        'reopened_at': _shamsi_dt(row.reopened_at),
+        'reopen_reason': row.reopen_reason or '',
+        'closed_at': _shamsi_dt(row.closed_at),
+        'closed_by': row.closed_by_id,
+        'closed_by_name': (
+            row.closed_by.get_username() if row.closed_by_id and row.closed_by else ''
+        ),
+        'close_note': row.close_note or '',
+    })
+    return month_row
+
+
+def monthly_close(year=None, month=None, *, status=None, staff_id=None, role=None):
+    """A Shamsi year of monthly P&L rows, each with its operators' pay.
+
+    This is the "close one month, move to the next" report: every month of the
+    requested Shamsi year carries revenue, cost, gross profit, net profit,
+    purchases, net profit after purchases, and a per-operator breakdown of
+    what was produced and what is owed/paid.
+
+    Every number inside a month comes from ``financials.build_report`` for that
+    month's range, so a month here can never disagree with
+    ``/reports/financial-summary/`` for the same dates. Payout rows use
+    ``StaffPayout.created_at``, the anchor that report uses too.
+
+    A CLOSED month is served from its frozen ``MonthlyClose`` snapshot instead
+    of the ledgers -- closing freezes the numbers; a reopened month is live
+    again and carries its closing history.
+
+    Args:
+        year: Shamsi year. Defaults to the current Shamsi year.
+        month: 1-12 or a ``'1405-05'`` key. Omit for the whole year.
+        status: payout status filter (defaults to still-owed; ``'all'`` to
+            include cancelled rows).
+        staff_id: narrow the operator rows to one staff member.
+        role: narrow the operator rows to one role (doctor | facial | laser).
+    """
+    shamsi_now = jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now()))
+    try:
+        year = int(year) if year not in (None, '') else shamsi_now.year
+    except (TypeError, ValueError):
+        year = shamsi_now.year
+
+    wanted_month = None
+    if month not in (None, ''):
+        try:
+            parsed = int(str(month).split('-')[-1])
+            wanted_month = parsed if 1 <= parsed <= 12 else None
+        except (TypeError, ValueError):
+            wanted_month = None
+
+    staff_id = _coerce_staff_id(staff_id)
+    closes = {
+        row.shamsi_month: row
+        for row in MonthlyClose.objects.filter(shamsi_year=year).select_related('closed_by')
+    }
+
+    months_payload = []
+    for bounds in shamsi_months_of_year(year):
+        if wanted_month and bounds['month'] != wanted_month:
+            continue
+
+        row = closes.get(bounds['month'])
+        if row is not None and row.status == MonthlyClose.Status.CLOSED:
+            month_row = _frozen_month(row, bounds)
+        elif row is not None:
+            month_row = _reopened_month(bounds, row)
+        else:
+            month_row = _render_month(
+                bounds, status=status, staff_id=staff_id, role=role,
+            )
+        months_payload.append(month_row)
+
+    year_total = _sum_months(months_payload, MONTHLY_SUM_KEYS)
+    year_total['payout_total_usd'] = sum(
+        (Decimal(str(m['payout_total']['usd'])) for m in months_payload), Decimal('0')
+    ).quantize(Decimal('0.01'))
+    year_total['payout_total_toman'] = sum(
+        (Decimal(str(m['payout_total']['toman'])) for m in months_payload), Decimal('0')
+    ).quantize(Decimal('0.01'))
+    year_total['payout_count'] = sum(m['payout_total']['payout_count'] for m in months_payload)
+
+    return {
+        'calendar': 'shamsi',
+        'year': year,
+        'month': wanted_month,
+        'status_filter': status or 'owed',
+        'payout_anchor': 'StaffPayout.created_at',
+        'months': months_payload,
+        'year_total': year_total,
+        'closed_month_count': sum(1 for m in months_payload if m.get('is_closed')),
+    }
 
 
 def wallet_summary():
@@ -298,6 +756,7 @@ __all__ = [
     'REVENUE_BASIS_LIST_PRICE', 'REVENUE_BASIS_LEDGER',
     'WELCOME_PACK_COST_BASIS_ALLOCATED', 'WELCOME_PACK_COST_BASIS_EXCLUDED',
     'payment_method_breakdown', 'financial_summary', 'profit_by_service',
-    'profit_by_package', 'wallet_summary', 'operating_expense_summary', 'welcome_pack_report',
+    'profit_by_package', 'monthly_close', 'wallet_summary',
+    'operating_expense_summary', 'welcome_pack_report',
     'Expense', 'PaymentComponent', 'get_rate',
 ]

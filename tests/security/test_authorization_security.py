@@ -1,5 +1,7 @@
+from datetime import date
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase
 
 from accounts.models import ClinicUser
@@ -7,6 +9,11 @@ from customers.models import Customer, Service
 from finance.models import OperatingExpenseCategory
 from finance.services.exchange_rates import set_rate
 from tests.helpers import admin_client, employee_client, make_admin
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 
 class EmployeeWriteRestrictionTests(TestCase):
@@ -161,7 +168,7 @@ class OperatingExpenseSecurityTests(TestCase):
         # Create
         create = self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Coffee', 'amount_usd': '25.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
         }, format='json')
         self.assertEqual(create.status_code, 201, create.data)
         opex_id = create.data['id']
@@ -196,7 +203,7 @@ class OperatingExpenseSecurityTests(TestCase):
         admin_user = make_admin()
         create = self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Spoof', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01', 'created_by': admin_user.id,
+            'expense_date': _shamsi(date(2025, 6, 1)), 'created_by': admin_user.id,
         }, format='json')
         self.assertEqual(create.status_code, 201, create.data)
         from finance.models import OperatingExpense
@@ -206,7 +213,7 @@ class OperatingExpenseSecurityTests(TestCase):
     def test_server_owned_fields_ignored(self):
         create = self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Server fields', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01', 'exchange_rate': '1', 'amount_toman': '1',
+            'expense_date': _shamsi(date(2025, 6, 1)), 'exchange_rate': '1', 'amount_toman': '1',
         }, format='json')
         self.assertEqual(create.status_code, 201, create.data)
         from finance.models import OperatingExpense
@@ -218,28 +225,28 @@ class OperatingExpenseSecurityTests(TestCase):
         inactive = OperatingExpenseCategory.objects.create(name='Inactive', slug='inactive', is_active=False)
         resp = self.emp.post('/api/finance/operating-expenses/', {
             'category': inactive.id, 'title': 'Test', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
         }, format='json')
         self.assertEqual(resp.status_code, 400)
 
     def test_negative_amount_rejected(self):
         resp = self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Negative', 'amount_usd': '-5.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
         }, format='json')
         self.assertEqual(resp.status_code, 400)
 
     def test_invalid_payment_method_rejected(self):
         resp = self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Invalid', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01', 'payment_method': 'wallet',
+            'expense_date': _shamsi(date(2025, 6, 1)), 'payment_method': 'wallet',
         }, format='json')
         self.assertEqual(resp.status_code, 400)
 
     def test_sql_injection_in_search_safe(self):
         self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Test', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
         }, format='json')
         resp = self.emp.get("/api/finance/operating-expenses/?search=' OR 1=1--")
         self.assertEqual(resp.status_code, 200)
@@ -248,7 +255,7 @@ class OperatingExpenseSecurityTests(TestCase):
     def test_category_delete_blocked_when_used(self):
         self.emp.post('/api/finance/operating-expenses/', {
             'category': self.category.id, 'title': 'Test', 'amount_usd': '10.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
         }, format='json')
         resp = self.emp.delete(f'/api/finance/operating-expense-categories/{self.category.id}/')
         self.assertEqual(resp.status_code, 400)

@@ -1,10 +1,13 @@
 import sys
+from datetime import date, datetime
 
 from django.contrib.auth import get_user_model
 from django.db import OperationalError, ProgrammingError, transaction
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
+from Sefro_Clinic.fields import greg_to_shamsi_date, greg_to_shamsi_dt
 
 from .middleware import get_current_user
 from .models import AuditLog
@@ -44,6 +47,11 @@ def _current_user():
 
 
 def _collect_fields(instance):
+    """Field snapshot for the audit trail.
+
+    Dates render as Shamsi strings — the same calendar the API uses — so an
+    auditor reading ``changes`` never has to translate Gregorian columns.
+    """
     changes = {}
     for f in instance._meta.concrete_fields:
         if f.column == instance._meta.pk.column:
@@ -51,7 +59,13 @@ def _collect_fields(instance):
         if f.column in SKIP_COLUMNS:
             continue
         val = f.value_from_object(instance)
-        if val is not None:
+        if val is None:
+            continue
+        if isinstance(val, datetime):
+            changes[f.column] = greg_to_shamsi_dt(val)
+        elif isinstance(val, date):
+            changes[f.column] = greg_to_shamsi_date(val)
+        else:
             changes[f.column] = str(val)
     return changes
 

@@ -1,10 +1,16 @@
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from customers.models import Service
 from tests.helpers import admin_client, make_admin
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 SQLI_PAYLOADS = [
     "' OR 1=1 --",
@@ -240,7 +246,7 @@ class OperatingExpenseInputValidationTests(TestCase):
             'category': self.category.id,
             'title': 'Test',
             'amount_usd': '25.00',
-            'expense_date': date.today().isoformat(),
+            'expense_date': _shamsi(date.today()),
         }
         base.update(overrides)
         return base

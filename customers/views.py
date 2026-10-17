@@ -26,6 +26,15 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminOrEmployee, IsAdminOrReadOnly
 from Sefro_Clinic.fields import SHAMSI_DATE_FORMAT, shamsi_to_greg_date
+from Sefro_Clinic.periods import (
+    shamsi_month_bounds,
+)
+from Sefro_Clinic.periods import (
+    shamsi_period_key as _period_key,
+)
+from Sefro_Clinic.periods import (
+    shamsi_period_range as _period_range,
+)
 
 from .models import Customer, Payment, Service, ServiceCategory, Visit
 from .serializers import (
@@ -38,31 +47,16 @@ from .serializers import (
 
 
 def _shamsi_today_range():
-    """Return (start, end) datetime range for today in Shamsi calendar."""
-    now = timezone.localtime(timezone.now())
-    shamsi_date = jdatetime.datetime.fromgregorian(datetime=now).date()
-    greg_date = shamsi_date.togregorian()
-    day_start = timezone.make_aware(datetime.combine(greg_date, time.min))
-    day_end = day_start + timedelta(days=1)
-    return day_start, day_end
+    """Return (start, end) datetime range for today in Shamsi calendar.
+
+    Half-open: ``end`` is tomorrow 00:00, for ``__lt`` filters.
+    """
+    return _period_range('daily')
 
 
 def _shamsi_period_key(shamsi_date, period):
-    if period == 'daily':
-        return shamsi_date.strftime('%Y-%m-%d')
-    elif period == 'weekly':
-        year_start = shamsi_date.replace(day=1, month=1)
-        doy = (shamsi_date - year_start).days + 1
-        wn = (doy - 1) // 7 + 1
-        return f"{shamsi_date.year}-W{wn:02d}"
-    elif period == 'monthly':
-        return shamsi_date.strftime('%Y-%m')
-    elif period == 'quarterly':
-        q = (shamsi_date.month - 1) // 3 + 1
-        return f"{shamsi_date.year}-Q{q}"
-    elif period == 'yearly':
-        return str(shamsi_date.year)
-    return ''
+    """Bucket a Shamsi date into its period key. See Sefro_Clinic.periods."""
+    return _period_key(shamsi_date, period)
 
 
 class DashboardAPIView(APIView):
@@ -82,7 +76,8 @@ class DashboardAPIView(APIView):
         ),
     )
     def get(self, request):
-        today = timezone.now().date()
+        # One Shamsi day for every KPI in this payload: sales, visits and
+        # new customers all bucket on the same Jalali calendar day.
         shamsi_start, shamsi_end = _shamsi_today_range()
         data = {
             'customer_count': Customer.objects.count(),
@@ -90,7 +85,7 @@ class DashboardAPIView(APIView):
                 vc=Count('visits'),
             ).filter(vc__gte=5).count(),
             'today_sales': Payment.objects.filter(
-                paid_at__date=today,
+                paid_at__gte=shamsi_start, paid_at__lt=shamsi_end,
             ).aggregate(total=Sum('amount'))['total'] or 0,
             'today_visits': Visit.objects.filter(
                 start_at__gte=shamsi_start, start_at__lt=shamsi_end,
@@ -128,45 +123,16 @@ def _build_sales_chart(sales_qs, periods):
 
 
 def _shamsi_period_range(period):
-    """Return (greg_start, greg_end) for current Shamsi period."""
-    now = timezone.localtime(timezone.now())
-    shamsi_now = jdatetime.datetime.fromgregorian(datetime=now)
-    syear, smonth, sday = shamsi_now.year, shamsi_now.month, shamsi_now.day
+    """Return (greg_start, greg_end) for current Shamsi period.
 
-    if period == 'daily':
-        start = jdatetime.date(syear, smonth, sday)
-        end = start + timedelta(days=1)
-    elif period == 'weekly':
-        # Find start of current Shamsi week (Saturday = 1 in Shamsi)
-        weekday = shamsi_now.date().isoweekday()  # 1=Mon...7=Sun
-        days_since_saturday = (weekday + 1) % 7  # Saturday=0
-        start = shamsi_now.date() - timedelta(days=days_since_saturday)
-        end = start + timedelta(days=7)
-    elif period == 'monthly':
-        start = jdatetime.date(syear, smonth, 1)
-        if smonth == 12:
-            end = jdatetime.date(syear + 1, 1, 1)
-        else:
-            end = jdatetime.date(syear, smonth + 1, 1)
-    elif period == 'quarterly':
-        sq = (smonth - 1) // 3
-        start = jdatetime.date(syear, sq * 3 + 1, 1)
-        if sq == 3:
-            end = jdatetime.date(syear + 1, 1, 1)
-        else:
-            end = jdatetime.date(syear, (sq + 1) * 3 + 1, 1)
-    elif period == 'yearly':
-        start = jdatetime.date(syear, 1, 1)
-        end = jdatetime.date(syear + 1, 1, 1)
-    else:
-        return None, None
-
-    gs = timezone.make_aware(datetime.combine(start.togregorian(), time.min))
-    ge = timezone.make_aware(datetime.combine(end.togregorian(), time.min))
-    return gs, ge
+    Half-open: ``end`` is the first instant of the next period, for ``__lt``
+    filters. Delegates to Sefro_Clinic.periods so finance reports bucket the
+    same days identically.
+    """
+    return _period_range(period)
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class ReportsAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -224,7 +190,7 @@ class ReportsAPIView(APIView):
         return Response(result)
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class DailyReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -240,7 +206,7 @@ class DailyReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class WeeklyReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -256,7 +222,7 @@ class WeeklyReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class MonthlyReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -272,7 +238,7 @@ class MonthlyReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class QuarterlyReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -288,23 +254,33 @@ class QuarterlyReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'], deprecated=True)
 class YearlyReportView(APIView):
+    """Deprecated: a yearly *activity* total is not financial reporting.
+
+    Use ``/api/finance/reports/monthly-close/?year=<shamsi_year>`` for the
+    complete yearly picture — 12 frozen-month P&Ls, purchases, operators,
+    payouts, and a year total. This endpoint now answers **410 Gone**.
+    """
+
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        gs, ge = _shamsi_period_range('yearly')
-        qs = _filtered_sales(None, None).filter(created_at__gte=gs, created_at__lt=ge)
-        chart = _build_sales_chart(qs, ['monthly'])
-        return Response({
-            'period': str(jdatetime.datetime.fromgregorian(datetime=timezone.localtime(timezone.now())).year),
-            'months': chart.get('monthly', []),
-            'total': qs.aggregate(total=Sum('amount_toman'))['total'] or 0,
-            'visits': Visit.objects.filter(start_at__gte=gs, start_at__lt=ge).count(),
-        })
+        return Response(
+            {
+                'error': 'This endpoint is deprecated.',
+                'use': '/api/finance/reports/monthly-close/?year=<shamsi_year>',
+                'detail': (
+                    'The monthly-close report is the complete yearly financial '
+                    'view: per-month P&L, purchases, operators, payouts, and a '
+                    'year total, all bucketed on the Shamsi calendar.'
+                ),
+            },
+            status=410,
+        )
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class AllReportsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -335,7 +311,7 @@ class AllReportsView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class VisitReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -379,7 +355,7 @@ class VisitReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class CustomerReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -397,7 +373,7 @@ class CustomerReportView(APIView):
         })
 
 
-@extend_schema(tags=['Reports'])
+@extend_schema(tags=['Reports (Activity)'])
 class ReferralReportView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -613,18 +589,11 @@ class VisitViewSet(viewsets.ModelViewSet):
         month = self.request.query_params.get('month')
         if year and month:
             try:
-                sdate = jdatetime.date(int(year), int(month), 1)
-                gstart = sdate.togregorian()
-                if month == '12':
-                    smonth_end = jdatetime.date(int(year) + 1, 1, 1)
-                else:
-                    smonth_end = jdatetime.date(int(year), int(month) + 1, 1)
-                gend = smonth_end.togregorian()
-                day_start = timezone.make_aware(datetime.combine(gstart, time.min))
-                day_end = timezone.make_aware(datetime.combine(gend, time.min))
-                qs = qs.filter(start_at__gte=day_start, start_at__lt=day_end)
+                day_start, day_end = shamsi_month_bounds(int(year), int(month))
             except ValueError:
                 pass
+            else:
+                qs = qs.filter(start_at__gte=day_start, start_at__lte=day_end)
 
         date_from = self.request.query_params.get('date_from')
         if date_from:

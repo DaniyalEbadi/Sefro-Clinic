@@ -312,6 +312,8 @@ class CustomerSerializer(serializers.ModelSerializer):
         return greg_to_shamsi_date(dt)
 
     def get_last_payment(self, obj):
+        from Sefro_Clinic.fields import greg_to_shamsi_dt
+
         if hasattr(obj, 'last_payment_id'):
             if obj.last_payment_id is None:
                 return None
@@ -321,7 +323,7 @@ class CustomerSerializer(serializers.ModelSerializer):
                 'amount': str(obj.last_payment_amount),
                 'amount_usd': str(amount_usd) if amount_usd is not None else None,
                 'payment_method': obj.last_payment_method,
-                'paid_at': str(obj.last_payment_paid_at),
+                'paid_at': greg_to_shamsi_dt(obj.last_payment_paid_at),
             }
         payment = obj.last_payment
         if not payment:
@@ -331,5 +333,5 @@ class CustomerSerializer(serializers.ModelSerializer):
             'amount': str(payment.amount),
             'amount_usd': str(payment.amount_usd) if payment.amount_usd is not None else None,
             'payment_method': payment.payment_method,
-            'paid_at': str(payment.paid_at),
+            'paid_at': greg_to_shamsi_dt(payment.paid_at),
         }

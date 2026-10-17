@@ -1,12 +1,13 @@
 from datetime import datetime, time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from django.db import transaction
 from django.utils import timezone
 
 from ..models import ProductCostHistory, ProductPurchase, ProductUsage
-from .exchange_rates import get_rate
+from .exchange_rates import convert_usd_to_toman, get_rate
+from .periods_guard import ensure_open
 
 
 class InventoryError(ValueError):
@@ -43,6 +44,38 @@ def current_cost(product, at: Optional[object] = None) -> Decimal:
 def models_Q_effective_to(when):
     from django.db.models import Q
     return Q(effective_to__isnull=True) | Q(effective_to__gte=when)
+
+
+def _toman_snapshot(amount_usd: Decimal, rate) -> Decimal:
+    """Freeze ``amount_usd`` into Toman using the rate in effect at consumption.
+
+    The rate is a point-in-time fact stored alongside the USD cost, so a
+    missing or unusable rate degrades to 0 instead of raising: a stock
+    draw-down must never fail because of a currency problem.
+    """
+    if rate is None:
+        return Decimal('0')
+    try:
+        return convert_usd_to_toman(amount_usd, rate)
+    except (ValueError, TypeError, InvalidOperation):
+        return Decimal('0')
+
+
+def _resolve_customer(*, customer=None, visit=None, package_sale=None, welcome_pack_usage=None):
+    """Denormalise the consuming customer onto the usage row.
+
+    Every source of a consumption already knows who it belongs to; copying it
+    here keeps consumption reportable per customer without a three-way join
+    and without losing the link if the source row is later detached.
+    """
+    if customer is not None:
+        return customer
+    for source in (visit, package_sale, welcome_pack_usage):
+        if source is not None:
+            linked = getattr(source, 'customer', None)
+            if linked is not None:
+                return linked
+    return None
 
 
 @transaction.atomic
@@ -84,7 +117,6 @@ def apply_purchase_receipt(*, product, quantity: Decimal, unit_cost_usd: Decimal
     return product
 
 
-@transaction.atomic
 def record_product_purchase(
     *,
     product,
@@ -96,6 +128,28 @@ def record_product_purchase(
     created_by=None,
 ):
     purchase_date = purchase_date or timezone.now().date()
+    # A backdated buy would add purchases (and stock cost history) to a month
+    # that may already be closed. Guard outside the atomic body below so the
+    # refusal's audit row survives its rollback.
+    ensure_open(purchase_date, action='record a product purchase in that month',
+                object_repr=str(product))
+    return _record_product_purchase(
+        product=product, quantity=quantity, unit_cost_usd=unit_cost_usd,
+        supplier=supplier, purchase_date=purchase_date, rate=rate, created_by=created_by,
+    )
+
+
+@transaction.atomic
+def _record_product_purchase(
+    *,
+    product,
+    quantity: Decimal,
+    unit_cost_usd: Decimal,
+    supplier: str = '',
+    purchase_date=None,
+    rate: Optional[Decimal] = None,
+    created_by=None,
+):
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
     unit_cost_usd = Decimal(unit_cost_usd).quantize(Decimal('0.01'))
     quantity = _valid_quantity(quantity)
@@ -129,13 +183,24 @@ def record_product_usage(
     service=None,
     package_sale=None,
     welcome_pack_usage=None,
+    customer=None,
     at: Optional[object] = None,
     rate: Optional[Decimal] = None,
     is_commission: bool = False,
     decrement_stock: bool = False,
 ):
+    """Consume stock and freeze the price of that consumption.
+
+    Whatever draws the stock down (recipe materials, invoice extras, welcome
+    packs, commission products) lands here, so every row carries the same
+    point-in-time facts: unit/total cost in USD, the exchange rate seen at
+    that moment, the same cost restated in Toman, and the customer the
+    product was given to.
+    """
     at = at or timezone.now()
-    rate = rate if rate is not None else get_rate('USD', 'TOMAN')
+    # The rate is looked up for the moment of consumption, not "now", so a
+    # backdated usage carries the exchange rate that was actually in effect.
+    rate = rate if rate is not None else get_rate('USD', 'TOMAN', at=at)
     quantity = _valid_quantity(quantity)
     if decrement_stock or is_commission:
         product = product.__class__.objects.select_for_update().get(pk=product.pk)
@@ -148,6 +213,8 @@ def record_product_usage(
         product.save(update_fields=['count'])
     unit_cost = current_cost(product, at=at)
     total_cost = (unit_cost * quantity).quantize(Decimal('0.01'))
+    unit_cost_toman = _toman_snapshot(unit_cost, rate)
+    total_cost_toman = _toman_snapshot(total_cost, rate)
 
     usage = ProductUsage.objects.create(
         product=product,
@@ -155,14 +222,21 @@ def record_product_usage(
         service=service,
         package_sale=package_sale,
         welcome_pack_usage=welcome_pack_usage,
+        customer=_resolve_customer(
+            customer=customer,
+            visit=visit,
+            package_sale=package_sale,
+            welcome_pack_usage=welcome_pack_usage,
+        ),
         quantity=quantity,
         unit_cost_usd_snapshot=unit_cost,
         total_cost_usd_snapshot=total_cost,
+        unit_cost_toman_snapshot=unit_cost_toman,
+        total_cost_toman_snapshot=total_cost_toman,
         exchange_rate_snapshot=rate,
         is_commission=is_commission,
     )
     return usage
-
 
 
 def total_product_cost_usd(usages) -> Decimal:

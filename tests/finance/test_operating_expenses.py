@@ -6,6 +6,7 @@ the existing Expense/Wallet/Sale domains are untouched.
 """
 from decimal import Decimal
 
+import jdatetime
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
@@ -27,6 +28,11 @@ from finance.services import operating_expenses as opex_svc
 from finance.services.exchange_rates import set_rate
 from logs.models import AuditLog
 from tests.helpers import admin_client, employee_client, make_admin, make_employee
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 DEFAULT_RATE = Decimal('100000')
 
@@ -215,7 +221,7 @@ class OperatingExpenseApiTests(OpexBase):
             'category': self.category.id,
             'title': 'Coffee and tea',
             'amount_usd': '25.00',
-            'expense_date': timezone.localdate().isoformat(),
+            'expense_date': _shamsi(timezone.localdate()),
             'payment_method': OperatingExpense.PaymentMethod.CASH,
         }
         payload.update(overrides)
@@ -370,11 +376,13 @@ class OperatingExpenseApiTests(OpexBase):
         by_vendor = client.get('/api/finance/operating-expenses/?search=Power')
         self.assertEqual(by_vendor.data['count'], 1)
 
-        today = timezone.localdate().isoformat()
+        import jdatetime
+
+        today = jdatetime.date.fromgregorian(date=timezone.localdate()).strftime('%Y-%m-%d')
         in_range = client.get(f'/api/finance/operating-expenses/?date_from={today}&date_to={today}')
         self.assertEqual(in_range.data['count'], 2)
 
-        out_of_range = client.get('/api/finance/operating-expenses/?date_from=2000-01-01&date_to=2000-01-02')
+        out_of_range = client.get('/api/finance/operating-expenses/?date_from=1300-01-01&date_to=1300-01-02')
         self.assertEqual(out_of_range.data['count'], 0)
 
     def test_ordering(self):
@@ -414,7 +422,7 @@ class OperatingExpenseAuditAndIsolationTests(OpexBase):
             'category': self.category.id,
             'title': 'Printer toner',
             'amount_usd': '40.00',
-            'expense_date': timezone.localdate().isoformat(),
+            'expense_date': _shamsi(timezone.localdate()),
         }
         payload.update(overrides)
         return payload
@@ -462,7 +470,7 @@ class OperatingExpenseAuditAndIsolationTests(OpexBase):
         created = client.post('/api/finance/expenses/', {
             'category': category.id,
             'amount_usd': '15.00',
-            'expense_date': timezone.localdate().isoformat(),
+            'expense_date': _shamsi(timezone.localdate()),
             'vendor': 'Stationery Shop',
         }, format='json')
         self.assertEqual(created.status_code, 201, created.data)
@@ -492,7 +500,7 @@ class OperatingExpenseReceiptTests(OpexBase):
                     'category': self.category.id,
                     'title': 'Paper towels',
                     'amount_usd': '12.50',
-                    'expense_date': timezone.localdate().isoformat(),
+                    'expense_date': _shamsi(timezone.localdate()),
                     'receipt': upload,
                 }, format='multipart')
                 self.assertEqual(resp.status_code, 201, resp.data)

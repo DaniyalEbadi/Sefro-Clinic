@@ -18,9 +18,10 @@ from django.utils import timezone
 
 from inventory.models import Product
 
-from ..models import PurchaseOrder, PurchaseOrderItem
+from ..models import ProductPurchase, PurchaseOrder, PurchaseOrderItem
 from .exchange_rates import get_rate
 from .inventory import InventoryError, _valid_quantity, apply_purchase_receipt
+from .periods_guard import ensure_open
 
 
 class PurchaseOrderError(Exception):
@@ -158,7 +159,6 @@ def mark_ordered(order: PurchaseOrder):
     return order
 
 
-@transaction.atomic
 def receive_purchase_order(order: PurchaseOrder, *, rate=None, received_date=None):
     """ordered/draft → received: add stock, roll cost history, snapshot Toman."""
     if order.status == PurchaseOrder.Status.RECEIVED:
@@ -176,7 +176,20 @@ def receive_purchase_order(order: PurchaseOrder, *, rate=None, received_date=Non
             'No valid USD→Toman exchange rate is configured; set one via /api/finance/exchange-rates/.'
         )
     received_date = received_date or timezone.now().date()
+    # A backdated receipt would add purchases (and stock cost history) into a
+    # month that may already be closed. Guard outside the atomic body below so
+    # the refusal's audit row survives its rollback.
+    ensure_open(received_date, action='receive a purchase order into that month',
+                object_repr=f'PurchaseOrder#{order.id}')
+    return _receive_purchase_order_locked(
+        order, rate=rate, received_date=received_date, items=items,
+    )
 
+
+@transaction.atomic
+def _receive_purchase_order_locked(
+    order: PurchaseOrder, *, rate, received_date, items,
+):
     total_usd = Decimal('0')
     total_toman = Decimal('0')
 
@@ -231,7 +244,15 @@ def cancel_purchase_order(order: PurchaseOrder):
 
 
 def purchase_summary(start=None, end=None, *, product_id=None, supplier=None):
-    """Received-purchase totals (USD + Toman) for a Gregorian date range."""
+    """Stock-purchase totals (USD + Toman) for a Gregorian date range.
+
+    Reads **both** buying flows, because both move money out of the clinic:
+      * purchase orders that reached ``received`` (``PurchaseOrderItem``)
+      * the one-shot restock ledger (``ProductPurchase``)
+
+    Headline totals cover both; ``by_source`` shows the split so a single row
+    is never counted twice. ``line_count`` counts PO lines plus direct rows.
+    """
     today = timezone.localtime(timezone.now()).date()
     start_date = start.date() if hasattr(start, 'date') else (start or today)
     end_date = end.date() if hasattr(end, 'date') else (end or today)
@@ -251,55 +272,134 @@ def purchase_summary(start=None, end=None, *, product_id=None, supplier=None):
         total_cost_usd=Sum('total_cost_usd'),
         total_cost_toman=Sum('total_cost_toman'),
     )
+    po_quantity = totals['quantity'] or Decimal('0')
+    po_usd = totals['total_cost_usd'] or Decimal('0')
+    po_toman = totals['total_cost_toman'] or Decimal('0')
 
-    by_product = list(
-        lines.values('product_id', 'product__name')
-        .annotate(
-            quantity=Sum('quantity'),
-            total_cost_usd=Sum('total_cost_usd'),
-            total_cost_toman=Sum('total_cost_toman'),
-            line_count=Count('id'),
-        )
-        .order_by('-total_cost_usd')
-    )
+    by_product: dict = {}
+    by_supplier: dict = {}
+    for row in lines.values('product_id', 'product__name', 'quantity', 'total_cost_usd', 'total_cost_toman'):
+        entry = by_product.setdefault(row['product_id'], {
+            'product_id': row['product_id'],
+            'product_name': row['product__name'],
+            'quantity': Decimal('0'),
+            'total_cost_usd': Decimal('0'),
+            'total_cost_toman': Decimal('0'),
+            'line_count': 0,
+        })
+        entry['quantity'] += row['quantity'] or Decimal('0')
+        entry['total_cost_usd'] += row['total_cost_usd'] or Decimal('0')
+        entry['total_cost_toman'] += row['total_cost_toman'] or Decimal('0')
+        entry['line_count'] += 1
 
-    by_supplier = list(
-        lines.values('order__supplier')
-        .annotate(
-            total_cost_usd=Sum('total_cost_usd'),
-            total_cost_toman=Sum('total_cost_toman'),
-            line_count=Count('id'),
-            order_count=Count('order_id', distinct=True),
-        )
-        .order_by('-total_cost_usd')
+    for row in lines.values('order__supplier').annotate(
+        total_cost_usd=Sum('total_cost_usd'),
+        total_cost_toman=Sum('total_cost_toman'),
+        line_count=Count('id'),
+        order_count=Count('order_id', distinct=True),
+    ):
+        entry = by_supplier.setdefault(row['order__supplier'] or '', {
+            'supplier': row['order__supplier'] or '',
+            'total_cost_usd': Decimal('0'),
+            'total_cost_toman': Decimal('0'),
+            'line_count': 0,
+            'order_count': 0,
+        })
+        entry['total_cost_usd'] += row['total_cost_usd'] or Decimal('0')
+        entry['total_cost_toman'] += row['total_cost_toman'] or Decimal('0')
+        entry['line_count'] += row['line_count']
+        entry['order_count'] += row['order_count']
+
+    # --- Direct (ProductPurchase) ledger -----------------------------------
+    direct = ProductPurchase.objects.filter(
+        purchase_date__gte=start_date, purchase_date__lte=end_date,
     )
+    if product_id:
+        direct = direct.filter(product_id=product_id)
+    if supplier:
+        direct = direct.filter(supplier__icontains=supplier)
+
+    fallback_rate = get_rate('USD', 'TOMAN')
+    direct_quantity = Decimal('0')
+    direct_usd = Decimal('0')
+    direct_toman = Decimal('0')
+    for row in direct.values('product_id', 'product__name', 'supplier', 'quantity', 'total_cost_usd', 'exchange_rate_snapshot'):
+        cost_usd = row['total_cost_usd'] or Decimal('0')
+        cost_toman = cost_usd * (row['exchange_rate_snapshot'] or fallback_rate)
+        direct_quantity += row['quantity'] or Decimal('0')
+        direct_usd += cost_usd
+        direct_toman += cost_toman
+
+        entry = by_product.setdefault(row['product_id'], {
+            'product_id': row['product_id'],
+            'product_name': row['product__name'],
+            'quantity': Decimal('0'),
+            'total_cost_usd': Decimal('0'),
+            'total_cost_toman': Decimal('0'),
+            'line_count': 0,
+        })
+        entry['quantity'] += row['quantity'] or Decimal('0')
+        entry['total_cost_usd'] += cost_usd
+        entry['total_cost_toman'] += cost_toman
+        entry['line_count'] += 1
+
+        supplier_key = row['supplier'] or ''
+        entry = by_supplier.setdefault(supplier_key, {
+            'supplier': supplier_key,
+            'total_cost_usd': Decimal('0'),
+            'total_cost_toman': Decimal('0'),
+            'line_count': 0,
+            'order_count': 0,
+        })
+        entry['total_cost_usd'] += cost_usd
+        entry['total_cost_toman'] += cost_toman
+        entry['line_count'] += 1
+
+    direct_count = direct.count()
+    po_order_count = lines.values('order_id').distinct().count()
+    po_line_count = lines.count()
 
     return {
         'period': {'start': start_date, 'end': end_date},
-        'order_count': lines.values('order_id').distinct().count(),
-        'line_count': lines.count(),
-        'total_quantity': totals['quantity'] or Decimal('0'),
-        'total_cost_usd': totals['total_cost_usd'] or Decimal('0'),
-        'total_cost_toman': totals['total_cost_toman'] or Decimal('0'),
+        'order_count': po_order_count,
+        'line_count': po_line_count + direct_count,
+        'total_quantity': po_quantity + direct_quantity,
+        'total_cost_usd': po_usd + direct_usd,
+        'total_cost_toman': po_toman + direct_toman,
+        'by_source': {
+            'purchase_order': {
+                'order_count': po_order_count,
+                'line_count': po_line_count,
+                'quantity': po_quantity,
+                'total_cost_usd': po_usd,
+                'total_cost_toman': po_toman,
+            },
+            'direct': {
+                'row_count': direct_count,
+                'quantity': direct_quantity,
+                'total_cost_usd': direct_usd,
+                'total_cost_toman': direct_toman,
+            },
+        },
         'by_product': [
             {
                 'product_id': row['product_id'],
-                'product_name': row['product__name'],
-                'quantity': row['quantity'] or Decimal('0'),
-                'total_cost_usd': row['total_cost_usd'] or Decimal('0'),
-                'total_cost_toman': row['total_cost_toman'] or Decimal('0'),
+                'product_name': row['product_name'],
+                'quantity': row['quantity'],
+                'total_cost_usd': row['total_cost_usd'],
+                'total_cost_toman': row['total_cost_toman'],
                 'line_count': row['line_count'],
             }
-            for row in by_product
+            for row in sorted(by_product.values(), key=lambda r: r['total_cost_usd'], reverse=True)
         ],
         'by_supplier': [
             {
-                'supplier': row['order__supplier'] or '',
-                'total_cost_usd': row['total_cost_usd'] or Decimal('0'),
-                'total_cost_toman': row['total_cost_toman'] or Decimal('0'),
+                'supplier': row['supplier'],
+                'total_cost_usd': row['total_cost_usd'],
+                'total_cost_toman': row['total_cost_toman'],
                 'line_count': row['line_count'],
                 'order_count': row['order_count'],
             }
-            for row in by_supplier
+            for row in sorted(by_supplier.values(), key=lambda r: r['total_cost_usd'], reverse=True)
         ],
     }

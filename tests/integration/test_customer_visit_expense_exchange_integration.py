@@ -3,7 +3,7 @@ Integration tests for Customers (birthday Shamsi), Visits, Expenses, Exchange Ra
 Covers skill checklist: Customer Integration, Visit, Expense, Exchange Rate, Reporting,
 Inventory, Date/Time (Shamsi), Filtering/Ordering, Pagination, Query N+1, Transaction
 """
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +17,11 @@ from finance.models import ExchangeRate, ExpenseCategory, WalletRewardRule
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 
 def _make_customer(**overrides):
@@ -196,7 +201,7 @@ class ExpenseWorkflowIntegrationTests(TestCase):
         create = self.emp.post('/api/finance/expenses/', {
             'category': self.cat.id,
             'amount_usd': '200.00',
-            'expense_date': '2025-06-01',
+            'expense_date': _shamsi(date(2025, 6, 1)),
             'vendor': 'Shop',
         }, format='json')
         self.assertEqual(create.status_code, 201)
@@ -227,12 +232,12 @@ class ExpenseWorkflowIntegrationTests(TestCase):
     def test_employee_sees_only_own_expenses_and_cancel_permission(self):
         # admin creates
         c1 = self.admin.post('/api/finance/expenses/', {
-            'category': self.cat.id, 'amount_usd': '50.00', 'expense_date': '2025-06-02',
+            'category': self.cat.id, 'amount_usd': '50.00', 'expense_date': _shamsi(date(2025, 6, 2)),
         }, format='json')
         eid1 = c1.data['id']
         # employee creates
         c2 = self.emp.post('/api/finance/expenses/', {
-            'category': self.cat.id, 'amount_usd': '60.00', 'expense_date': '2025-06-02',
+            'category': self.cat.id, 'amount_usd': '60.00', 'expense_date': _shamsi(date(2025, 6, 2)),
         }, format='json')
         eid2 = c2.data['id']
         # employee list should only see own (1)
@@ -250,7 +255,7 @@ class ExpenseWorkflowIntegrationTests(TestCase):
 
     def test_invalid_state_transitions_rejected(self):
         create = self.emp.post('/api/finance/expenses/', {
-            'category': self.cat.id, 'amount_usd': '30.00', 'expense_date': '2025-06-03',
+            'category': self.cat.id, 'amount_usd': '30.00', 'expense_date': _shamsi(date(2025, 6, 3)),
         }, format='json')
         eid = create.data['id']
         # try to pay directly from draft -> 400
@@ -343,8 +348,13 @@ class ReportingIntegrationTests(TestCase):
         exp = expense_svc.create_expense(created_by=creator, category=cat, amount_usd=Decimal('30'), expense_date=timezone.now().date())
         expense_svc.submit_expense(exp)
         expense_svc.approve_expense(exp, approver)
-        start = (timezone.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        end = (timezone.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        import jdatetime
+        start = jdatetime.date.fromgregorian(
+            date=(timezone.now() - timedelta(days=1)).date(),
+        ).strftime('%Y-%m-%d')
+        end = jdatetime.date.fromgregorian(
+            date=(timezone.now() + timedelta(days=1)).date(),
+        ).strftime('%Y-%m-%d')
         resp = self.client.get(f'/api/finance/reports/financial-summary/?start_date={start}&end_date={end}')
         self.assertEqual(resp.status_code, 200)
         # Verify totals via DB: revenue 100, product_cost 20, gross 80, expenses 30, net 50

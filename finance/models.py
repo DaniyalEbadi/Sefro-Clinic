@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
@@ -350,12 +350,29 @@ class ProductUsage(models.Model):
         'finance.WelcomePackUsage', on_delete=models.CASCADE, null=True, blank=True, related_name='product_usages',
         help_text='Set when the consumption was caused by issuing a free welcome pack.',
     )
+    customer = models.ForeignKey(
+        'customers.Customer', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='product_usages',
+        help_text=(
+            'Who consumed this product. Denormalised from visit/package_sale/welcome_pack_usage '
+            'at record time so consumption can be reported per customer even when the source '
+            'link is later removed.'
+        ),
+    )
     quantity = models.DecimalField(
         max_digits=10, decimal_places=3, default=Decimal('1'),
         validators=[MinValueValidator(Decimal('0'))],
     )
     unit_cost_usd_snapshot = usd_field(default=Decimal('0'))
     total_cost_usd_snapshot = usd_field(default=Decimal('0'))
+    unit_cost_toman_snapshot = toman_field(
+        default=Decimal('0'),
+        help_text='Toman unit cost captured at consumption time from the exchange rate then in effect.',
+    )
+    total_cost_toman_snapshot = toman_field(
+        default=Decimal('0'),
+        help_text='Toman total cost captured at consumption time from the exchange rate then in effect.',
+    )
     exchange_rate_snapshot = rate_field(null=True, blank=True)
     is_commission = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -365,6 +382,7 @@ class ProductUsage(models.Model):
         indexes = [
             models.Index(fields=['visit', 'created_at']),
             models.Index(fields=['package_sale', 'created_at']),
+            models.Index(fields=['customer', 'created_at']),
             models.Index(fields=['created_at']),
         ]
 
@@ -857,3 +875,95 @@ class PurchaseOrderItem(models.Model):
 
     def __str__(self):
         return f'{self.quantity} x {self.product} @ {self.unit_cost_usd} (order {self.order_id})'
+
+
+class MonthlyClose(models.Model):
+    """One finalized accounting month: its frozen report, who closed it, why.
+
+    A row exists only for months that were closed (and possibly later
+    reopened). No row for a month means the month is OPEN and every report
+    about it is computed live from the ledgers. ``status='closed'`` freezes
+    the month: the stored ``payload`` becomes the authoritative rendering of
+    that month (the GET report serves it verbatim) and the
+    :mod:`finance.services.periods_guard` refuses mutations that would
+    otherwise rewrite the closed numbers.
+
+    ``payload`` holds the complete month report exactly as
+    ``reporting._render_month`` produced it (both USD and Toman figures, plus
+    the outstanding-payouts block), JSON-encoded. The scalar columns mirror
+    its headline numbers so closed months stay queryable without digging
+    through JSON.
+    """
+
+    class Status(models.TextChoices):
+        CLOSED = 'closed', 'Closed'
+        REOPENED = 'reopened', 'Reopened'
+
+    shamsi_year = models.PositiveIntegerField()
+    shamsi_month = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(12)],
+    )
+    gregorian_start = models.DateField()
+    gregorian_end = models.DateField()
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.CLOSED)
+    payload = models.JSONField(
+        default=dict, blank=True,
+        help_text='The frozen month report (P&L, purchases, operators, outstanding).',
+    )
+
+    revenue_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    product_cost_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    welcome_pack_cost_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    gross_profit_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    staff_compensation_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    operating_expenses_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    staff_expense_claims_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    net_profit_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    purchases_usd = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('0'))
+    net_profit_after_purchases_usd = models.DecimalField(
+        max_digits=14, decimal_places=2, default=Decimal('0'),
+    )
+    rate_used = rate_field(
+        null=True, blank=True,
+        help_text='USD→Toman rate metadata at close time; Toman figures inside '
+                  'the payload are already transaction-snapshotted.',
+    )
+    close_note = models.TextField(
+        blank=True,
+        help_text='Optional note recorded when the month was closed.',
+    )
+
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='monthly_closes_closed',
+    )
+    reopened_at = models.DateTimeField(null=True, blank=True)
+    reopened_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='monthly_closes_reopened',
+    )
+    reopen_reason = models.TextField(blank=True)
+    schema_version = models.PositiveSmallIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-shamsi_year', '-shamsi_month']
+        verbose_name = 'monthly close'
+        verbose_name_plural = 'monthly closes'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['shamsi_year', 'shamsi_month'], name='uniq_monthly_close_period',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['status'], name='monthlyclose_status_idx'),
+        ]
+
+    @property
+    def period_key(self):
+        return f'{self.shamsi_year}-{self.shamsi_month:02d}'
+
+    def __str__(self):
+        return f'{self.period_key} [{self.status}]'

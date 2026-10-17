@@ -294,7 +294,7 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 | **`ProductCostHistory`** | Time-ranged cost per product (`effective_from`/`effective_to`) for historical costing |
 | **`ServiceItem`** | "Recipe": which `product` + `quantity` a service consumes (unique per service+product, qty > 0) |
 | **`Package`** | Bundle sold at `price_usd`; contains services via `PackageService` and products via `PackageItem` |
-| **`ProductUsage`** | Actual consumption record with `unit_cost_usd_snapshot`, `total_cost_usd_snapshot`, `exchange_rate_snapshot`; linked to visit/service/package_sale |
+| **`ProductUsage`** | Actual consumption record: `unit_cost_usd_snapshot`, `total_cost_usd_snapshot`, `exchange_rate_snapshot`, **`unit_cost_toman_snapshot` / `total_cost_toman_snapshot`** (the same cost restated in Toman at the rate seen at consumption time), **`customer`** (denormalised from `visit` / `package_sale` / `welcome_pack_usage`); linked to visit/service/package_sale/welcome_pack_usage |
 | **`Sale`** | Financial sale: `customer`, optional `visit`/`package`/`payment` FKs, `amount_usd`, `discount_usd`, `exchange_rate`, `amount_toman`, `status` (`pending`/`paid`/`refunded`/`partially_refunded`/`cancelled`), **`idempotency_key` (unique)** |
 | **`PaymentComponent`** | Split payment line of a Sale: `method` (`cash`/`card`/`wallet`), `amount_usd`, optional `wallet_transaction` link |
 | **`ExpenseCategory`** / **`Expense`** | Expense with approval pipeline: `status` (`draft`→`submitted`→`approved`/`rejected`→`paid`, or `cancelled`), `created_by`, `approved_by`, `amount_usd`/`amount_toman` snapshot, `receipt` file |
@@ -340,7 +340,9 @@ acquisition cost; history in `ProductCostHistory`), `count` (stock), `status`
 
 Conventions: all list endpoints are paginated (20/page, `?page=`). Unless noted, auth = JWT
 cookie (`access_token`) or `Authorization: Bearer <token>`. **All dates accepted/returned by the
-dashboard API are Shamsi (Jalali) strings** unless marked *Gregorian*. Router-managed routes also
+dashboard API are Shamsi (Jalali) strings** — including every finance report/list date param.
+(*Gregorian* appears only as a storage/write-side convention: `order_date`/`expense_date`
+business-date inputs.) Router-managed routes also
 accept DRF **format suffixes** (`/api/customers/1.json`, …). Every path below was verified
 against a live dump of the Django URL resolver.
 
@@ -381,7 +383,7 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 | GET | `/api/reports/weekly/` | Current Shamsi week (Saturday-start): per-day chart, total, visits |
 | GET | `/api/reports/monthly/` | Current Shamsi month: per-day chart, total, visits |
 | GET | `/api/reports/quarterly/` | Current Shamsi quarter (`YYYY-Qn`): per-month chart, total, visits |
-| GET | `/api/reports/yearly/` | Current Shamsi year: per-month chart, total, visits |
+| GET | `/api/reports/yearly/` | **Deprecated (410 Gone)** — points at `/api/finance/reports/monthly-close/?year=<shamsi_year>`, the complete yearly financial view |
 | GET | `/api/reports/all/` | All-time: full 5-bucket sales chart, totals, satisfaction avg, service popularity, visit-status breakdown |
 | GET | `/api/reports/visits/` | Visit count in range + previous equal-length period + `change_percent` |
 | GET | `/api/reports/customers/` | `by_visit_status`, `new_customers` (0 visits), `loyal_customers` (≥5), `total` |
@@ -448,21 +450,36 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 | POST | `/api/finance/sales/{id}/refund/` | staff | Refund a **paid** sale: `{refund_amount_usd?, reason?}` (default = full). Creates a negative refund `Sale`, refunds the wallet portion to the wallet, reverses the unspent part of the reward. Exactly one refund per sale. See §8.3 |
 | POST | `/api/finance/wallets/{id}/adjust/` | **admin** | Manual wallet adjustment `{amount_usd, direction: credit\|debit, transaction_type: manual_credit\|manual_debit\|adjustment, description?}` |
 
-**Finance reports** (all staff; `start_date`/`end_date` are **Gregorian** `YYYY-MM-DD`; `period`
-shortcut: `today`, `this_week`, `this_month`, `prev_month`, `this_year`; falls back to *today*
-when no usable range is supplied):
+**Finance reports** (all staff; `start_date`/`end_date` and `date_from`/`date_to` are **Shamsi**
+`YYYY-MM-DD` — one calendar for every date parameter in the app; `period` shortcut: `today`,
+`this_week` (Saturday-start), `this_month`, `prev_month`, `this_year`, all Shamsi windows of
+*now*; `?year=<shamsi-year>&month=<1-12>` navigates any Shamsi month; a Gregorian date is
+rejected with 400, garbage dates fall back to the current Shamsi day):
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/finance/reports/financial-summary/` | Revenue, product cost, gross/net profit (USD+Toman), expenses, avg transaction, payment-method breakdown, wallet totals; filters `service, package, product, personnel` |
+| GET | `/api/finance/reports/financial-summary/` | Revenue, product cost, gross/net profit (USD+Toman), expenses, avg transaction, payment-method breakdown, wallet totals; plus `purchases` (both buying ledgers) and `net_profit_after_purchases` (cash view — purchases never subtract from `net_profit`); filters `service, package, product, personnel`, and Shamsi `year`/`month` |
 | GET | `/api/finance/reports/profit-by-service/` | Profit & margin per service |
 | GET | `/api/finance/reports/profit-by-package/` | Profit & margin per package |
 | GET | `/api/finance/reports/profit-by-staff/` | Revenue/cost/profit per staff member across completed visits |
 | GET | `/api/finance/reports/wallet-summary/` | Wallet liability, rewards issued/reversed, wallet payments/refunds |
 | GET | `/api/finance/reports/staff-payout-summary/` | Payout totals; filters `staff`, `role` |
-| GET | `/api/finance/reports/dashboard/` | The finance dashboard: sales summary, expenses, net profit, payout totals, wallet summary, operational metrics (completed visits, new customers, avg ticket), payment-method breakdown |
+| GET | `/api/finance/reports/dashboard/` | The finance dashboard: sales summary (incl. `purchases` + `net_profit_after_purchases`, read from the same period report as financial-summary), expenses, net profit, payout totals, wallet summary, operational metrics (completed visits, new customers, avg ticket), payment-method breakdown |
 | GET | `/api/finance/reports/welcome-packs/` | Welcome-pack issuance & cost summary: `total_usage_count`, `total_packs_issued`, `total_cost_usd/toman`, `by_pack[]` |
 | GET | `/api/finance/reports/product-purchases/` | **Received purchase orders** (buying products): `order_count`, `line_count`, `total_quantity`, `total_cost_usd/toman`, `by_product[]`, `by_supplier[]`. Filters `product`, `supplier`, plus the standard `start_date`/`end_date`/`period` range (applied to `received_date`) |
+| GET | `/api/finance/reports/monthly-close/` | **Monthly close report** — read-only Shamsi-year view (12 months) or single month (`?year=<shamsi-year>&month=<1-12 or YYYY-MM>`). Each month returns: full P&L (revenue, product cost, gross/net profit), `purchases` (both ledgers: purchase-order + direct), `net_profit_after_purchases` (cash view), `staff_compensation_total`, `operators[]` (per-staff: `revenue_usd`, `product_cost_usd`, `material_profit_usd`, `owed_usd`, `paid_usd`, `pending_usd`, `approved_usd`, `by_role`, `calculation`), `role_totals[]`, `unattributed` (residual so Σ operators + unattributed == revenue), `payout_total`, `payment_methods`, `counts`, `cost_coverage`, `is_current` flag. `year_total` sums all 12 months. Filters: `?status=pending|approved|paid|all` (payout obligation status), `?staff=<id>`, `?role=doctor|facial|laser`. **Closed months are served from their frozen snapshot** — every number is the one captured at close time, never live — with `is_closed`, `closed_at`, `close_note`, `closed_by`, `snapshot_taken_at`, plus `was_reopened`/`reopened_at`/`reopen_reason` (derived from the close row, so a re-closed month keeps its reopen history). |
+| POST | `/api/finance/reports/monthly-close/close/` | **Close a past Shamsi month** — body `{year, month}` (staff **or** admin). Freezes the month: computes the full month payload (same shape as the report above) at that instant and stores it on a `MonthlyClose` row (`status=closed`, unique per year+month); subsequent report reads serve that snapshot. Only **past** months may be closed (current/future → 400). Outstanding payouts are returned as an informational `outstanding` block in the response — they never block a close. Re-closing is idempotent: the first snapshot is kept, note/metadata refreshed. Writes a `MONTHLY_CLOSE` AuditLog entry. |
+| POST | `/api/finance/reports/monthly-close/reopen/` | **Reopen a closed month** — body `{year, month, reason}` (staff **or** admin; `reason` required → 400 when missing). The row flips to `status=reopened`; the month returns to live, mutable reporting (`was_reopened: true` in the payload). Writes a `MONTHLY_REOPEN` AuditLog entry. |
+
+**Closed-month enforcement** — while a month is closed, every write that would change its financial
+history is refused with **409** (`{'error': ..., 'period': 'YYYY-MM'}`) and logged as a `BLOCKED:*`
+AuditLog entry (`finance.monthlyclose`, `changes.event`), so refusals are as auditable as the close
+itself. Covered: refunds of sales dated in the month; expense create/edit/delete and workflow
+transitions; operating-expense create/update/delete (including moving an item *into* the closed
+month); staff-payout cancellation and payout re-pricing; backdated purchase receipts and
+product purchases; Django-admin save/delete on the finance models. The month must be **reopened**
+to perform any of these. Idempotency-key replays of already-recorded rows still return the original
+row (no mutation, so not blocked).
 
 
 **Finance CRUD viewsets** (all under `/api/finance/`)
@@ -476,21 +493,21 @@ when no usable range is supplied):
 | `package-items/` | CRUD | read: staff / write: **admin** | Package→product lines |
 | `package-services/` | CRUD | read: staff / write: **admin** | Package→service lines |
 | `product-cost-history/` | read-only | staff | Historical product costs |
-| `product-usages/` | read-only | staff | Filters: `?visit=`, `?service=`, `?product=`, `?package_sale=` |
+| `product-usages/` | read-only | staff | Filters: `?visit=`, `?service=`, `?product=`, `?package_sale=`, `?customer=`. Each row carries the USD **and** Toman cost frozen at consumption time plus the consuming `customer` / `customer_name` |
 | `wallets/` | read-only + `adjust` | staff (adjust: admin) | Search by customer name/mobile |
 | `wallet-transactions/` | read-only | staff | Ledger; `?wallet=` filter |
 | `sales/` | read-only + `refund` | staff | Filters: `?customer=`, `?status=`, `?package=` |
 | `expense-categories/` | CRUD | read: staff / write: **admin** | |
 | `expenses/` | CRUD + workflow | staff | **Employees only see their own expenses**; create ⇒ `draft`. Actions below |
 | `product-purchases/` | CRUD | read: staff / write: **admin** | **Legacy one-shot restock**: creating a purchase updates `Product.cost_usd` + `count` and rolls `ProductCostHistory` immediately. Prefer `purchase-orders/` for a staged workflow |
-| `purchase-orders/` | CRUD + workflow | read: staff / write: **admin** | **Buying products with approval-style flow** (see §8.10). Nested writable `items[]` (`product`, `quantity`, `unit_cost_usd`); server computes `total_cost_usd`, converts `total_cost_toman` live while open and switches to stored snapshots once `received`. Filters `?status= ?supplier= ?product= ?date_from= ?date_to=` (Gregorian), search `supplier,notes,items__product__name`, `POST` idempotent via `idempotency_key`. **Delete blocked (400) once received** |
+| `purchase-orders/` | CRUD + workflow | read: staff / write: **admin** | **Buying products with approval-style flow** (see §8.10). Nested writable `items[]` (`product`, `quantity`, `unit_cost_usd`); server computes `total_cost_usd`, converts `total_cost_toman` live while open and switches to stored snapshots once `received`. Filters `?status= ?supplier= ?product= ?date_from= ?date_to=` (Shamsi query dates; stored `order_date` stays a Gregorian business date), search `supplier,notes,items__product__name`, `POST` idempotent via `idempotency_key`. **Delete blocked (400) once received** |
 | `staff-compensation-rules/` | CRUD | **admin only** | Commission rules per role |
 | `staff-payouts/` | read-only | staff | Filters `?staff= ?role= ?status= ?visit=`; plus `GET staff-payouts/summary/` and `GET staff-payouts/detail_report/` |
 | `operating-expense-categories/` | CRUD | staff (admin **and** employee) | Direct operating-cost categories; search `name,slug,description`; ordering `name,slug,sort_order,is_active`; **delete blocked (400)** while expenses reference the category |
-| `operating-expenses/` | CRUD + `summary` | staff (admin **and** employee) | Direct clinic spend; filters `?category= ?payment_method= ?created_by= ?date_from= ?date_to=` (Gregorian); search `title,description,vendor,notes,category__name`; `POST` is idempotent via `idempotency_key`; `GET …/summary/` for period totals |
+| `operating-expenses/` | CRUD + `summary` | staff (admin **and** employee) | Direct clinic spend; filters `?category= ?payment_method= ?created_by= ?date_from= ?date_to=` (Shamsi); search `title,description,vendor,notes,category__name`; `POST` is idempotent via `idempotency_key`; `GET …/summary/` for period totals |
 | `welcome-packs/` | CRUD + `issue` | staff (admin **and** employee) | Pack definitions (`?is_active=true\|false`, search `name,description`); nested `items` accepted on create/update; `POST /api/finance/welcome-packs/{id}/issue/` = the financial event (see below) |
 | `welcome-pack-items/` | CRUD | staff | Granular pack→product lines (unique per pack+product, qty > 0) |
-| `welcome-pack-usages/` | read-only | staff | Immutable issuance history; filters `?welcome_pack= ?customer= ?visit= ?date_from= ?date_to=` (Gregorian), search pack/customer name |
+| `welcome-pack-usages/` | read-only | staff | Immutable issuance history; filters `?welcome_pack= ?customer= ?visit= ?date_from= ?date_to=` (Shamsi), search pack/customer name |
 
 **Welcome-pack issuance action**
 
@@ -675,8 +692,9 @@ across cash/card/wallet. Wallet rewards are credited automatically.
   endpoint) — see §12.
 - **Face analysis:** staff can run `POST /api/v3/face/analyze/` during a consultation and
   revisit their own records under `/api/v3/face/history/`.
-- **Reporting:** legacy Shamsi reports under `/api/reports/*` and finance (Gregorian) reports
-  under `/api/finance/reports/*`.
+- **Reporting:** activity reports under `/api/reports/*` (visits, customers, satisfaction,
+  referral — Shamsi buckets) and financial reports under `/api/finance/reports/*` (P&L,
+  payouts, purchases, wallets — Shamsi date params over Gregorian-stored columns).
 
 ### Public-website journey (no login)
 
@@ -851,24 +869,32 @@ one restock event in the ledger; two ledgers would double-count).
   original order, HTTP 201); `Product` rows are `select_for_update()`ed during receive.
 - **Reporting.** `purchase_summary(start, end, product_id, supplier)` powers
   `GET /api/finance/reports/product-purchases/`: totals in USD **and** Toman plus `by_product[]`
-  and `by_supplier[]`, filtered on `received_date` (Gregorian, same `_resolve_range` /
-   `period=` helpers as every other finance report).
+  and `by_supplier[]`, filtered on `received_date` (stored Gregorian; the query params
+  `start_date`/`end_date`/`period=` are Shamsi, same `_resolve_range` helpers as every other
+  finance report).
 
 ---
 
 ## 9. The Shamsi (Jalali) Calendar System
 
 The clinic operates on the Persian calendar (`jdatetime`, `TIME_ZONE=Asia/Tehran`).
-**Two date dialects exist — do not mix them:**
+**Every date parameter on every API is Shamsi (Jalali)** — one calendar on the wire:
 
 | Surface | Format | Where |
 |---|---|---|
-| Dashboard/customer-facing API | **Shamsi** strings | `birthday`, `Visit.start_at/end_at`, `Payment.paid_at`, `Customer.created_at`, audit `timestamp`, all `/api/reports/*` params & buckets, `/api/visits/` filters, `/api/customers/` payloads |
-| Finance reports | **Gregorian** `YYYY-MM-DD` | `/api/finance/reports/*` (`start_date`/`end_date`, or `period=today/this_week/this_month/prev_month`) |
+| All API date params & payloads | **Shamsi** strings | `birthday`, `Visit.start_at/end_at`, `Payment.paid_at`, `Customer.created_at`, audit `timestamp`, all `/api/reports/*` params & buckets, `/api/visits/` filters, `/api/customers/` payloads, and every finance report/list date param (`start_date`/`end_date`/`date_from`/`date_to`) |
+| Storage (DB columns) | aware Gregorian datetimes / `DateField`s | `ShamsiDateField`/`ShamsiDateTimeField` convert on the way in and out, so a Gregorian column never surfaces as a query param |
+
+A query date outside the Shamsi window 1300–1499 (i.e. a Gregorian date such as
+`2026-10-15`) is rejected with **400** rather than silently reinterpreted. The weekly bucket
+key (`1405-W02`) and the `period=this_week` window are **Saturday-start**; W01 is the week
+that contains 1 Farvardin (it may begin in the previous Shamsi year).
 
 Mechanics (`Sefro_Clinic/fields.py`):
 - `ShamsiDateField` / `ShamsiDateTimeField` convert inbound Shamsi → aware Gregorian datetimes
   for storage, and outbound Gregorian → Shamsi strings (`%Y-%m-%d`, `%Y-%m-%d %H:%M`).
+- `shamsi_to_greg_date()` converts a Shamsi query string to a Gregorian `date`, raising a
+  loud 400 (with a "looks Gregorian" hint) for out-of-range years.
 - Report bucketing (`_shamsi_period_key`, `_shamsi_period_range`, `_build_sales_chart`)
   converts each payment's `paid_at` to Shamsi and buckets by day / Saturday-start week /
   month / quarter (`YYYY-Qn`) / year.
@@ -930,10 +956,12 @@ to know before extending the system:
    (Toman) for backward compatibility with the old dashboard reports. Payments created directly
    via `POST /api/payments/` do **not** create a `Sale` — the two write paths are asymmetric.
 2. **Two dashboards.** `/api/dashboard/` (Shamsi, customer-centric KPIs, Toman) and
-   `/api/finance/reports/dashboard/` (Gregorian, USD+Toman financial aggregates) serve different
-   frontends.
-3. **Two calendars.** Dashboard = Shamsi; finance reports = Gregorian (see §9). Period math for
-   the Shamsi reports is done in Python (`jdatetime`), not SQL.
+   `/api/finance/reports/dashboard/` (USD+Toman financial aggregates) serve different
+   frontends — both take Shamsi date params.
+3. **One query calendar, two storage calendars.** Every API date parameter is Shamsi (§9);
+   finance `DateField`s (`order_date`, `expense_date`, `received_date`) remain Gregorian
+   business dates in storage. Period math for Shamsi buckets is done in Python (`jdatetime`),
+   not SQL.
 4. **Visit status transitions are not guarded** — `confirm`/`complete`/`cancel` set the status
    unconditionally; business discipline is procedural. Payout generation *is* guarded
    (`generate_visit_payouts` no-ops unless status is `completed`).

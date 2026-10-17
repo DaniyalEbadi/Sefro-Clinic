@@ -16,6 +16,7 @@ back to *today*.
 from datetime import timedelta
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -35,8 +36,14 @@ def local_today():
     return timezone.localtime(timezone.now()).date()
 
 
+def shamsi_str(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` string (report convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
+
+
 def day_range(day):
-    return f'?start_date={day.isoformat()}&end_date={day.isoformat()}'
+    d = shamsi_str(day)
+    return f'?start_date={d}&end_date={d}'
 
 
 class FinanceReportDefaultRangeTests(TestCase):
@@ -192,11 +199,17 @@ class FinanceDashboardReportTests(TestCase):
         self.assertEqual(summary['revenue_usd'], '120.00')
 
     def test_period_today_matches_explicit_today_range(self):
-        today = local_today().isoformat()
+        today = shamsi_str(local_today())
         by_period = self.client.get(f'{DASHBOARD_URL}?period=today').data['sales_summary']
         explicit = self.client.get(f'{DASHBOARD_URL}?start_date={today}&end_date={today}').data
         self.assertEqual(by_period['revenue_usd'], explicit['sales_summary']['revenue_usd'])
         self.assertEqual(by_period['revenue_usd'], '120.00')
+
+    def test_gregorian_date_params_are_rejected(self):
+        response = self.client.get(
+            f'{DASHBOARD_URL}?start_date={local_today().isoformat()}',
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 class ProfitByStaffReportTests(TestCase):

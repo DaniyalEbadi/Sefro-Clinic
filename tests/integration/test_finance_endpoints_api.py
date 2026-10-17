@@ -8,6 +8,7 @@ record-consumption endpoint, and the profit/wallet report views.
 from datetime import timedelta
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -29,6 +30,11 @@ from finance.models import (
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_customer
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 RATE = Decimal('100000')
 
@@ -179,7 +185,7 @@ class ExpenseCategoryAPITests(TestCase):
         category = self.client.post(self.URL, {'name': 'Utilities'}, format='json').data['id']
         response = self.client.post('/api/finance/expenses/', {
             'category': category, 'amount_usd': '40.00', 'vendor': 'Power Co',
-            'expense_date': timezone.now().date().isoformat(),
+            'expense_date': _shamsi(timezone.now()),
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data['category'], category)
@@ -194,7 +200,7 @@ class ProductPurchaseAPITests(TestCase):
         self.product = make_product()
 
     def test_create_updates_stock_cost_and_history(self):
-        today = timezone.now().date().isoformat()
+        today = _shamsi(timezone.now().date())
         response = self.client.post(self.URL, {
             'product': self.product.id, 'quantity': '10',
             'unit_cost_usd': '15.00', 'supplier': 'Acme',
@@ -214,7 +220,7 @@ class ProductPurchaseAPITests(TestCase):
     def test_cost_history_endpoint_lists_entries(self):
         self.client.post(self.URL, {
             'product': self.product.id, 'quantity': '1',
-            'unit_cost_usd': '12.00', 'purchase_date': timezone.now().date().isoformat(),
+            'unit_cost_usd': '12.00', 'purchase_date': _shamsi(timezone.now().date()),
         }, format='json')
         listing = self.client.get('/api/finance/product-cost-history/')
         self.assertEqual(listing.status_code, 200)
@@ -224,7 +230,7 @@ class ProductPurchaseAPITests(TestCase):
     def test_employee_cannot_create_purchase(self):
         response = employee_client().post(self.URL, {
             'product': self.product.id, 'quantity': '1',
-            'unit_cost_usd': '1.00', 'purchase_date': timezone.now().date().isoformat(),
+            'unit_cost_usd': '1.00', 'purchase_date': _shamsi(timezone.now().date()),
         }, format='json')
         self.assertEqual(response.status_code, 403)
 
@@ -258,6 +264,79 @@ class ProductUsageAPITests(TestCase):
 
     def test_employee_can_read(self):
         self.assertEqual(employee_client().get(self.URL).status_code, 200)
+
+    def test_row_exposes_the_consuming_customer(self):
+        from finance.services.inventory import record_product_usage
+
+        usage = record_product_usage(
+            product=self.product, quantity=Decimal('1'), visit=self.visit,
+            service=self.service, decrement_stock=True, rate=RATE,
+        )
+
+        row = self.client.get(f'{self.URL}{usage.id}/').data
+        self.assertEqual(row['customer'], self.customer.id)
+        self.assertEqual(row['customer_name'], str(self.customer))
+
+    def test_filter_by_customer(self):
+        other = make_customer(mobile_number='09129999999', national_id='999-9999999')
+        ProductUsage.objects.create(
+            product=self.product, customer=self.customer,
+            quantity=Decimal('1'), unit_cost_usd_snapshot=Decimal('20.00'),
+            total_cost_usd_snapshot=Decimal('20.00'), exchange_rate_snapshot=RATE,
+        )
+        ProductUsage.objects.create(
+            product=self.product, customer=other,
+            quantity=Decimal('1'), unit_cost_usd_snapshot=Decimal('20.00'),
+            total_cost_usd_snapshot=Decimal('20.00'), exchange_rate_snapshot=RATE,
+        )
+
+        self.assertEqual(self.client.get(f'{self.URL}?customer={self.customer.id}').data['count'], 1)
+        self.assertEqual(self.client.get(f'{self.URL}?customer={other.id}').data['count'], 1)
+        self.assertEqual(self.client.get(f'{self.URL}?customer=999999').data['count'], 0)
+
+    def test_row_reports_the_toman_price_of_the_consumption_moment(self):
+        from finance.services.inventory import record_product_usage
+
+        usage = record_product_usage(
+            product=self.product, quantity=Decimal('2'), visit=self.visit,
+            service=self.service, decrement_stock=True, rate=RATE,
+        )
+
+        row = self.client.get(f'{self.URL}{usage.id}/').data
+        self.assertEqual(Decimal(row['unit_cost_usd_snapshot']), Decimal('20.00'))
+        self.assertEqual(Decimal(row['total_cost_usd_snapshot']), Decimal('40.00'))
+        self.assertEqual(Decimal(row['exchange_rate_snapshot']), RATE)
+        self.assertEqual(Decimal(row['unit_cost_toman_snapshot']), Decimal('2000000.00'))
+        self.assertEqual(Decimal(row['total_cost_toman_snapshot']), Decimal('4000000.00'))
+        self.assertEqual(row['customer'], self.customer.id)
+
+    def test_row_written_before_toman_snapshots_existed_still_reports_a_price(self):
+        # The setUp row predates both new columns: it carries only USD + rate.
+        # The API restates the Toman price, and simply reports no customer.
+        row = self.client.get(self.URL).data['results'][0]
+        self.assertEqual(Decimal(row['total_cost_usd_snapshot']), Decimal('20.00'))
+        self.assertEqual(Decimal(row['total_cost_toman_snapshot']), Decimal('2000000.00'))
+        self.assertIsNone(row['customer'])
+        self.assertIsNone(row['customer_name'])
+
+    def test_visit_consumption_appears_with_customer_and_both_prices(self):
+
+        service = Service.objects.create(name='Botox', price_usd=Decimal('150'))
+        ServiceItem.objects.create(service=service, product=self.product, quantity=Decimal('1'))
+        visit = Visit.objects.create(
+            customer=self.customer, start_at=timezone.now(),
+            end_at=timezone.now() + timedelta(hours=1),
+        )
+        visit.services.add(service)
+
+        response = self.client.post(f'/api/finance/visits/{visit.id}/record-consumption/', {}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+        row = response.data[0]
+        self.assertEqual(row['customer'], self.customer.id)
+        self.assertEqual(row['customer_name'], str(self.customer))
+        self.assertEqual(Decimal(row['unit_cost_toman_snapshot']), Decimal('2000000.00'))
+        self.assertEqual(Decimal(row['total_cost_toman_snapshot']), Decimal('2000000.00'))
 
 
 class SaleAndRefundAPITests(TestCase):
@@ -324,7 +403,7 @@ class ExchangeRateAPITests(TestCase):
         before = self.client.get(self.URL).data['count']
         created = self.client.post(self.URL, {
             'currency_from': 'USD', 'currency_to': 'TOMAN', 'rate': '95000.000000',
-            'effective_at': timezone.now().isoformat(), 'source': 'test', 'is_active': True,
+            'effective_at': _shamsi(timezone.now()) + ' 12:00', 'source': 'test', 'is_active': True,
         }, format='json')
         self.assertEqual(created.status_code, 201, created.data)
         listing = self.client.get(self.URL)

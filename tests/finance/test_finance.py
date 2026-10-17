@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import jdatetime
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -20,6 +21,11 @@ from finance.services.exchange_rates import get_rate, set_rate, to_toman
 from finance.services.wallet import InsufficientFunds, grant_reward, reverse_reward
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_admin, make_employee
+
+
+def _shamsi(day):
+    """A Gregorian date as its Jalali ``YYYY-MM-DD`` (the API's date convention)."""
+    return jdatetime.date.fromgregorian(date=day).strftime('%Y-%m-%d')
 
 USD = Decimal('0.01')
 
@@ -320,13 +326,13 @@ class ApiAuthTests(FinanceBase):
         emp = employee_client()
         resp = emp.post('/api/finance/exchange-rates/', {
             'currency_from': 'USD', 'currency_to': 'TOMAN', 'rate': '120000',
-            'effective_at': timezone.now().isoformat(), 'is_active': True,
+            'effective_at': _shamsi(timezone.now()) + ' 12:00', 'is_active': True,
         }, format='json')
         self.assertIn(resp.status_code, (403, 401))
         admin = admin_client()
         resp = admin.post('/api/finance/exchange-rates/', {
             'currency_from': 'USD', 'currency_to': 'TOMAN', 'rate': '120000',
-            'effective_at': timezone.now().isoformat(), 'is_active': True,
+            'effective_at': _shamsi(timezone.now()) + ' 12:00', 'is_active': True,
         }, format='json')
         self.assertEqual(resp.status_code, 201)
 

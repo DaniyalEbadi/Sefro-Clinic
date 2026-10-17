@@ -18,6 +18,15 @@ The financial chain is:
     gross_profit is reported as revenue minus product cost and welcome-pack
     cost (staff and overhead sit below that line, as before).
 
+    Stock purchases are reported alongside, never inside, the P&L:
+
+    Net Profit
+      - Stock bought this period (PurchaseOrder received + ProductPurchase)
+    = Net Profit After Purchases      <- cash view only
+
+    Deducting purchases from net_profit would charge the same product twice:
+    once when bought, again as product cost when consumed.
+
 Cost basis rule: consumption cost always comes from the immutable
 ``ProductUsage.total_cost_usd_snapshot`` captured at the moment of use. Live
 ``Product.cost_usd`` is only a fallback for a service whose consumption was
@@ -32,7 +41,9 @@ from ..models import (
     Expense,
     OperatingExpense,
     PaymentComponent,
+    ProductPurchase,
     ProductUsage,
+    PurchaseOrder,
     Sale,
     StaffPayout,
     WalletTransaction,
@@ -219,12 +230,17 @@ def calculate_visit_financials(visit, rate=None):
         operator_compensation_toman = payout_toman.get(service.id, ZERO).quantize(Decimal('0.01'))
         # Welcome-pack cost has no natural service owner; allocating it by the
         # same revenue weight used for the revenue split keeps the per-service
-        # rows additive: they sum to the visit's exact totals.
+        # rows additive: they sum to the visit's exact totals. A visit that
+        # billed nothing (a free service, or an unbilled one) still owes the
+        # pack cost, so with no revenue to weight by it is split evenly rather
+        # than dropped.
         if revenue_usd > 0:
             wp_share_usd = (welcome_pack_cost_usd * (share / revenue_usd)).quantize(Decimal('0.01'))
             wp_share_toman = (welcome_pack_cost_toman * (share_toman / revenue_toman)).quantize(Decimal('0.01')) if revenue_toman > 0 else ZERO
         else:
-            wp_share_usd = wp_share_toman = ZERO
+            even_share = Decimal(1) / Decimal(len(services))
+            wp_share_usd = (welcome_pack_cost_usd * even_share).quantize(Decimal('0.01'))
+            wp_share_toman = (welcome_pack_cost_toman * even_share).quantize(Decimal('0.01'))
 
         profit_usd = (share - cost_usd).quantize(Decimal('0.01'))
         clinic_share_usd = (share - cost_usd - operator_compensation_usd - wp_share_usd).quantize(Decimal('0.01'))
@@ -253,6 +269,27 @@ def calculate_visit_financials(visit, rate=None):
             'cost_basis': cost_basis,
             'revenue_basis': basis,
         }
+
+    # Quantising each share can leave a rounding residual, so the per-service
+    # rows would not add back to the visit. Hand the remainder to the last
+    # service (and take it back out of its clinic share) so they do.
+    if rows:
+        residual_usd = welcome_pack_cost_usd - sum(
+            row['welcome_pack_cost_usd'] for row in rows.values()
+        )
+        residual_toman = welcome_pack_cost_toman - sum(
+            row['welcome_pack_cost_toman'] for row in rows.values()
+        )
+        if residual_usd or residual_toman:
+            last = rows[list(rows)[-1]]
+            last['welcome_pack_cost_usd'] = (
+                last['welcome_pack_cost_usd'] + residual_usd
+            ).quantize(Decimal('0.01'))
+            last['welcome_pack_cost_toman'] = (
+                last['welcome_pack_cost_toman'] + residual_toman
+            ).quantize(Decimal('0.01'))
+            last['clinic_share_usd'] = (last['clinic_share_usd'] - residual_usd).quantize(Decimal('0.01'))
+            last['clinic_share_toman'] = (last['clinic_share_toman'] - residual_toman).quantize(Decimal('0.01'))
 
     return {
         'visit': visit,
@@ -406,6 +443,140 @@ def claim_totals(start, end, personnel_id=None):
     }
 
 
+def purchase_totals(start, end):
+    """Stock-purchase cash out for the period, from both purchase ledgers.
+
+    Purchases never enter net profit: inventory is charged to profit exactly
+    once, at consumption (ProductUsage snapshots). This reports the money that
+    actually left the clinic on stock so callers can show
+    ``net_profit_after_purchases`` as a cash view *next to* the P&L.
+
+    Two ledgers exist and both must be read or purchases silently vanish:
+      * ``PurchaseOrderItem`` behind orders that reached ``received``
+      * ``ProductPurchase``, the one-shot restock ledger
+    """
+    g_start, g_end = start.date(), end.date()
+
+    orders = PurchaseOrder.objects.filter(
+        status=PurchaseOrder.Status.RECEIVED,
+        received_date__gte=g_start, received_date__lte=g_end,
+    )
+    po_usd = _q(orders.aggregate(t=Sum('total_cost_usd'))['t'])
+    po_toman = _q(orders.aggregate(t=Sum('total_cost_toman'))['t'])
+    po_count = orders.count()
+
+    direct = ProductPurchase.objects.filter(
+        purchase_date__gte=g_start, purchase_date__lte=g_end,
+    )
+    dr_usd = ZERO
+    dr_toman = ZERO
+    for cost_usd, snapshot_rate in direct.values_list('total_cost_usd', 'exchange_rate_snapshot'):
+        cost = _q(cost_usd)
+        dr_usd += cost
+        dr_toman += cost * (snapshot_rate or get_rate('USD', 'TOMAN'))
+    dr_usd = dr_usd.quantize(Decimal('0.01'))
+    dr_toman = dr_toman.quantize(Decimal('0.01'))
+    dr_count = direct.count()
+
+    return {
+        'usd': (po_usd + dr_usd).quantize(Decimal('0.01')),
+        'toman': (po_toman + dr_toman).quantize(Decimal('0.01')),
+        'count': po_count + dr_count,
+        'by_source': {
+            'purchase_order': {
+                'usd': po_usd.quantize(Decimal('0.01')),
+                'toman': po_toman.quantize(Decimal('0.01')),
+                'count': po_count,
+            },
+            'direct': {
+                'usd': dr_usd,
+                'toman': dr_toman,
+                'count': dr_count,
+            },
+        },
+    }
+
+
+def operator_attribution(start, end, *, totals=None):
+    """Revenue and material cost produced by each staff member.
+
+    Same anchors and the same costing rule as :func:`build_report`
+    (``Sale.created_at`` / ``ProductUsage.created_at``, cost = snapshot USD x
+    its snapshot rate), so the rows are comparable with the report totals.
+
+    ``StaffPayout`` cannot be used for this: a ``monthly_salary`` payout row
+    stores ``revenue = 0`` and ``profit = 0`` on purpose, so the laser tech's
+    produced revenue would simply be missing.
+
+    Pass ``totals`` (the whole ``build_report`` payload -- it reads ``revenue``
+    and ``product_cost`` off it) to get an ``unattributed`` residual row that
+    makes the parts sum back to the whole exactly, rounding included. Without
+    it the residual is only the sales and usages whose visit has no assigned
+    staff.
+    """
+    sales = Sale.objects.filter(
+        created_at__gte=start, created_at__lte=end, status__in=REVENUE_STATUSES,
+    )
+    revenue: dict = {}
+    for staff_id, usd, toman in sales.values_list('visit__staff_id').annotate(
+        usd=Sum('amount_usd'), toman=Sum('amount_toman'),
+    ):
+        revenue[staff_id] = {'usd': _q(usd), 'toman': _q(toman)}
+
+    cost: dict = {}
+    rate = get_rate('USD', 'TOMAN')
+    usage_rows = consumable_usages(
+        ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
+    ).values_list('visit__staff_id', 'total_cost_usd_snapshot', 'exchange_rate_snapshot')
+    for staff_id, usd, snapshot_rate in usage_rows:
+        row = cost.setdefault(staff_id, {'usd': ZERO, 'toman': ZERO})
+        row['usd'] += _q(usd)
+        row['toman'] += _q(usd) * (snapshot_rate or rate)
+
+    rows = {}
+    for staff_id in set(revenue) | set(cost):
+        rev = revenue.get(staff_id, {'usd': ZERO, 'toman': ZERO})
+        cst = cost.get(staff_id, {'usd': ZERO, 'toman': ZERO})
+        rows[staff_id] = {
+            'revenue_usd': rev['usd'].quantize(Decimal('0.01')),
+            'revenue_toman': rev['toman'].quantize(Decimal('0.01')),
+            'product_cost_usd': cst['usd'].quantize(Decimal('0.01')),
+            'product_cost_toman': cst['toman'].quantize(Decimal('0.01')),
+            'material_profit_usd': (rev['usd'] - cst['usd']).quantize(Decimal('0.01')),
+            'material_profit_toman': (rev['toman'] - cst['toman']).quantize(Decimal('0.01')),
+        }
+
+    if totals is not None:
+        attributed_usd = sum((r['revenue_usd'] for r in rows.values()), ZERO)
+        attributed_toman = sum((r['revenue_toman'] for r in rows.values()), ZERO)
+        cost_usd = sum((r['product_cost_usd'] for r in rows.values()), ZERO)
+        cost_toman = sum((r['product_cost_toman'] for r in rows.values()), ZERO)
+        residual_rev_usd = (totals['revenue']['usd'] - attributed_usd).quantize(Decimal('0.01'))
+        residual_rev_toman = (totals['revenue']['toman'] - attributed_toman).quantize(Decimal('0.01'))
+        residual_cost_usd = (totals['product_cost']['usd'] - cost_usd).quantize(Decimal('0.01'))
+        residual_cost_toman = (totals['product_cost']['toman'] - cost_toman).quantize(Decimal('0.01'))
+    else:
+        unattributed = rows.pop(None, None) or {
+            'revenue_usd': ZERO, 'revenue_toman': ZERO,
+            'product_cost_usd': ZERO, 'product_cost_toman': ZERO,
+        }
+        residual_rev_usd = unattributed['revenue_usd']
+        residual_rev_toman = unattributed['revenue_toman']
+        residual_cost_usd = unattributed['product_cost_usd']
+        residual_cost_toman = unattributed['product_cost_toman']
+        rows.pop(None, None)
+
+    rows[None] = {
+        'revenue_usd': residual_rev_usd,
+        'revenue_toman': residual_rev_toman,
+        'product_cost_usd': residual_cost_usd,
+        'product_cost_toman': residual_cost_toman,
+        'material_profit_usd': (residual_rev_usd - residual_cost_usd).quantize(Decimal('0.01')),
+        'material_profit_toman': (residual_rev_toman - residual_cost_toman).quantize(Decimal('0.01')),
+    }
+    return rows
+
+
 def welcome_pack_totals(start, end, product_id=None):
     """Welcome-pack cost for the period, counted exactly once.
 
@@ -483,6 +654,13 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
     net_usd = (gross_usd - below_line_usd).quantize(Decimal('0.01'))
     net_toman = (gross_toman - below_line_toman).quantize(Decimal('0.01'))
 
+    # Cash view: what is left once the stock bought this period is also paid
+    # for. Deliberately NOT subtracted from net_profit (that would charge the
+    # same product twice, here and again as product cost at consumption).
+    purchases = purchase_totals(start, end)
+    net_after_purchases_usd = (net_usd - purchases['usd']).quantize(Decimal('0.01'))
+    net_after_purchases_toman = (net_toman - purchases['toman']).quantize(Decimal('0.01'))
+
     # The clinic's immediate take: what is left after material cost, welcome
     # packs and the compensation owed to operators. Operating expenses and
     # staff claims are reported below this line (see net_profit).
@@ -538,6 +716,10 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
         },
         'below_the_line_total': {'usd': below_line_usd, 'toman': below_line_toman},
         'net_profit': {'usd': net_usd, 'toman': net_toman},
+        'purchases': purchases,
+        'net_profit_after_purchases': {
+            'usd': net_after_purchases_usd, 'toman': net_after_purchases_toman,
+        },
         'cost_coverage': cost_coverage(usages),
         'payment_methods': method_breakdown,
         'payment_methods_by_method': method_by_method,

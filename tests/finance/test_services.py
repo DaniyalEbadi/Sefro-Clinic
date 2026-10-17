@@ -4,7 +4,17 @@ from django.test import TestCase
 from django.utils import timezone
 
 from customers.models import Customer, Service, Visit
-from finance.models import Expense, ExpenseCategory, Sale, ServiceItem, Wallet, WalletRewardRule, WalletTransaction
+from finance.models import (
+    Expense,
+    ExpenseCategory,
+    Package,
+    PackageService,
+    Sale,
+    ServiceItem,
+    Wallet,
+    WalletRewardRule,
+    WalletTransaction,
+)
 from finance.services import accounting, payments, reporting
 from finance.services import expenses as expense_svc
 from finance.services.exchange_rates import get_rate, set_rate, to_toman
@@ -354,6 +364,59 @@ class PaymentsServiceTests(TestCase):
         comp = sale.components.first()
         self.assertEqual(comp.method, 'card')
         self.assertEqual(comp.amount_usd, Decimal('75.50'))
+
+
+class PackageCheckoutTests(TestCase):
+    """Checking out a package must derive the price from its service list."""
+
+    def setUp(self):
+        set_rate('USD', 'TOMAN', Decimal('100000'), effective_at=timezone.now(), source='test')
+        self.customer = make_customer()
+        self.doctor = Service.objects.create(name='Doctor', price_usd=Decimal('500'))
+        self.facial = Service.objects.create(name='Facial', price_usd=Decimal('300'))
+        self.package = Package.objects.create(name='Duo', price_usd=Decimal('800'))
+        PackageService.objects.create(package=self.package, service=self.doctor)
+        PackageService.objects.create(package=self.package, service=self.facial)
+
+    def test_derived_price_sums_the_package_services(self):
+        from finance.services.payments import derived_charge_usd
+
+        self.assertEqual(derived_charge_usd(package=self.package), Decimal('800.00'))
+
+    def test_checkout_with_a_package_creates_the_sale(self):
+        sale = payments.checkout(
+            customer=self.customer, amount_usd=Decimal('800'), package=self.package,
+            components=[{'method': 'cash', 'amount_usd': Decimal('800')}],
+        )
+        self.assertEqual(sale.amount_usd, Decimal('800.00'))
+        self.assertEqual(Sale.objects.count(), 1)
+
+    def test_strict_checkout_rejects_overcharging_a_package(self):
+        from finance.services.payments import PaymentError
+
+        with self.assertRaises(PaymentError):
+            payments.checkout(
+                customer=self.customer, amount_usd=Decimal('900'), package=self.package,
+                components=[{'method': 'cash', 'amount_usd': Decimal('900')}],
+                strict_pricing=True,
+            )
+        self.assertEqual(Sale.objects.count(), 0)
+
+    def test_package_without_services_falls_back_to_its_product_items(self):
+        from inventory.models import Product
+
+        product = Product.objects.create(
+            name='Kit', sku='PKG-KIT', unit_price=Decimal('20'), cost_usd=Decimal('4'),
+            count=Decimal('10'),
+        )
+        from finance.models import PackageItem
+
+        PackageItem.objects.create(package=self.package, product=product, quantity=Decimal('3'))
+        self.package.package_services.all().delete()
+
+        from finance.services.payments import derived_charge_usd
+
+        self.assertEqual(derived_charge_usd(package=self.package), Decimal('12.00'))
 
 
 class ReportingServiceTests(TestCase):

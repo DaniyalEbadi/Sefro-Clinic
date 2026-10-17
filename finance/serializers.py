@@ -1,6 +1,8 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from rest_framework import serializers
+
+from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
 from .models import (
     ExchangeRate,
@@ -33,12 +35,25 @@ from .models import (
 
 
 class ExchangeRateSerializer(serializers.ModelSerializer):
+    effective_at = ShamsiDateTimeField(help_text='Shamsi datetime "YYYY-MM-DD HH:MM".')
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = ExchangeRate
         fields = ['id', 'currency_from', 'currency_to', 'rate', 'effective_at', 'source', 'is_active', 'created_at']
 
 
 class WalletRewardRuleSerializer(serializers.ModelSerializer):
+    start_date = ShamsiDateField(
+        required=False, allow_null=True,
+        help_text='Shamsi "YYYY-MM-DD"; rule active from the start of this day (inclusive).',
+    )
+    end_date = ShamsiDateField(
+        required=False, allow_null=True,
+        help_text='Shamsi "YYYY-MM-DD"; rule active through the end of this day (inclusive).',
+    )
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = WalletRewardRule
         fields = [
@@ -49,6 +64,8 @@ class WalletRewardRuleSerializer(serializers.ModelSerializer):
 
 class WalletSerializer(serializers.ModelSerializer):
     customer_name = serializers.SerializerMethodField()
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = Wallet
@@ -59,6 +76,8 @@ class WalletSerializer(serializers.ModelSerializer):
 
 
 class WalletTransactionSerializer(serializers.ModelSerializer):
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = WalletTransaction
         fields = [
@@ -72,6 +91,7 @@ class PackageSerializer(serializers.ModelSerializer):
     exchange_rate = serializers.SerializerMethodField()
     services = serializers.SerializerMethodField()
     items = serializers.SerializerMethodField()
+    created_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = Package
@@ -150,6 +170,8 @@ class WelcomePackItemSerializer(serializers.ModelSerializer):
     unit_cost_toman = serializers.SerializerMethodField(read_only=True)
     line_cost_usd = serializers.SerializerMethodField(read_only=True)
     line_cost_toman = serializers.SerializerMethodField(read_only=True)
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = WelcomePackItem
@@ -213,6 +235,8 @@ class WelcomePackSerializer(serializers.ModelSerializer):
     exchange_rate = serializers.SerializerMethodField()
     items = WelcomePackItemSerializer(many=True, read_only=True)
     created_by_name = serializers.SerializerMethodField()
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = WelcomePack
@@ -256,6 +280,8 @@ class WelcomePackUsageSerializer(serializers.ModelSerializer):
     welcome_pack_name = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     issued_by_name = serializers.SerializerMethodField()
+    issued_at = ShamsiDateTimeField(read_only=True)
+    created_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = WelcomePackUsage
@@ -278,22 +304,59 @@ class WelcomePackUsageSerializer(serializers.ModelSerializer):
 
 
 class ProductCostHistorySerializer(serializers.ModelSerializer):
+    effective_from = ShamsiDateField(read_only=True)
+    effective_to = ShamsiDateField(read_only=True, allow_null=True)
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = ProductCostHistory
         fields = ['id', 'product', 'cost_usd', 'effective_from', 'effective_to', 'created_at']
 
 
 class ProductUsageSerializer(serializers.ModelSerializer):
+    customer_name = serializers.SerializerMethodField()
+    unit_cost_toman_snapshot = serializers.SerializerMethodField()
+    total_cost_toman_snapshot = serializers.SerializerMethodField()
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = ProductUsage
         fields = [
             'id', 'product', 'visit', 'service', 'package_sale', 'welcome_pack_usage',
+            'customer', 'customer_name',
             'quantity', 'unit_cost_usd_snapshot', 'total_cost_usd_snapshot',
+            'unit_cost_toman_snapshot', 'total_cost_toman_snapshot',
             'exchange_rate_snapshot', 'is_commission', 'created_at',
         ]
 
+    def get_customer_name(self, obj):
+        return str(obj.customer) if obj.customer else None
+
+    def _toman(self, obj, usd_attr, toman_attr):
+        """Point-in-time Toman price: prefer the stored snapshot, derive for
+        rows written before the Toman columns existed."""
+        stored = getattr(obj, toman_attr)
+        if stored:
+            return stored
+        rate = obj.exchange_rate_snapshot
+        usd = getattr(obj, usd_attr, None)
+        if not rate or usd is None:
+            return Decimal('0')
+        try:
+            return (Decimal(str(usd)) * Decimal(str(rate))).quantize(Decimal('0.01'))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal('0')
+
+    def get_unit_cost_toman_snapshot(self, obj):
+        return self._toman(obj, 'unit_cost_usd_snapshot', 'unit_cost_toman_snapshot')
+
+    def get_total_cost_toman_snapshot(self, obj):
+        return self._toman(obj, 'total_cost_usd_snapshot', 'total_cost_toman_snapshot')
+
 
 class SaleSerializer(serializers.ModelSerializer):
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = Sale
         fields = [
@@ -304,6 +367,8 @@ class SaleSerializer(serializers.ModelSerializer):
 
 
 class PaymentComponentSerializer(serializers.ModelSerializer):
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = PaymentComponent
         fields = ['id', 'sale', 'method', 'amount_usd', 'wallet_transaction', 'created_at']
@@ -318,6 +383,9 @@ class ExpenseCategorySerializer(serializers.ModelSerializer):
 class ExpenseSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     approved_by_name = serializers.SerializerMethodField()
+    expense_date = ShamsiDateField(help_text='Shamsi "YYYY-MM-DD" business date of the expense.')
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = Expense
@@ -337,6 +405,9 @@ class ExpenseSerializer(serializers.ModelSerializer):
 
 
 class ProductPurchaseSerializer(serializers.ModelSerializer):
+    purchase_date = ShamsiDateField(help_text='Shamsi "YYYY-MM-DD" business date of the purchase.')
+    created_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = ProductPurchase
         fields = [
@@ -463,6 +534,9 @@ class StaffCompensationRuleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at']
 
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
+
     def validate(self, attrs):
         lines = attrs.get('product_lines')
         if lines:
@@ -515,6 +589,14 @@ class StaffPayoutSerializer(serializers.ModelSerializer):
     total_payout_usd = serializers.SerializerMethodField()
     total_payout_toman = serializers.SerializerMethodField()
     payout_products = StaffPayoutProductSerializer(many=True, read_only=True, source='product_lines')
+    salary_period = ShamsiDateField(
+        required=False, allow_null=True,
+        help_text='Shamsi "YYYY-MM-DD" — first day of the salary month.',
+    )
+    approved_at = ShamsiDateTimeField(required=False, allow_null=True)
+    paid_at = ShamsiDateTimeField(required=False, allow_null=True)
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = StaffPayout
@@ -551,6 +633,9 @@ class StaffPayoutSerializer(serializers.ModelSerializer):
 
 
 class OperatingExpenseCategorySerializer(serializers.ModelSerializer):
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = OperatingExpenseCategory
         fields = ['id', 'name', 'slug', 'description', 'is_active', 'sort_order', 'created_at', 'updated_at']
@@ -564,6 +649,9 @@ class OperatingExpenseSerializer(serializers.ModelSerializer):
     # service layer, which returns the original record for the same key —
     # mirroring the checkout/Sale idempotency pattern.
     idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=64)
+    expense_date = ShamsiDateField(help_text='Shamsi "YYYY-MM-DD" business date of the expense.')
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = OperatingExpense
@@ -619,6 +707,7 @@ class PurchaseOrderItemSerializer(serializers.ModelSerializer):
     product_name = serializers.SerializerMethodField()
     unit_cost_toman = serializers.SerializerMethodField()
     total_cost_toman = serializers.SerializerMethodField()
+    created_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = PurchaseOrderItem
@@ -675,9 +764,13 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     exchange_rate = serializers.SerializerMethodField()
     total_cost_toman = serializers.SerializerMethodField()
-    order_date = serializers.DateField(
-        required=False, help_text='Gregorian business date of the order; defaults to today.',
+    order_date = ShamsiDateField(
+        required=False,
+        help_text='Shamsi "YYYY-MM-DD" business date of the order; defaults to today.',
     )
+    received_date = ShamsiDateField(read_only=True, allow_null=True)
+    created_at = ShamsiDateTimeField(read_only=True)
+    updated_at = ShamsiDateTimeField(read_only=True)
     # Declared explicitly (no UniqueValidator) so a retried create reaches the
     # service layer, which returns the original order for the same key.
     idempotency_key = serializers.CharField(required=False, allow_blank=True, max_length=64)
@@ -722,3 +815,20 @@ class PurchaseOrderSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError('At least one product line is required.')
         return value
+
+
+class MonthlyCloseRequestSerializer(serializers.Serializer):
+    """Body for POST /reports/monthly-close/close/ and .../reopen/.
+
+    Only past Shamsi months can be closed (the service enforces this and
+    replies 400); reopen additionally requires a reason, which is written
+    into the audit log.
+    """
+
+    year = serializers.IntegerField(min_value=1300, max_value=1600)
+    month = serializers.IntegerField(min_value=1, max_value=12)
+    note = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class MonthlyCloseReopenSerializer(MonthlyCloseRequestSerializer):
+    reason = serializers.CharField(required=True, allow_blank=False, max_length=500)

@@ -130,11 +130,19 @@ class ListDateFilterTests(TestCase):
         response = self.client.get(PAYOUTS_URL, {'date_from': from_date, 'staff': self.staff.id})
         self.assertEqual(self._ids(PAYOUTS_URL, response), {self.new_payout.id})
 
-    def test_gregorian_start_date_alias_still_works(self):
-        # start_date/end_date stay Gregorian, matching the report endpoints.
-        three_days_ago = (timezone.localtime(timezone.now()) - timedelta(days=3)).date().isoformat()
+    def test_start_date_end_date_are_jalali_too(self):
+        # start_date/end_date share the Shamsi calendar with date_from/date_to:
+        # one calendar for every date parameter in the app.
+        three_days_ago = shamsi_of(timezone.localtime(timezone.now()) - timedelta(days=3))
         response = self.client.get(PAYOUTS_URL, {'start_date': three_days_ago})
         self.assertEqual(self._ids(PAYOUTS_URL, response), {self.new_payout.id})
+
+    def test_gregorian_start_date_is_rejected(self):
+        # A Gregorian start_date is rejected with 400, never silently
+        # reinterpreted as a Jalali date.
+        today = timezone.localtime(timezone.now()).date().isoformat()
+        response = self.client.get(PAYOUTS_URL, {'start_date': today})
+        self.assertEqual(response.status_code, 400)
 
     def test_gregorian_date_sent_as_jalali_is_rejected(self):
         # A Gregorian value must never be silently reinterpreted as a Jalali
@@ -156,7 +164,7 @@ class ExpenseUpdateRepricingTests(TestCase):
     def _create(self, amount='10.00'):
         return self.client.post(EXPENSES_URL, {
             'category': self.category.id, 'amount_usd': amount,
-            'expense_date': timezone.localtime(timezone.now()).date().isoformat(),
+            'expense_date': shamsi_of(timezone.now()),
             'vendor': 'Test vendor',
         }, format='json')
 
@@ -185,7 +193,7 @@ class ExpenseUpdateRepricingTests(TestCase):
         created = self._create('10.00')
         payload = {
             'category': self.category.id, 'amount_usd': '12.00',
-            'expense_date': timezone.localtime(timezone.now()).date().isoformat(),
+            'expense_date': shamsi_of(timezone.now()),
             'vendor': 'Test vendor', 'status': created.data['status'],
         }
         response = self.client.put(f'{EXPENSES_URL}{created.data["id"]}/', payload, format='json')

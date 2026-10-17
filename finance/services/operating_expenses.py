@@ -16,6 +16,7 @@ from django.db import transaction
 
 from ..models import OperatingExpense
 from .exchange_rates import get_rate, to_toman
+from .periods_guard import ensure_open
 
 
 class OperatingExpenseError(Exception):
@@ -34,7 +35,6 @@ def _toman_snapshot(amount_usd: Decimal, rate: Optional[Decimal]) -> Decimal:
     return to_toman(amount_usd, rate)
 
 
-@transaction.atomic
 def create_operating_expense(
     *,
     created_by,
@@ -61,29 +61,36 @@ def create_operating_expense(
         if existing is not None:
             return existing
 
-    rate = resolve_operating_expense_rate(rate)
-    return OperatingExpense.objects.create(
-        created_by=created_by,
-        category=category,
-        title=title,
-        description=description,
-        amount_usd=amount_usd,
-        exchange_rate=rate,
-        amount_toman=_toman_snapshot(amount_usd, rate),
-        expense_date=expense_date,
-        payment_method=payment_method,
-        vendor=vendor,
-        receipt=receipt,
-        notes=notes,
-        idempotency_key=idempotency_key or None,
-    )
+    # Outside the transaction below: a refused attempt must leave its audit
+    # row even though the enclosing block rolls back on the raise. (A pure
+    # idempotent replay never reaches here -- it wrote nothing to freeze.)
+    ensure_open(expense_date, action='record an operating expense', object_repr=title or '')
+
+    with transaction.atomic():
+        rate = resolve_operating_expense_rate(rate)
+        return OperatingExpense.objects.create(
+            created_by=created_by,
+            category=category,
+            title=title,
+            description=description,
+            amount_usd=amount_usd,
+            exchange_rate=rate,
+            amount_toman=_toman_snapshot(amount_usd, rate),
+            expense_date=expense_date,
+            payment_method=payment_method,
+            vendor=vendor,
+            receipt=receipt,
+            notes=notes,
+            idempotency_key=idempotency_key or None,
+        )
 
 
-@transaction.atomic
 def update_operating_expense(expense: OperatingExpense, **fields) -> OperatingExpense:
     """Apply editable fields. If the amount changes, the Toman value is
     recomputed against the expense's ORIGINAL exchange-rate snapshot so the
     historical rate is never silently repriced to today's rate."""
+    ensure_open(expense.expense_date, action='edit an operating expense',
+                object_repr=f'OperatingExpense#{expense.id}')
     category = fields.get('category')
     if category is not None and category != expense.category and not category.is_active:
         raise OperatingExpenseError('Cannot move an expense to an inactive category.')
@@ -103,14 +110,24 @@ def update_operating_expense(expense: OperatingExpense, **fields) -> OperatingEx
         if name in fields:
             setattr(expense, name, fields[name])
 
+    # Moving an expense into an already-closed month would inject cost into
+    # finalized books; the original month is guarded above.
+    if 'expense_date' in fields and fields['expense_date'] is not None:
+        ensure_open(fields['expense_date'], action='move an operating expense into that month',
+                    object_repr=f'OperatingExpense#{expense.id}')
+
     if amount_changed:
         expense.amount_toman = _toman_snapshot(expense.amount_usd, expense.exchange_rate)
 
-    expense.save()
+    with transaction.atomic():
+        expense.save()
     return expense
 
 
-@transaction.atomic
 def delete_operating_expense(expense: OperatingExpense) -> None:
     # The global audit signals record the DELETE with the acting user.
-    expense.delete()
+    # Guard outside the transaction so the BLOCKED audit survives the raise.
+    ensure_open(expense.expense_date, action='delete an operating expense',
+                object_repr=f'OperatingExpense#{expense.id}')
+    with transaction.atomic():
+        expense.delete()

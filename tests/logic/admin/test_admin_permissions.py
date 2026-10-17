@@ -166,7 +166,10 @@ class AdminReportsAccessTests(TestCase):
         self.assertEqual(self.client.get('/api/reports/quarterly/').status_code, 200)
 
     def test_reports_yearly(self):
-        self.assertEqual(self.client.get('/api/reports/yearly/').status_code, 200)
+        # Deprecated: still authenticated-access, but answers 410 Gone and
+        # points at /api/finance/reports/monthly-close/ instead.
+        response = self.client.get('/api/reports/yearly/')
+        self.assertEqual(response.status_code, 410)
 
     def test_reports_customers(self):
         self.assertEqual(self.client.get('/api/reports/customers/').status_code, 200)

@@ -1,22 +1,13 @@
+from datetime import date, datetime
+
 import jdatetime
 from django.utils import timezone
 from rest_framework import serializers
 
+from Sefro_Clinic.periods import SHAMSI_YEAR_MAX, SHAMSI_YEAR_MIN  # noqa: F401  (re-exported)
+
 SHAMSI_DATETIME_FORMAT = '%Y-%m-%d %H:%M'
 SHAMSI_DATE_FORMAT = '%Y-%m-%d'
-
-# Accepted Jalali (Shamsi) year window for date-only inputs.
-#
-# The API contract says inbound date strings are Shamsi, but a Gregorian
-# string such as "2026-09-28" parses *structurally* as the Jalali date
-# 2026-09-28 and silently converts to Gregorian 2647-12-19 — the exact
-# corruption behind the legacy year-2647 visits. A real clinic date can never
-# fall outside this window:
-#   1300 -> Gregorian 1921 (adoption of the Iranian calendar), inclusive so
-#           existing far-past report filters keep working;
-#   1499 -> Gregorian 2120.
-SHAMSI_YEAR_MIN = 1300
-SHAMSI_YEAR_MAX = 1499
 
 
 def greg_to_shamsi_dt(value):
@@ -40,16 +31,24 @@ def greg_to_shamsi_date(value):
 def shamsi_to_greg_dt(value):
     if not value:
         return None
-    try:
-        dt = jdatetime.datetime.strptime(str(value), SHAMSI_DATETIME_FORMAT)
-        return dt.togregorian()
-    except ValueError:
-        raise serializers.ValidationError(f'Invalid Shamsi datetime format. Use {SHAMSI_DATETIME_FORMAT}')
+    if isinstance(value, datetime):
+        return value
+    for fmt in (SHAMSI_DATETIME_FORMAT, '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            dt = jdatetime.datetime.strptime(str(value), fmt)
+            return dt.togregorian()
+        except ValueError:
+            continue
+    raise serializers.ValidationError(f'Invalid Shamsi datetime format. Use {SHAMSI_DATETIME_FORMAT}')
 
 
 def shamsi_to_greg_date(value):
     if not value:
         return None
+    if isinstance(value, date):
+        # Programmatic callers may already hold a Gregorian date (e.g. the
+        # service layer); only strings are interpreted as Shamsi.
+        return value
     try:
         d = jdatetime.datetime.strptime(str(value), SHAMSI_DATE_FORMAT).date()
     except ValueError:

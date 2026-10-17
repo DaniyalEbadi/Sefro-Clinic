@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from Sefro_Clinic.fields import ShamsiDateTimeField
+
 from .models import (
     ContactMessage,
     SitePackage,
@@ -61,6 +63,7 @@ class ContactMessageSerializer(serializers.ModelSerializer):
         regex=r'^09\d{9}$',
         error_messages={'invalid': 'شماره موبایل معتبر نیست. نمونه: 09121234567'},
     )
+    created_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
         model = ContactMessage

@@ -2,8 +2,10 @@ from collections import defaultdict
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models import Count, Sum
 from django.utils import timezone
+
+from logs.models import AuditLog
 
 from ..models import (
     StaffCompensationRule,
@@ -11,8 +13,9 @@ from ..models import (
     StaffPayoutProduct,
 )
 from .exchange_rates import get_current_usd_to_toman_rate
-from .financials import calculate_visit_financials, visit_requires_staff
+from .financials import PAYOUT_OBLIGATION_STATUSES, calculate_visit_financials, visit_requires_staff
 from .inventory import record_product_usage
+from .periods_guard import audit_event, ensure_open
 
 
 class CompensationError(Exception):
@@ -230,6 +233,13 @@ def _upsert_session_payout(*, visit, staff, service, role, financials, rate, pay
 
     changed = [field for field in _SESSION_AMOUNT_FIELDS if getattr(payout, field) != defaults[field]]
     if changed:
+        # Re-pricing an existing payout rewrites a liability line. If that
+        # line was booked into a now-closed month, the closed books must not
+        # move: reopen the month first.
+        ensure_open(
+            payout.created_at, action='re-price a staff payout',
+            object_repr=f'StaffPayout#{payout.id}',
+        )
         for field in changed:
             setattr(payout, field, defaults[field])
         payout.save(update_fields=[*changed, 'updated_at'])
@@ -252,16 +262,24 @@ def cancel_payouts_for_visit(visit, reason=''):
     ).exclude(payout_kind=StaffPayout.PayoutKind.MONTHLY_SALARY)
     changed = 0
     for payout in payouts:
+        ensure_open(
+            payout.created_at, action='cancel a staff payout',
+            object_repr=f'StaffPayout#{payout.id}',
+        )
         payout.status = StaffPayout.Status.CANCELLED
         notes = (payout.notes or '').strip()
         message = f'Cancelled: {reason}' if reason else 'Cancelled.'
         payout.notes = f'{notes} {message}'.strip()
         payout.save(update_fields=['status', 'notes', 'updated_at'])
+        audit_event(
+            None, AuditLog.Action.UPDATE, 'finance.staffpayout', payout.id,
+            event='PAYOUT_CANCEL', object_repr=str(payout),
+            reason=reason or None, visit=visit.pk,
+        )
         changed += 1
     return changed
 
 
-@transaction.atomic
 def generate_visit_payouts(visit, actor=None, strict_staff=True):
     """Create/update the staff compensation owed for one completed visit.
 
@@ -276,6 +294,26 @@ def generate_visit_payouts(visit, actor=None, strict_staff=True):
     duplicates. Rows that were already approved or paid keep that state and
     their settled amount.
     """
+    # Pre-flight OUTSIDE the atomic body: re-pricing an existing payout
+    # rewrites a liability line booked into its own accounting month, so a
+    # visit from a closed month cannot be regenerated -- and the refusal's
+    # audit row must outlive the rollback.
+    if visit.status == 'completed':
+        unsettled = StaffPayout.objects.filter(
+            visit=visit, status__in=[
+                StaffPayout.Status.PENDING, StaffPayout.Status.APPROVED,
+            ],
+        ).exclude(payout_kind=StaffPayout.PayoutKind.MONTHLY_SALARY)
+        for payout in unsettled:
+            ensure_open(
+                payout.created_at, action='re-price a staff payout',
+                object_repr=f'StaffPayout#{payout.id}',
+            )
+    return _generate_visit_payouts_locked(visit, actor=actor, strict_staff=strict_staff)
+
+
+@transaction.atomic
+def _generate_visit_payouts_locked(visit, actor=None, strict_staff=True):
     if visit.status != 'completed':
         return []
 
@@ -359,7 +397,30 @@ def generate_visit_payouts(visit, actor=None, strict_staff=True):
     return created_payouts
 
 
-def staff_payout_summary(start=None, end=None, staff_id=None, role=None):
+#: Statuses that still represent money the clinic owes. Taken straight from
+#: ``financials.PAYOUT_OBLIGATION_STATUSES`` so the payout summary and the
+#: profit reports can never drift apart: a CANCELLED payout is a voided
+#: obligation and must never inflate "what we owe".
+PAYOUT_STATUSES_OWED = list(PAYOUT_OBLIGATION_STATUSES)
+
+#: Query value that turns the status filter off (the raw ledger).
+STATUS_ALL = 'all'
+
+
+def payout_status_filter(status):
+    """Turn a ``status`` query value into a list to filter on, or ``None``.
+
+    Omitted/empty -> the owed set above. ``all`` -> no filter, for callers who
+    want to inspect cancelled rows too. Anything else is taken as one status.
+    """
+    if not status:
+        return list(PAYOUT_STATUSES_OWED)
+    if status == STATUS_ALL:
+        return None
+    return [status]
+
+
+def _payout_range(start, end):
     from datetime import time
 
     if start and end:
@@ -367,16 +428,30 @@ def staff_payout_summary(start=None, end=None, staff_id=None, role=None):
             start = timezone.make_aware(timezone.datetime.combine(start, time.min))
         if hasattr(end, 'date') is False:
             end = timezone.make_aware(timezone.datetime.combine(end, time.max))
-    else:
-        now = timezone.now()
-        start = start or timezone.make_aware(timezone.datetime.combine(now.date(), time.min))
-        end = end or timezone.make_aware(timezone.datetime.combine(now.date(), time.max))
+        return start, end
+    now = timezone.now()
+    start = start or timezone.make_aware(timezone.datetime.combine(now.date(), time.min))
+    end = end or timezone.make_aware(timezone.datetime.combine(now.date(), time.max))
+    return start, end
+
+
+def staff_payout_summary(start=None, end=None, staff_id=None, role=None, status=None):
+    """Total the staff obligation for a period.
+
+    Same date convention as every other report (a bare call means *today*) and
+    the same status convention as ``profit-by-staff``: only payouts that are
+    still owed. Pass ``status='all'`` to see the raw ledger.
+    """
+    start, end = _payout_range(start, end)
 
     qs = StaffPayout.objects.filter(created_at__gte=start, created_at__lte=end)
     if staff_id:
         qs = qs.filter(staff_id=staff_id)
     if role:
         qs = qs.filter(role=role)
+    statuses = payout_status_filter(status)
+    if statuses is not None:
+        qs = qs.filter(status__in=statuses)
 
     agg = qs.aggregate(
         total_cash_usd=Sum('payout_cash_usd'),
@@ -397,24 +472,22 @@ def staff_payout_summary(start=None, end=None, staff_id=None, role=None):
     }
 
 
-def staff_payout_detail(start=None, end=None, staff_id=None):
-    from datetime import time
+def staff_payout_detail(start=None, end=None, staff_id=None, status=None):
+    """One row per payout for the period, on the same footing as the summary.
 
-    if start and end:
-        if hasattr(start, 'date') is False:
-            start = timezone.make_aware(timezone.datetime.combine(start, time.min))
-        if hasattr(end, 'date') is False:
-            end = timezone.make_aware(timezone.datetime.combine(end, time.max))
-    else:
-        now = timezone.now()
-        start = start or timezone.make_aware(timezone.datetime.combine(now.date(), time.min))
-        end = end or timezone.make_aware(timezone.datetime.combine(now.date(), time.max))
+    Shares the range and status handling of :func:`staff_payout_summary` so the
+    lines always add back up to the totals.
+    """
+    start, end = _payout_range(start, end)
 
     qs = StaffPayout.objects.filter(created_at__gte=start, created_at__lte=end).select_related(
         'staff', 'visit', 'service', 'payout_product'
     )
     if staff_id:
         qs = qs.filter(staff_id=staff_id)
+    statuses = payout_status_filter(status)
+    if statuses is not None:
+        qs = qs.filter(status__in=statuses)
 
     rows = list(qs.values(
         'id', 'staff__username', 'staff__first_name', 'staff__last_name',
@@ -442,3 +515,126 @@ def staff_payout_detail(start=None, end=None, staff_id=None):
     for row in rows:
         row['payout_products'] = lines_by_payout.get(row['id'], [])
     return rows
+
+
+def _staff_display_name(row):
+    full = ' '.join(
+        part for part in (row.get('staff__first_name'), row.get('staff__last_name')) if part
+    )
+    return full or row.get('staff__username') or str(row.get('staff_id'))
+
+
+def operator_month_payouts(start, end, status=None, staff_id=None, role=None):
+    """Staff obligation grouped per (operator, role) for a period.
+
+    One grouped query, folded into one row per operator+role, so a monthly
+    report can show for every operator what they are owed, what is already
+    paid, and how much comes from per-visit earnings versus a monthly salary.
+
+    Anchored on ``StaffPayout.created_at`` - the same anchor as
+    ``financials.staff_compensation_totals`` - so these rows add back up to
+    ``build_report['staff_compensation']`` instead of telling a second story.
+    """
+    start, end = _payout_range(start, end)
+
+    qs = StaffPayout.objects.filter(created_at__gte=start, created_at__lte=end)
+    if staff_id:
+        qs = qs.filter(staff_id=staff_id)
+    if role:
+        qs = qs.filter(role=role)
+    statuses = payout_status_filter(status)
+    if statuses is not None:
+        qs = qs.filter(status__in=statuses)
+
+    grouped: dict = {}
+    for row in qs.values(
+        'staff_id', 'staff__username', 'staff__first_name', 'staff__last_name',
+        'role', 'status', 'payout_kind',
+    ).annotate(
+        cash_usd=Sum('payout_cash_usd'),
+        cash_toman=Sum('payout_cash_toman'),
+        product_usd=Sum('payout_product_value_usd'),
+        product_toman=Sum('payout_product_value_toman'),
+        count=Count('id'),
+    ):
+        key = (row['staff_id'], row['role'])
+        entry = grouped.setdefault(key, {
+            'staff_id': row['staff_id'],
+            'staff_name': _staff_display_name(row),
+            'role': row['role'],
+            'session_usd': Decimal('0'),
+            'session_toman': Decimal('0'),
+            'salary_usd': Decimal('0'),
+            'salary_toman': Decimal('0'),
+            'cash_usd': Decimal('0'),
+            'cash_toman': Decimal('0'),
+            'product_usd': Decimal('0'),
+            'product_toman': Decimal('0'),
+            'payout_count': 0,
+            'by_status': {},
+        })
+
+        cash_usd = row['cash_usd'] or Decimal('0')
+        cash_toman = row['cash_toman'] or Decimal('0')
+        product_usd = row['product_usd'] or Decimal('0')
+        product_toman = row['product_toman'] or Decimal('0')
+        owed_usd = cash_usd + product_usd
+        owed_toman = cash_toman + product_toman
+
+        entry['cash_usd'] += cash_usd
+        entry['cash_toman'] += cash_toman
+        entry['product_usd'] += product_usd
+        entry['product_toman'] += product_toman
+        entry['payout_count'] += row['count']
+
+        if row['payout_kind'] == StaffPayout.PayoutKind.MONTHLY_SALARY:
+            entry['salary_usd'] += owed_usd
+            entry['salary_toman'] += owed_toman
+        else:
+            entry['session_usd'] += owed_usd
+            entry['session_toman'] += owed_toman
+
+        status_bucket = entry['by_status'].setdefault(
+            row['status'], {'usd': Decimal('0'), 'toman': Decimal('0'), 'count': 0},
+        )
+        status_bucket['usd'] += owed_usd
+        status_bucket['toman'] += owed_toman
+        status_bucket['count'] += row['count']
+
+    rows = []
+    total_usd = Decimal('0')
+    total_toman = Decimal('0')
+    total_count = 0
+    for entry in grouped.values():
+        entry['owed_usd'] = (entry['cash_usd'] + entry['product_usd']).quantize(Decimal('0.01'))
+        entry['owed_toman'] = (entry['cash_toman'] + entry['product_toman']).quantize(Decimal('0.01'))
+        for field in (
+            'session_usd', 'session_toman', 'salary_usd', 'salary_toman',
+            'cash_usd', 'cash_toman', 'product_usd', 'product_toman',
+        ):
+            entry[field] = entry[field].quantize(Decimal('0.01'))
+        for bucket in entry['by_status'].values():
+            bucket['usd'] = bucket['usd'].quantize(Decimal('0.01'))
+            bucket['toman'] = bucket['toman'].quantize(Decimal('0.01'))
+        for status, name in (
+            (StaffPayout.Status.PAID, 'paid'),
+            (StaffPayout.Status.PENDING, 'pending'),
+            (StaffPayout.Status.APPROVED, 'approved'),
+        ):
+            bucket = entry['by_status'].get(status) or {
+                'usd': Decimal('0'), 'toman': Decimal('0'),
+            }
+            entry[f'{name}_usd'] = bucket['usd']
+            entry[f'{name}_toman'] = bucket['toman']
+        total_usd += entry['owed_usd']
+        total_toman += entry['owed_toman']
+        total_count += entry['payout_count']
+        rows.append(entry)
+
+    rows.sort(key=lambda r: (r['role'], r['staff_name']))
+    return {
+        'rows': rows,
+        'total_usd': total_usd.quantize(Decimal('0.01')),
+        'total_toman': total_toman.quantize(Decimal('0.01')),
+        'payout_count': total_count,
+    }

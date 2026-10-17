@@ -4,9 +4,12 @@ from typing import Optional
 from django.db import transaction
 from django.utils import timezone
 
+from logs.models import AuditLog
+
 from ..models import PaymentComponent, Sale, WalletTransaction
 from .exchange_rates import get_rate, to_toman
 from .exchange_rates import to_usd as from_toman
+from .periods_guard import audit_event, ensure_open
 from .wallet import InsufficientFunds, debit, grant_reward, reverse_reward
 
 
@@ -58,9 +61,9 @@ def derived_charge_usd(*, visit=None, package=None, rate: Optional[Decimal] = No
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
     total = Decimal('0')
     if package is not None:
-        for service in package.services.select_related('service').all():
-            total += Decimal(service.price_usd or 0)
-        if not package.services.exists():
+        for service in package.package_services.select_related('service').all():
+            total += Decimal(service.service.price_usd or 0)
+        if not package.package_services.exists():
             # Package with no explicit service list: fall back to the sum of its
             # product items priced at their clinic cost, else 0.
             for item in package.items.select_related('product').all():
@@ -203,8 +206,23 @@ def checkout(
     return sale
 
 
+def refund_sale(sale: Sale, *, refund_amount_usd: Optional[Decimal] = None, reason: str = '', user=None):
+    # A refund also cancels the visit's pending payouts, which live in the
+    # sale's own accounting month -- so refunding into a closed month would
+    # silently rewrite its staff cost. Blocked (and audited) until reopened.
+    # The guard runs OUTSIDE the atomic body below, so its audit row survives
+    # the rollback the refusal triggers.
+    ensure_open(
+        sale.created_at, action='refund this sale', user=user,
+        object_repr=f'Sale#{sale.id}',
+    )
+    return _refund_sale_locked(
+        sale, refund_amount_usd=refund_amount_usd, reason=reason, user=user,
+    )
+
+
 @transaction.atomic
-def refund_sale(sale: Sale, *, refund_amount_usd: Optional[Decimal] = None, reason: str = ''):
+def _refund_sale_locked(sale: Sale, *, refund_amount_usd: Optional[Decimal] = None, reason: str = '', user=None):
     if sale.status != Sale.Status.PAID:
         # Refund sales carry no back-reference to the original sale, so the
         # already-refunded total cannot be recomputed. Allowing a second refund
@@ -303,4 +321,12 @@ def refund_sale(sale: Sale, *, refund_amount_usd: Optional[Decimal] = None, reas
         else Sale.Status.PARTIALLY_REFUNDED
     )
     sale.save(update_fields=['status'])
+    audit_event(
+        user, AuditLog.Action.CREATE, 'finance.sale', refund.id,
+        event='SALE_REFUND',
+        object_repr=f'Sale#{refund.id}',
+        original_sale=sale.id,
+        reason=reason or None,
+        amount_usd=str(refund_amount_usd),
+    )
     return refund
