@@ -37,7 +37,7 @@ from Sefro_Clinic.periods import (
     shamsi_period_range as _period_range,
 )
 
-from .models import Customer, Payment, Service, ServiceCategory, Visit
+from .models import Customer, Payment, Service, ServiceCategory, Visit, VisitService
 from .serializers import (
     CustomerSerializer,
     PaymentSerializer,
@@ -45,6 +45,16 @@ from .serializers import (
     ServiceSerializer,
     VisitSerializer,
 )
+
+
+def _uncovered_operator_message(uncovered_roles):
+    """Shared 400 text for a visit missing the operator(s) its services need."""
+    roles = ', '.join(uncovered_roles)
+    return (
+        'This visit has a service that requires an operator, but no matching staff '
+        f'member is assigned for: {roles}. Assign staff (or an operator per service) '
+        'before completing it.'
+    )
 
 
 def _shamsi_today_range():
@@ -539,7 +549,15 @@ class VisitViewSet(viewsets.ModelViewSet):
     queryset = (
         Visit.objects
         .select_related('customer', 'staff')
-        .prefetch_related('services', Prefetch('payments', queryset=Payment.objects.select_related('customer')))
+        .prefetch_related(
+            'services',
+            Prefetch('payments', queryset=Payment.objects.select_related('customer')),
+            # Serializes the per-service operator rows without an N+1 on list.
+            Prefetch(
+                'service_links',
+                queryset=VisitService.objects.select_related('service', 'staff'),
+            ),
+        )
     )
     serializer_class = VisitSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -554,20 +572,18 @@ class VisitViewSet(viewsets.ModelViewSet):
         A payload may carry ``status: "completed"`` in its POST; without this
         the visit reached COMPLETED with no payout at all — the same bypass
         ``perform_update`` closes for PATCH. The atomic block keeps a
-        rejected visit (compensable services, no staff) from persisting.
+        rejected visit (compensable services, no operator) from persisting.
         """
-        from finance.services import financials, staff_compensation
+        from finance.services import staff_compensation
 
         with transaction.atomic():
             visit = serializer.save()
             if visit.status != Visit.Status.COMPLETED:
                 return
-            if visit.staff:
-                staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
-            elif financials.visit_requires_staff(visit):
-                raise ValidationError(
-                    {'status': 'This visit has a service that requires a staff member. Assign staff before completing it.'}
-                )
+            uncovered = visit.resolve_operators()
+            if uncovered:
+                raise ValidationError({'status': _uncovered_operator_message(uncovered)})
+            staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
 
     def perform_update(self, serializer):
         """Update, then settle compensation if this write completed the visit.
@@ -576,26 +592,23 @@ class VisitViewSet(viewsets.ModelViewSet):
         staff payout at all, so compensation could be bypassed entirely by
         editing instead of using the complete action.
         """
-        was_completed = serializer.instance.status == Visit.Status.COMPLETED
+        previous_status = serializer.instance.status
         visit = serializer.save()
-        becoming_completed = (not was_completed) and visit.status == Visit.Status.COMPLETED
+        becoming_completed = (previous_status != Visit.Status.COMPLETED) and (
+            visit.status == Visit.Status.COMPLETED
+        )
         if not becoming_completed:
             return
         from finance.services import staff_compensation
 
-        if visit.staff:
-            staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
-        else:
+        uncovered = visit.resolve_operators()
+        if uncovered:
             # Keep the row consistent with the complete action: a compensable
-            # visit is never left completed with no staff and no payout.
-            from finance.services import financials
-
-            if financials.visit_requires_staff(visit):
-                visit.status = was_completed
-                visit.save(update_fields=['status'])
-                raise ValidationError(
-                    {'status': 'This visit has a service that requires a staff member. Assign staff before completing it.'}
-                )
+            # visit is never left completed without its operators' payouts.
+            visit.status = previous_status
+            visit.save(update_fields=['status'])
+            raise ValidationError({'status': _uncovered_operator_message(uncovered)})
+        staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -642,14 +655,16 @@ class VisitViewSet(viewsets.ModelViewSet):
     @extend_schema(responses=VisitSerializer)
     def complete(self, request, pk=None):
         visit = self.get_object()
-        # A visit whose services carry a compensation role must have a staff
-        # member, otherwise compensation would be silently skipped. This is
-        # rejected up front rather than completing with zero payout.
-        from finance.services import financials, staff_compensation
+        # A visit whose services carry a compensation role must resolve an
+        # operator for each of them (explicit, auto-assigned from the role, or
+        # the primary staff fallback), otherwise compensation would be silently
+        # skipped or booked against the wrong person. Rejected up front.
+        from finance.services import staff_compensation
 
-        if not visit.staff and financials.visit_requires_staff(visit):
+        uncovered = visit.resolve_operators()
+        if uncovered:
             return Response(
-                {'error': 'This visit has a service that requires a staff member. Assign staff before completing it.'},
+                {'error': _uncovered_operator_message(uncovered)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

@@ -13,7 +13,7 @@ from ..models import (
     StaffPayoutProduct,
 )
 from .exchange_rates import get_current_usd_to_toman_rate
-from .financials import PAYOUT_OBLIGATION_STATUSES, calculate_visit_financials, visit_requires_staff
+from .financials import PAYOUT_OBLIGATION_STATUSES, calculate_visit_financials
 from .inventory import record_product_usage
 from .periods_guard import audit_event, ensure_open
 
@@ -317,16 +317,19 @@ def _generate_visit_payouts_locked(visit, actor=None, strict_staff=True):
     if visit.status != 'completed':
         return []
 
-    staff = visit.staff
-    if not staff:
-        if strict_staff and visit_requires_staff(visit):
-            raise CompensationError(
-                'This visit has a service that requires a staff member, but no staff '
-                'is assigned. Assign staff before completing the visit so compensation '
-                'is not silently skipped.'
-            )
-        return []
+    # Resolve per-service operators first (idempotent: explicit assignments
+    # and role-based auto-assignment), then refuse a visit whose compensable
+    # services have no operator to pay — paying the wrong person or nobody
+    # must never happen silently.
+    uncovered = visit.resolve_operators()
+    if strict_staff and uncovered:
+        raise CompensationError(
+            'This visit has a service that requires an operator, but no matching staff '
+            f'member is assigned for: {", ".join(uncovered)}. Assign staff before '
+            'completing the visit so compensation is not silently skipped.'
+        )
 
+    operator_by_service = visit.service_operator_map()
     rate = get_rate()
     financials = calculate_visit_financials(visit, rate=rate)
     salary_period = timezone.localtime(visit.start_at).date().replace(day=1)
@@ -338,6 +341,11 @@ def _generate_visit_payouts_locked(visit, actor=None, strict_staff=True):
             continue
         service_financials = financials['services'].get(service.id)
         if service_financials is None:
+            continue
+        # The operator who performs THIS service: per-service assignment
+        # first, the visit's primary staff as the legacy fallback.
+        operator = operator_by_service.get(service.id) or visit.staff
+        if operator is None:
             continue
 
         try:
@@ -357,7 +365,7 @@ def _generate_visit_payouts_locked(visit, actor=None, strict_staff=True):
 
         if rule.calculation_type == StaffCompensationRule.CalculationType.MONTHLY_SALARY:
             payout, created = _upsert_monthly_salary_payout(
-                visit=visit, staff=staff, service=service, role=role,
+                visit=visit, staff=operator, service=service, role=role,
                 salary_period=salary_period, rate=rate,
                 payout_calc=payout_calc, payout_mode=payout_mode,
             )
@@ -367,7 +375,7 @@ def _generate_visit_payouts_locked(visit, actor=None, strict_staff=True):
                 created_payouts.append(payout)
         else:
             payout, created = _upsert_session_payout(
-                visit=visit, staff=staff, service=service, role=role,
+                visit=visit, staff=operator, service=service, role=role,
                 financials=service_financials, rate=rate,
                 payout_calc=payout_calc, payout_mode=payout_mode,
             )

@@ -60,7 +60,11 @@ BUDGETS = {
     # Deterministic budgets: exact numbers, stable across environments.
     'max_queries_customer_list': 5,
     'max_queries_customer_detail': 4,
-    'max_queries_visit_list': 4,
+    # 5 since the per-service operator rows joined the visit payload: the
+    # extra round-trip is the single Prefetch('service_links') query, and the
+    # N+1 guard on this endpoint lives in test_visit_list_prefetches_related
+    # (statements_matching('visits_services') <= 1 plus the duplicate check).
+    'max_queries_visit_list': 5,
     'max_queries_payment_list': 4,
     'max_queries_product_list': 3,
     'max_queries_product_search': 3,

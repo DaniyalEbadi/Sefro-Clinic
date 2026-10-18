@@ -1012,7 +1012,8 @@ class ProfitByStaffView(APIView):
       the payout summary on ``StaffPayout.created_at`` (when the debt was
       recorded), so a payout booked for a visit outside the window will
       differ;
-    * this report only sees visits with a staff member; the summary counts
+    * this report only sees visits attributable to an operator (a primary staff
+      member or per-service operators); the summary counts
       every payout, including monthly salaries that have no visit.
 
     For what is actually owed, use the payout endpoints in the Staff
@@ -1031,69 +1032,85 @@ class ProfitByStaffView(APIView):
         ],
     )
     def get(self, request):
-        from customers.models import Visit
+        from customers.models import Visit, VisitService
         start, end = _resolve_range(request)
 
         visits = Visit.objects.filter(
             start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
         ).select_related('staff').prefetch_related('services__items__product')
 
+        # The per-service operator of each visit (explicit or auto-resolved),
+        # fetched once for the window instead of per visit.
+        operators_by_visit = {}
+        for link in VisitService.objects.filter(visit__in=visits).select_related('staff'):
+            if link.staff_id:
+                operators_by_visit.setdefault(link.visit_id, {})[link.service_id] = link.staff
+
+        def empty_row(staff_obj):
+            return {
+                'staff_id': staff_obj.id,
+                'staff_name': f"{staff_obj.first_name} {staff_obj.last_name}".strip() or staff_obj.username,
+                'revenue_usd': Decimal('0'),
+                'revenue_toman': Decimal('0'),
+                'product_cost_usd': Decimal('0'),
+                'product_cost_toman': Decimal('0'),
+                'operator_compensation_usd': Decimal('0'),
+                'operator_compensation_toman': Decimal('0'),
+                'welcome_pack_cost_usd': Decimal('0'),
+                'welcome_pack_cost_toman': Decimal('0'),
+                'recipe_estimate_cost_usd': Decimal('0'),
+                'clinic_share_usd': Decimal('0'),
+                'clinic_share_toman': Decimal('0'),
+                'profit_usd': Decimal('0'),
+                'profit_toman': Decimal('0'),
+                'visit_count': 0,
+            }
+
+        money_keys = (
+            'revenue_usd', 'revenue_toman', 'product_cost_usd', 'product_cost_toman',
+            'operator_compensation_usd', 'operator_compensation_toman',
+            'welcome_pack_cost_usd', 'welcome_pack_cost_toman',
+            'recipe_estimate_cost_usd', 'clinic_share_usd', 'clinic_share_toman',
+            'profit_usd', 'profit_toman',
+        )
+
         rate = get_rate()
         staff_data = {}
         basis_by_staff = {}
 
         for visit in visits:
-            if not visit.staff:
-                # No staff assigned: nothing can be attributed. Excluded here
-                # and counted by the `coverage` action.
+            if not visit.staff_id and visit.id not in operators_by_visit:
+                # No primary staff and no assigned operator: nothing can be
+                # attributed. Excluded here and counted by `coverage`.
                 continue
-            staff_id = visit.staff.id
-            staff_name = f"{visit.staff.first_name} {visit.staff.last_name}".strip() or visit.staff.username
-
-            if staff_id not in staff_data:
-                staff_data[staff_id] = {
-                    'staff_id': staff_id,
-                    'staff_name': staff_name,
-                    'revenue_usd': Decimal('0'),
-                    'revenue_toman': Decimal('0'),
-                    'product_cost_usd': Decimal('0'),
-                    'product_cost_toman': Decimal('0'),
-                    'operator_compensation_usd': Decimal('0'),
-                    'operator_compensation_toman': Decimal('0'),
-                    'welcome_pack_cost_usd': Decimal('0'),
-                    'welcome_pack_cost_toman': Decimal('0'),
-                    'recipe_estimate_cost_usd': Decimal('0'),
-                    'clinic_share_usd': Decimal('0'),
-                    'clinic_share_toman': Decimal('0'),
-                    'profit_usd': Decimal('0'),
-                    'profit_toman': Decimal('0'),
-                    'visit_count': 0,
-                }
-            # visit_count counts visits, not service lines: increment once per
-            # visit, outside the per-service loop.
-            staff_data[staff_id]['visit_count'] += 1
             # Same per-service actuals the payout engine uses, so this report
             # and the compensation ledger cannot disagree.
             per_visit = financials.calculate_visit_financials(visit, rate=rate)
-            # Only call it list price if *every* visit for this staff member was
-            # priced from list price; any collected sale makes it real revenue.
-            basis_by_staff.setdefault(staff_id, financials.REVENUE_BASIS_LEDGER)
-            if per_visit['revenue_basis'] == financials.REVENUE_BASIS_LIST_PRICE:
-                basis_by_staff[staff_id] = financials.REVENUE_BASIS_LIST_PRICE
+            service_operators = operators_by_visit.get(visit.id, {})
+
+            # Every service row goes to the operator who performed THAT
+            # service (per-service assignment first, primary staff as the
+            # fallback); each involved operator counts the visit once.
+            involved = {}
+            if visit.staff_id:
+                involved[visit.staff_id] = visit.staff
             for service_row in per_visit['services'].values():
-                staff_data[staff_id]['revenue_usd'] += service_row['revenue_usd']
-                staff_data[staff_id]['revenue_toman'] += service_row['revenue_toman']
-                staff_data[staff_id]['product_cost_usd'] += service_row['product_cost_usd']
-                staff_data[staff_id]['product_cost_toman'] += service_row['product_cost_toman']
-                staff_data[staff_id]['operator_compensation_usd'] += service_row['operator_compensation_usd']
-                staff_data[staff_id]['operator_compensation_toman'] += service_row['operator_compensation_toman']
-                staff_data[staff_id]['welcome_pack_cost_usd'] += service_row['welcome_pack_cost_usd']
-                staff_data[staff_id]['welcome_pack_cost_toman'] += service_row['welcome_pack_cost_toman']
-                staff_data[staff_id]['recipe_estimate_cost_usd'] += service_row['recipe_estimate_cost_usd']
-                staff_data[staff_id]['clinic_share_usd'] += service_row['clinic_share_usd']
-                staff_data[staff_id]['clinic_share_toman'] += service_row['clinic_share_toman']
-                staff_data[staff_id]['profit_usd'] += service_row['profit_usd']
-                staff_data[staff_id]['profit_toman'] += service_row['profit_toman']
+                operator = service_operators.get(service_row['service_id']) or visit.staff
+                if operator is None:
+                    continue
+                involved[operator.id] = operator
+                row = staff_data.setdefault(operator.id, empty_row(operator))
+                for key in money_keys:
+                    row[key] += service_row[key]
+
+            for staff_obj in involved.values():
+                staff_data.setdefault(staff_obj.id, empty_row(staff_obj))['visit_count'] += 1
+                # Only call it list price if *every* visit for this staff member
+                # was priced from list price; any collected sale makes it real
+                # revenue.
+                basis_by_staff.setdefault(staff_obj.id, financials.REVENUE_BASIS_LEDGER)
+                if per_visit['revenue_basis'] == financials.REVENUE_BASIS_LIST_PRICE:
+                    basis_by_staff[staff_obj.id] = financials.REVENUE_BASIS_LIST_PRICE
 
         for data in staff_data.values():
             data['revenue_usd'] = str(data['revenue_usd'].quantize(Decimal('0.01')))
@@ -1127,8 +1144,9 @@ class ProfitByStaffView(APIView):
 class ProfitByStaffCoverageView(APIView):
     """How many completed visits could be attributed to a staff member.
 
-    Visits with ``staff_id = NULL`` cannot appear in ``profit-by-staff``, so
-    without this the report looks healthy while silently dropping them.
+    Visits with neither a primary staff member nor an assigned per-service
+    operator cannot appear in ``profit-by-staff``, so without this the report
+    looks healthy while silently dropping them.
     """
 
     permission_classes = [IsEmployeeOrAdmin]
@@ -1141,14 +1159,25 @@ class ProfitByStaffCoverageView(APIView):
         ],
     )
     def get(self, request):
-        from customers.models import Visit
+        from customers.models import Visit, VisitService
 
         start, end = _resolve_range(request)
         completed = Visit.objects.filter(
             start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
         )
         total_visits = completed.count()
-        unassigned_visits = completed.filter(staff__isnull=True).count()
+        # A visit counts as assigned when it has a primary staff member OR at
+        # least one per-service operator assignment.
+        assigned_ids = set(
+            VisitService.objects.filter(
+                visit__in=completed, staff__isnull=False,
+            ).values_list('visit_id', flat=True)
+        )
+        unassigned_visits = sum(
+            1
+            for visit_id, staff_id in completed.values_list('id', 'staff_id')
+            if staff_id is None and visit_id not in assigned_ids
+        )
         return Response({
             'period': _stringify({'start': start, 'end': end}),
             'total_visits': total_visits,

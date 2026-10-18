@@ -5,7 +5,7 @@ from rest_framework import serializers
 from accounts.models import ClinicUser
 from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
-from .models import Customer, Payment, Service, ServiceCategory, Visit
+from .models import Customer, Payment, Service, ServiceCategory, Visit, VisitService
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -167,7 +167,24 @@ class VisitPaymentSerializer(serializers.ModelSerializer):
         return str(obj.customer) if obj.customer_id else ''
 
 
+class VisitServiceOperatorSerializer(serializers.Serializer):
+    """One requested operator assignment: which staff performs which service."""
+
+    service = serializers.PrimaryKeyRelatedField(queryset=Service.objects.all())
+    staff = serializers.PrimaryKeyRelatedField(
+        queryset=ClinicUser.objects.filter(is_active=True),
+    )
+
+
 class VisitSerializer(serializers.ModelSerializer):
+    # The m2m runs through VisitService (it carries the per-service operator),
+    # and DRF auto-generates through-model m2m fields as *read-only*. Declare
+    # it explicitly so API clients can keep sending `services: [id, ...]` on
+    # POST/PATCH exactly as before; rows land with staff=None until
+    # `service_operators` or `Visit.resolve_operators()` fills them in.
+    services = serializers.PrimaryKeyRelatedField(
+        queryset=Service.objects.all(), many=True, required=False,
+    )
     service_names = serializers.StringRelatedField(source='services', many=True, read_only=True)
     start_at = ShamsiDateTimeField()
     end_at = ShamsiDateTimeField()
@@ -180,14 +197,20 @@ class VisitSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
+    # Explicit per-service operators: which person performs which of this
+    # visit's services. Optional — services not covered here are resolved
+    # automatically from their compensation role on save/complete.
+    service_operators = VisitServiceOperatorSerializer(many=True, required=False, write_only=True)
     customer_name = serializers.SerializerMethodField()
     payments = VisitPaymentSerializer(many=True, read_only=True)
     total_paid = serializers.SerializerMethodField()
+    operators = serializers.SerializerMethodField()
 
     class Meta:
         model = Visit
         fields = ['id', 'customer', 'customer_name', 'staff', 'services', 'service_names',
-                  'start_at', 'end_at', 'status', 'notes', 'payments', 'total_paid']
+                  'service_operators', 'operators', 'start_at', 'end_at', 'status', 'notes',
+                  'payments', 'total_paid']
 
     def get_customer_name(self, obj):
         return str(obj.customer) if obj.customer_id else ''
@@ -195,6 +218,81 @@ class VisitSerializer(serializers.ModelSerializer):
     def get_total_paid(self, obj):
         payments = list(obj.payments.all()) if hasattr(obj, 'payments') else []
         return sum((p.amount for p in payments), Decimal('0'))
+
+    def get_operators(self, obj):
+        """The resolved per-service operator rows (auto + explicit assignments)."""
+        # Plain .all(): the visit queryset prefetches service_links (with
+        # service/staff) so list serialization does not go N+1.
+        links = obj.service_links.all()
+        return [
+            {
+                'service': link.service_id,
+                'service_name': str(link.service),
+                'staff': link.staff_id,
+                'staff_name': (
+                    f'{link.staff.first_name} {link.staff.last_name}'.strip()
+                    or link.staff.username
+                ) if link.staff_id else None,
+                'compensation_role': link.service.compensation_role,
+            }
+            for link in links
+        ]
+
+    def _validate_service_operators(self, attrs):
+        """Explicit operator choices must fit the visit and the services' roles."""
+        operators = attrs.get('service_operators')
+        if not operators:
+            return
+        services = attrs.get('services')
+        if services is None and self.instance is not None:
+            services = list(self.instance.services.all())
+        allowed = {service.id for service in services or []}
+        seen = set()
+        for entry in operators:
+            service = entry['service']
+            staff = entry['staff']
+            if service.id not in allowed:
+                raise serializers.ValidationError({
+                    'service_operators': f'Service {service.id} is not one of this visit\'s services.',
+                })
+            if service.id in seen:
+                raise serializers.ValidationError({
+                    'service_operators': f'Service {service.id} is listed more than once.',
+                })
+            seen.add(service.id)
+            role = service.compensation_role
+            if role != Service.CompensationRole.NONE and staff.compensation_role != role:
+                raise serializers.ValidationError({
+                    'service_operators': (
+                        f'{staff.username} is a {staff.get_compensation_role_display()}, but '
+                        f'{service.name} requires a {service.get_compensation_role_display()}.'
+                    ),
+                })
+
+    @staticmethod
+    def _apply_service_operators(visit, operators):
+        if operators is None:
+            return
+        for entry in operators:
+            VisitService.objects.update_or_create(
+                visit=visit,
+                service=entry['service'],
+                defaults={'staff': entry['staff']},
+            )
+
+    def create(self, validated_data):
+        operators = validated_data.pop('service_operators', None)
+        visit = super().create(validated_data)
+        self._apply_service_operators(visit, operators)
+        visit.resolve_operators()
+        return visit
+
+    def update(self, instance, validated_data):
+        operators = validated_data.pop('service_operators', None)
+        visit = super().update(instance, validated_data)
+        self._apply_service_operators(visit, operators)
+        visit.resolve_operators()
+        return visit
 
     def validate(self, attrs):
         start_at = attrs.get('start_at')
@@ -233,6 +331,7 @@ class VisitSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'staff': 'Cannot reassign staff on a completed visit.'}
             )
+        self._validate_service_operators(attrs)
         return attrs
 
 

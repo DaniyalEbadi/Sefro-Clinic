@@ -537,8 +537,39 @@ def purchase_totals(start, end, product_id=None):
     }
 
 
+def _visit_operator_maps(visit_ids):
+    """``visit_id -> (per-service operator map, primary staff id)``.
+
+    The per-service assignment (``VisitService.staff``) wins; the visit's
+    primary ``staff_id`` is the fallback key used when a service has no
+    assigned operator (legacy / untagged users). Both maps are built in two
+    queries for a whole period.
+    """
+    from customers.models import Visit, VisitService
+
+    visit_ids = [visit_id for visit_id in set(visit_ids) if visit_id is not None]
+    links: dict = {}
+    primaries: dict = {}
+    if visit_ids:
+        for link in VisitService.objects.filter(
+            visit_id__in=visit_ids, staff_id__isnull=False,
+        ).select_related('staff'):
+            links.setdefault(link.visit_id, {})[link.service_id] = link.staff
+        primaries = dict(
+            Visit.objects.filter(id__in=visit_ids).values_list('id', 'staff_id'),
+        )
+    return links, primaries
+
+
 def operator_attribution(start, end, *, totals=None):
     """Revenue and material cost produced by each staff member.
+
+    Rows are keyed on the operator who performed each *service* on the visit
+    (the per-service assignment first, the visit's primary staff as the
+    fallback), so a mixed visit credits its revenue and material cost to the
+    right people. A sale is split across the visit's services by the same
+    list-price weight the compensation engine uses; product usages carry
+    their service directly.
 
     Same anchors and the same costing rule as :func:`build_report`
     (``Sale.created_at`` / ``ProductUsage.created_at``, cost = snapshot USD x
@@ -551,25 +582,68 @@ def operator_attribution(start, end, *, totals=None):
     Pass ``totals`` (the whole ``build_report`` payload -- it reads ``revenue``
     and ``product_cost`` off it) to get an ``unattributed`` residual row that
     makes the parts sum back to the whole exactly, rounding included. Without
-    it the residual is only the sales and usages whose visit has no assigned
-    staff.
+    it the residual is only the sales and usages whose visit has neither a
+    primary staff member nor an assigned operator.
     """
-    sales = Sale.objects.filter(
-        created_at__gte=start, created_at__lte=end, status__in=REVENUE_STATUSES,
+    sales = (
+        Sale.objects
+        .filter(created_at__gte=start, created_at__lte=end, status__in=REVENUE_STATUSES)
+        .select_related('visit')
+        .prefetch_related('visit__services')
     )
+    sales_by_visit: dict = {}
+    for sale in sales:
+        sales_by_visit.setdefault(sale.visit_id, []).append(sale)
+
+    usage_rows = list(
+        consumable_usages(
+            ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
+        ).values_list('visit_id', 'service_id', 'total_cost_usd_snapshot', 'exchange_rate_snapshot'),
+    )
+
+    links, primaries = _visit_operator_maps(
+        list(sales_by_visit) + [row[0] for row in usage_rows],
+    )
+
+    def staff_key(visit_id, service_id=None):
+        """The operator this row belongs to: per-service first, primary next."""
+        if visit_id is None:
+            return None
+        operator = links.get(visit_id, {}).get(service_id) if service_id is not None else None
+        if operator is not None:
+            return operator.id
+        return primaries.get(visit_id)
+
     revenue: dict = {}
-    for staff_id, usd, toman in sales.values_list('visit__staff_id').annotate(
-        usd=Sum('amount_usd'), toman=Sum('amount_toman'),
-    ):
-        revenue[staff_id] = {'usd': _q(usd), 'toman': _q(toman)}
+
+    def add_revenue(key, usd, toman):
+        bucket = revenue.setdefault(key, {'usd': ZERO, 'toman': ZERO})
+        bucket['usd'] += _q(usd)
+        bucket['toman'] += _q(toman)
+
+    for visit_id, visit_sales in sales_by_visit.items():
+        if visit_id is None:
+            for sale in visit_sales:
+                add_revenue(None, sale.amount_usd, sale.amount_toman)
+            continue
+        services = list(visit_sales[0].visit.services.all()) if visit_sales[0].visit else []
+        if not services:
+            # A visit without service lines cannot be split: the whole sale
+            # belongs to the visit's primary staff (legacy shape).
+            for sale in visit_sales:
+                add_revenue(primaries.get(visit_id), sale.amount_usd, sale.amount_toman)
+            continue
+        for sale in visit_sales:
+            for service in services:
+                share_usd, share_toman = _service_share(
+                    services, sale.amount_usd, sale.amount_toman, service.id,
+                )
+                add_revenue(staff_key(visit_id, service.id), share_usd, share_toman)
 
     cost: dict = {}
     rate = get_rate('USD', 'TOMAN')
-    usage_rows = consumable_usages(
-        ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
-    ).values_list('visit__staff_id', 'total_cost_usd_snapshot', 'exchange_rate_snapshot')
-    for staff_id, usd, snapshot_rate in usage_rows:
-        row = cost.setdefault(staff_id, {'usd': ZERO, 'toman': ZERO})
+    for visit_id, service_id, usd, snapshot_rate in usage_rows:
+        row = cost.setdefault(staff_key(visit_id, service_id), {'usd': ZERO, 'toman': ZERO})
         row['usd'] += _q(usd)
         row['toman'] += _q(usd) * (snapshot_rate or rate)
 
@@ -735,23 +809,18 @@ def package_attribution(start, end):
     }
 
 
-def _sale_service_share(sale, service_id):
-    """The sale's list-price share of one service on its visit.
+def _service_share(services, amount_usd, amount_toman, service_id):
+    """One service's list-price share of an amount across ``services``.
 
     Same weight rule as ``calculate_visit_financials``: list-price proportion,
-    or an even split when every service on the visit is free. Returns
-    ``(usd, toman)``.
+    or an even split when every service is free. Returns ``(usd, toman)``.
     """
-    visit = sale.visit
-    if visit is None:
-        return ZERO, ZERO
-    services = list(visit.services.all())
     if not services:
         return ZERO, ZERO
     weights = [_q(service.price_usd) for service in services]
     weight_total = sum(weights, ZERO)
-    amount_usd = _q(sale.amount_usd)
-    amount_toman = _q(sale.amount_toman)
+    amount_usd = _q(amount_usd)
+    amount_toman = _q(amount_toman)
     if weight_total > 0:
         for service, weight in zip(services, weights):
             if service.id == service_id:
@@ -763,6 +832,19 @@ def _sale_service_share(sale, service_id):
     share = amount_usd / Decimal(len(services))
     share_toman = amount_toman / Decimal(len(services))
     return share.quantize(Decimal('0.01')), share_toman.quantize(Decimal('0.01'))
+
+
+def _sale_service_share(sale, service_id):
+    """The sale's list-price share of one service on its visit.
+
+    Same weight rule as ``calculate_visit_financials``: list-price proportion,
+    or an even split when every service on the visit is free. Returns
+    ``(usd, toman)``.
+    """
+    visit = sale.visit
+    if visit is None:
+        return ZERO, ZERO
+    return _service_share(list(visit.services.all()), sale.amount_usd, sale.amount_toman, service_id)
 
 
 def _welcome_pack_service_share(start, end, service_id, staff_id=None):

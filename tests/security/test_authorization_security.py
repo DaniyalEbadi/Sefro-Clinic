@@ -103,7 +103,14 @@ class SensitiveDataExposureTests(TestCase):
     def test_me_endpoint_exposes_only_documented_fields(self):
         client = admin_client()
         response = client.get('/api/auth/me/')
-        self.assertEqual(set(response.data.keys()), {'id', 'username', 'role', 'date_joined'})
+        # compensation_role is the caller's own commission tier (doctor/facial/
+        # laser) -- non-sensitive, shown by the FE next to their payouts. The
+        # assertion still blocks any *new* field (password, email, phone...)
+        # from leaking into this payload unreviewed.
+        self.assertEqual(
+            set(response.data.keys()),
+            {'id', 'username', 'role', 'compensation_role', 'date_joined'},
+        )
 
     def test_service_category_endpoints_require_auth(self):
         from rest_framework.test import APIClient

@@ -11,7 +11,7 @@ class ClinicUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'role', 'date_joined']
+        fields = ['id', 'username', 'role', 'compensation_role', 'date_joined']
 
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
@@ -19,7 +19,10 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'phone_number']
+        fields = [
+            'id', 'username', 'password', 'first_name', 'last_name', 'phone_number',
+            'compensation_role',
+        ]
 
     def validate_password(self, value):
         candidate = ClinicUser(username=self.initial_data.get('username', ''))
@@ -39,7 +42,10 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ClinicUser
-        fields = ['id', 'username', 'password', 'first_name', 'last_name', 'phone_number']
+        fields = [
+            'id', 'username', 'password', 'first_name', 'last_name', 'phone_number',
+            'compensation_role',
+        ]
         read_only_fields = ['id']
 
     def validate_password(self, value):

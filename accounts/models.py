@@ -17,7 +17,30 @@ class ClinicUser(AbstractUser):
         ADMIN = 'admin', 'Admin'
         EMPLOYEE = 'employee', 'Employee'
 
+    class CompensationRole(models.TextChoices):
+        """Which operator role this staff member performs.
+
+        Value-identical to ``customers.Service.CompensationRole`` and
+        ``finance.StaffCompensationRule.Role`` (accounts must not import
+        either app, so the choices are mirrored here -- the *values* are the
+        contract between the three).
+        """
+
+        NONE = 'none', 'No Commission'
+        DOCTOR = 'doctor', 'Doctor (Injections)'
+        FACIAL = 'facial', 'Facial Worker'
+        LASER = 'laser', 'Laser Tech'
+
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.EMPLOYEE)
+    compensation_role = models.CharField(
+        max_length=20,
+        choices=CompensationRole.choices,
+        default=CompensationRole.NONE,
+        help_text=(
+            'The operator role this staff member performs. Services tagged with '
+            'this role resolve their visit payout to this person.'
+        ),
+    )
     phone_number = models.CharField(max_length=20, blank=True)
     username = models.CharField(
         max_length=150,
