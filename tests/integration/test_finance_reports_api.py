@@ -276,3 +276,56 @@ class FinanceReportsAccessTests(TestCase):
         client = employee_client()
         for url in (DASHBOARD_URL, PROFIT_BY_STAFF_URL):
             self.assertEqual(client.get(url).status_code, 200, url)
+
+
+FINANCIAL_SUMMARY_URL = '/api/finance/reports/financial-summary/'
+PAYOUT_SUMMARY_URL = '/api/finance/reports/staff-payout-summary/'
+
+
+class FinancialSummaryFilterValidationTests(TestCase):
+    """Malformed filter ids are a 400, never a 500 from the ORM."""
+
+    def setUp(self):
+        self.client = admin_client()
+
+    def test_malformed_filter_ids_are_400(self):
+        for param in ('service', 'package', 'product', 'personnel'):
+            with self.subTest(param=param):
+                response = self.client.get(f'{FINANCIAL_SUMMARY_URL}?{param}=abc')
+                self.assertEqual(response.status_code, 400, response.data)
+
+    def test_float_filter_id_is_400(self):
+        response = self.client.get(f'{FINANCIAL_SUMMARY_URL}?service=1.5')
+        self.assertEqual(response.status_code, 400)
+
+    def test_nonexistent_filter_ids_are_200_and_zero(self):
+        response = self.client.get(f'{FINANCIAL_SUMMARY_URL}?service=999999')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data['revenue']['usd']), Decimal('0'))
+        self.assertEqual(Decimal(response.data['product_cost']['usd']), Decimal('0'))
+
+    def test_valid_filters_still_return_200(self):
+        for param in ('service', 'package', 'product', 'personnel'):
+            with self.subTest(param=param):
+                response = self.client.get(f'{FINANCIAL_SUMMARY_URL}?{param}=1')
+                self.assertEqual(response.status_code, 200, response.data)
+
+
+class StaffPayoutFilterValidationTests(TestCase):
+    """The payout summary shares the same int-filter 500 bug class."""
+
+    def setUp(self):
+        self.client = admin_client()
+
+    def test_malformed_staff_is_400(self):
+        response = self.client.get(f'{PAYOUT_SUMMARY_URL}?staff=abc')
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_nonexistent_staff_is_200_and_zero(self):
+        response = self.client.get(f'{PAYOUT_SUMMARY_URL}?staff=999999')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data['total_payout_usd']), Decimal('0'))
+
+    def test_detail_report_malformed_staff_is_400(self):
+        response = self.client.get('/api/finance/staff-payouts/detail_report/?staff=abc')
+        self.assertEqual(response.status_code, 400, response.data)

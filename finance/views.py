@@ -180,6 +180,22 @@ def _resolve_range(request):
     return start_dt, end_dt
 
 
+def _query_int(params, name):
+    """A numeric query param as int, or None when absent/empty.
+
+    Garbage is a client error (400), never a 500 bubbling out of the ORM's
+    int coercion. A well-formed but nonexistent id is left to the filter:
+    it matches nothing and the report comes back zero-filled (200).
+    """
+    raw = params.get(name)
+    if raw in (None, ''):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise serializers.ValidationError({name: 'Must be an integer.'})
+
+
 @extend_schema(tags=['Exchange Rates'])
 class ExchangeRateViewSet(viewsets.ModelViewSet):
     queryset = ExchangeRate.objects.all()
@@ -690,6 +706,7 @@ class FinancialSummaryView(APIView):
             OpenApiParameter('service', OpenApiTypes.INT, OpenApiParameter.QUERY),
             OpenApiParameter('package', OpenApiTypes.INT, OpenApiParameter.QUERY),
             OpenApiParameter('product', OpenApiTypes.INT, OpenApiParameter.QUERY),
+            OpenApiParameter('personnel', OpenApiTypes.INT, OpenApiParameter.QUERY),
         ],
     )
     def get(self, request):
@@ -697,10 +714,10 @@ class FinancialSummaryView(APIView):
         params = request.query_params
         result = reporting.financial_summary(
             start, end,
-            service_id=params.get('service'),
-            package_id=params.get('package'),
-            product_id=params.get('product'),
-            personnel_id=params.get('personnel'),
+            service_id=_query_int(params, 'service'),
+            package_id=_query_int(params, 'package'),
+            product_id=_query_int(params, 'product'),
+            personnel_id=_query_int(params, 'personnel'),
         )
         return Response(_stringify(result))
 
@@ -901,7 +918,7 @@ def _staff_payout_summary_payload(request):
     params = request.query_params
     return _stringify(staff_compensation.staff_payout_summary(
         start, end,
-        staff_id=params.get('staff'),
+        staff_id=_query_int(params, 'staff'),
         role=params.get('role'),
         status=params.get('status'),
     ))
@@ -958,7 +975,7 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         params = request.query_params
         data = staff_compensation.staff_payout_detail(
             start, end,
-            staff_id=params.get('staff'),
+            staff_id=_query_int(params, 'staff'),
             status=params.get('status'),
         )
         return Response(_stringify(data))

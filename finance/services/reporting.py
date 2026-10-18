@@ -22,7 +22,6 @@ from ..models import (
     ProductUsage,
     Sale,
     StaffCompensationRule,
-    StaffPayout,
     Wallet,
     WalletTransaction,
     WelcomePackUsage,
@@ -186,6 +185,11 @@ def profit_by_package(start=None, end=None):
                 'count': 0,
                 'revenue_basis': REVENUE_BASIS_LEDGER,
                 'welcome_pack_cost_basis': 'allocated_by_visit_linkage',
+                # Session payouts only, and only when the payout's service
+                # belongs to exactly one package sold on the visit. Anything
+                # ambiguous (or a monthly-salary row, which is anchored on an
+                # arbitrary visit) is excluded rather than split or copied.
+                'operator_compensation_basis': 'session_payout_unambiguous_visit_linkage',
             }
         rows[key]['revenue_usd'] += sale.amount_usd
         rows[key]['count'] += 1
@@ -197,40 +201,21 @@ def profit_by_package(start=None, end=None):
     ).values_list('package_sale__package_id', 'total_cost_usd_snapshot'):
         usage_cost[package_id] = usage_cost.get(package_id, ZERO) + (cost or ZERO)
 
-    # Staff compensation owed on the visits behind these package sales, from
-    # the same payout ledger the summary reads.
-    visit_to_packages: dict[int, set] = {}
-    for pkg_id, visit_id in Sale.objects.filter(
-        created_at__gte=start, created_at__lte=end, package__isnull=False,
-        status=Sale.Status.PAID, visit_id__isnull=False,
-    ).values_list('package_id', 'visit_id'):
-        visit_to_packages.setdefault(visit_id, set()).add(pkg_id)
-
-    payout_cost: dict[int, Decimal] = {}
-    if visit_to_packages:
-        for visit_id, cash_usd, prod_usd in StaffPayout.objects.filter(
-            visit_id__in=visit_to_packages.keys(),
-            status__in=financials.PAYOUT_OBLIGATION_STATUSES,
-        ).values_list('visit_id', 'payout_cash_usd', 'payout_product_value_usd'):
-            total = (cash_usd or ZERO) + (prod_usd or ZERO)
-            for pkg_id in visit_to_packages[visit_id]:
-                payout_cost[pkg_id] = payout_cost.get(pkg_id, ZERO) + total
-
-    # Welcome-pack cost of the visits behind these package sales (clinic cost,
-    # never a customer charge), attributed by the sale's own visit.
-    wp_cost_by_package: dict[int, Decimal] = {}
-    if visit_to_packages:
-        for visit_id, usd in WelcomePackUsage.objects.filter(
-            visit_id__in=visit_to_packages.keys(),
-        ).values_list('visit_id', 'total_cost_usd_snapshot'):
-            for pkg_id in visit_to_packages[visit_id]:
-                wp_cost_by_package[pkg_id] = wp_cost_by_package.get(pkg_id, ZERO) + (usd or ZERO)
+    # Staff compensation and welcome-pack cost of the visits behind these
+    # package sales, from the same unambiguous visit-linkage helper the
+    # filtered financial summary uses -- never a cost copied onto every
+    # package sold on one visit.
+    attribution = financials.package_attribution(start, end)
 
     for key, row in rows.items():
         row['product_cost_usd'] = usage_cost.get(key, ZERO).quantize(Decimal('0.01'))
         row['revenue_usd'] = row['revenue_usd'].quantize(Decimal('0.01'))
-        row['operator_compensation_usd'] = payout_cost.get(key, ZERO).quantize(Decimal('0.01'))
-        row['welcome_pack_cost_usd'] = wp_cost_by_package.get(key, ZERO).quantize(Decimal('0.01'))
+        row['operator_compensation_usd'] = attribution['payout_usd_by_package'].get(
+            key, ZERO,
+        ).quantize(Decimal('0.01'))
+        row['welcome_pack_cost_usd'] = attribution['welcome_pack_usd_by_package'].get(
+            key, ZERO,
+        ).quantize(Decimal('0.01'))
         row['profit_usd'] = (row['revenue_usd'] - row['product_cost_usd']).quantize(Decimal('0.01'))
         row['clinic_share_usd'] = (
             row['revenue_usd'] - row['product_cost_usd'] - row['operator_compensation_usd']

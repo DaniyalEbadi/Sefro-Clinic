@@ -40,10 +40,12 @@ from django.db.models import Count, Sum
 from ..models import (
     Expense,
     OperatingExpense,
+    PackageService,
     PaymentComponent,
     ProductPurchase,
     ProductUsage,
     PurchaseOrder,
+    PurchaseOrderItem,
     Sale,
     StaffPayout,
     WalletTransaction,
@@ -82,6 +84,17 @@ CASH_METHODS = (
 
 def _q(value) -> Decimal:
     return Decimal(value or 0)
+
+
+def _opt_int(value):
+    """A filter id from a query string as ``int``, or ``None`` when absent.
+
+    Callers that expose this to HTTP validate first (a 400 beats a 500); this
+    coercion only keeps direct service-layer callers honest.
+    """
+    if value in (None, ''):
+        return None
+    return int(value)
 
 
 def consumable_usages(queryset):
@@ -367,11 +380,23 @@ def cost_coverage(usages):
     return coverage
 
 
-def staff_compensation_totals(start, end):
-    """Staff cost owed for the period, split by role, still a real liability."""
-    qs = StaffPayout.objects.filter(
-        created_at__gte=start, created_at__lte=end, status__in=PAYOUT_OBLIGATION_STATUSES,
-    )
+def staff_compensation_totals(start, end, *, staff_id=None, service_id=None, payout_ids=None):
+    """Staff cost owed for the period, split by role, still a real liability.
+
+    ``payout_ids`` (a set) replaces the date window with an explicit row set:
+    package-attribution callers pass the payouts already scoped to one
+    package's unambiguous visit linkage (see :func:`package_attribution`).
+    ``staff_id`` / ``service_id`` narrow on top of either scope.
+    """
+    qs = StaffPayout.objects.filter(status__in=PAYOUT_OBLIGATION_STATUSES)
+    if payout_ids is not None:
+        qs = qs.filter(id__in=payout_ids)
+    else:
+        qs = qs.filter(created_at__gte=start, created_at__lte=end)
+    if staff_id is not None:
+        qs = qs.filter(staff_id=staff_id)
+    if service_id is not None:
+        qs = qs.filter(service_id=service_id)
     agg = qs.aggregate(
         cash_usd=Sum('payout_cash_usd'),
         cash_toman=Sum('payout_cash_toman'),
@@ -443,7 +468,7 @@ def claim_totals(start, end, personnel_id=None):
     }
 
 
-def purchase_totals(start, end):
+def purchase_totals(start, end, product_id=None):
     """Stock-purchase cash out for the period, from both purchase ledgers.
 
     Purchases never enter net profit: inventory is charged to profit exactly
@@ -454,20 +479,35 @@ def purchase_totals(start, end):
     Two ledgers exist and both must be read or purchases silently vanish:
       * ``PurchaseOrderItem`` behind orders that reached ``received``
       * ``ProductPurchase``, the one-shot restock ledger
+
+    ``product_id`` narrows both ledgers to that product (order rows, not
+    order totals, so sibling lines on a shared order are never charged).
     """
     g_start, g_end = start.date(), end.date()
 
-    orders = PurchaseOrder.objects.filter(
-        status=PurchaseOrder.Status.RECEIVED,
-        received_date__gte=g_start, received_date__lte=g_end,
-    )
-    po_usd = _q(orders.aggregate(t=Sum('total_cost_usd'))['t'])
-    po_toman = _q(orders.aggregate(t=Sum('total_cost_toman'))['t'])
-    po_count = orders.count()
+    if product_id is not None:
+        items = PurchaseOrderItem.objects.filter(
+            order__status=PurchaseOrder.Status.RECEIVED,
+            order__received_date__gte=g_start, order__received_date__lte=g_end,
+            product_id=product_id,
+        )
+        po_usd = _q(items.aggregate(t=Sum('total_cost_usd'))['t'])
+        po_toman = _q(items.aggregate(t=Sum('total_cost_toman'))['t'])
+        po_count = items.count()
+    else:
+        orders = PurchaseOrder.objects.filter(
+            status=PurchaseOrder.Status.RECEIVED,
+            received_date__gte=g_start, received_date__lte=g_end,
+        )
+        po_usd = _q(orders.aggregate(t=Sum('total_cost_usd'))['t'])
+        po_toman = _q(orders.aggregate(t=Sum('total_cost_toman'))['t'])
+        po_count = orders.count()
 
     direct = ProductPurchase.objects.filter(
         purchase_date__gte=g_start, purchase_date__lte=g_end,
     )
+    if product_id is not None:
+        direct = direct.filter(product_id=product_id)
     dr_usd = ZERO
     dr_toman = ZERO
     for cost_usd, snapshot_rate in direct.values_list('total_cost_usd', 'exchange_rate_snapshot'):
@@ -577,20 +617,244 @@ def operator_attribution(start, end, *, totals=None):
     return rows
 
 
-def welcome_pack_totals(start, end, product_id=None):
+def package_attribution(start, end):
+    """Costs unambiguously attributed to in-period package sales.
+
+    A visit can carry more than one package sale, so a visit-level cost cannot
+    simply be copied onto every package sold on that visit (that was the old
+    duplication bug in ``reporting.profit_by_package``). Every rule here
+    prefers exclusion over a guess:
+
+    * only ``session`` payouts are candidates -- a ``monthly_salary`` row is
+      anchored on an arbitrary visit/service from its month settlement, never
+      on a package's work;
+    * a payout goes to package P when the visit sold P inside the period, the
+      payout's service is listed in P's services, and exactly one of the
+      packages sold on that visit lists that service;
+    * a welcome-pack issuance goes to package P when exactly one package was
+      sold on that visit inside the period;
+    * anything that fails is counted in ``excluded`` and charged to no package.
+
+    Returns per-package id/currency maps plus the excluded counters. Anchored
+    on the package sale's visit (the same linkage
+    ``reporting.profit_by_package`` renders), not on payout/pack timestamps.
+    """
+    sales = Sale.objects.filter(
+        created_at__gte=start, created_at__lte=end,
+        package__isnull=False, status=Sale.Status.PAID, visit_id__isnull=False,
+    ).values_list('package_id', 'visit_id')
+
+    visit_to_packages: dict[int, set] = {}
+    package_ids = set()
+    for pkg_id, visit_id in sales:
+        visit_to_packages.setdefault(visit_id, set()).add(pkg_id)
+        package_ids.add(pkg_id)
+
+    pkg_services: dict[int, set] = {}
+    if package_ids:
+        for pkg_id, service_id in PackageService.objects.filter(
+            package_id__in=package_ids,
+        ).values_list('package_id', 'service_id'):
+            pkg_services.setdefault(pkg_id, set()).add(service_id)
+
+    payout_ids_by_package: dict[int, set] = {}
+    payout_usd_by_package: dict[int, Decimal] = {}
+    payout_toman_by_package: dict[int, Decimal] = {}
+    excluded_payout_count = 0
+    if visit_to_packages:
+        payouts = StaffPayout.objects.filter(
+            visit_id__in=visit_to_packages.keys(),
+            status__in=PAYOUT_OBLIGATION_STATUSES,
+            payout_kind=StaffPayout.PayoutKind.SESSION,
+        ).values_list(
+            'id', 'visit_id', 'service_id',
+            'payout_cash_usd', 'payout_cash_toman',
+            'payout_product_value_usd', 'payout_product_value_toman',
+        )
+        for (
+            payout_id, visit_id, service_id,
+            cash_usd, cash_toman, prod_usd, prod_toman,
+        ) in payouts:
+            candidates = {
+                pkg_id for pkg_id in visit_to_packages[visit_id]
+                if service_id in pkg_services.get(pkg_id, ())
+            }
+            if len(candidates) != 1:
+                excluded_payout_count += 1
+                continue
+            pkg_id = next(iter(candidates))
+            payout_ids_by_package.setdefault(pkg_id, set()).add(payout_id)
+            payout_usd_by_package[pkg_id] = (
+                payout_usd_by_package.get(pkg_id, ZERO)
+                + _q(cash_usd) + _q(prod_usd)
+            )
+            payout_toman_by_package[pkg_id] = (
+                payout_toman_by_package.get(pkg_id, ZERO)
+                + _q(cash_toman) + _q(prod_toman)
+            )
+
+    welcome_pack_ids_by_package: dict[int, set] = {}
+    welcome_pack_usd_by_package: dict[int, Decimal] = {}
+    welcome_pack_toman_by_package: dict[int, Decimal] = {}
+    excluded_welcome_pack_count = 0
+    if visit_to_packages:
+        for usage_id, visit_id, usd, toman in WelcomePackUsage.objects.filter(
+            visit_id__in=visit_to_packages.keys(),
+        ).values_list('id', 'visit_id', 'total_cost_usd_snapshot', 'total_cost_toman_snapshot'):
+            packages_on_visit = visit_to_packages[visit_id]
+            if len(packages_on_visit) != 1:
+                excluded_welcome_pack_count += 1
+                continue
+            pkg_id = next(iter(packages_on_visit))
+            welcome_pack_ids_by_package.setdefault(pkg_id, set()).add(usage_id)
+            welcome_pack_usd_by_package[pkg_id] = welcome_pack_usd_by_package.get(pkg_id, ZERO) + _q(usd)
+            welcome_pack_toman_by_package[pkg_id] = welcome_pack_toman_by_package.get(pkg_id, ZERO) + _q(toman)
+
+    return {
+        'payout_ids_by_package': payout_ids_by_package,
+        'payout_usd_by_package': {
+            pkg_id: total.quantize(Decimal('0.01'))
+            for pkg_id, total in payout_usd_by_package.items()
+        },
+        'payout_toman_by_package': {
+            pkg_id: total.quantize(Decimal('0.01'))
+            for pkg_id, total in payout_toman_by_package.items()
+        },
+        'welcome_pack_ids_by_package': welcome_pack_ids_by_package,
+        'welcome_pack_usd_by_package': {
+            pkg_id: total.quantize(Decimal('0.01'))
+            for pkg_id, total in welcome_pack_usd_by_package.items()
+        },
+        'welcome_pack_toman_by_package': {
+            pkg_id: total.quantize(Decimal('0.01'))
+            for pkg_id, total in welcome_pack_toman_by_package.items()
+        },
+        'excluded_payout_count': excluded_payout_count,
+        'excluded_welcome_pack_count': excluded_welcome_pack_count,
+        'basis': 'unambiguous_visit_linkage',
+    }
+
+
+def _sale_service_share(sale, service_id):
+    """The sale's list-price share of one service on its visit.
+
+    Same weight rule as ``calculate_visit_financials``: list-price proportion,
+    or an even split when every service on the visit is free. Returns
+    ``(usd, toman)``.
+    """
+    visit = sale.visit
+    if visit is None:
+        return ZERO, ZERO
+    services = list(visit.services.all())
+    if not services:
+        return ZERO, ZERO
+    weights = [_q(service.price_usd) for service in services]
+    weight_total = sum(weights, ZERO)
+    amount_usd = _q(sale.amount_usd)
+    amount_toman = _q(sale.amount_toman)
+    if weight_total > 0:
+        for service, weight in zip(services, weights):
+            if service.id == service_id:
+                return (
+                    (amount_usd * (weight / weight_total)).quantize(Decimal('0.01')),
+                    (amount_toman * (weight / weight_total)).quantize(Decimal('0.01')),
+                )
+        return ZERO, ZERO
+    share = amount_usd / Decimal(len(services))
+    share_toman = amount_toman / Decimal(len(services))
+    return share.quantize(Decimal('0.01')), share_toman.quantize(Decimal('0.01'))
+
+
+def _welcome_pack_service_share(start, end, service_id, staff_id=None):
+    """The service's revenue-share slice of period pack issuances on its visits.
+
+    Pack cost has no natural service owner; it is split across the visit's
+    services by the same list-price weight the revenue split uses (evenly when
+    every service is free), mirroring ``calculate_visit_financials``. Rows are
+    anchored on ``issued_at`` like the unfiltered period total.
+    """
+    usages = WelcomePackUsage.objects.filter(
+        issued_at__gte=start, issued_at__lte=end, visit__services=service_id,
+    )
+    if staff_id is not None:
+        usages = usages.filter(visit__staff_id=staff_id)
+    total_usd = ZERO
+    total_toman = ZERO
+    for usage in usages.select_related('visit').prefetch_related('visit__services'):
+        services = list(usage.visit.services.all())
+        if not services:
+            continue
+        weights = [_q(service.price_usd) for service in services]
+        weight_total = sum(weights, ZERO)
+        pack_usd = _q(usage.total_cost_usd_snapshot)
+        pack_toman = _q(usage.total_cost_toman_snapshot)
+        if weight_total > 0:
+            for service, weight in zip(services, weights):
+                if service.id == service_id:
+                    total_usd += pack_usd * (weight / weight_total)
+                    total_toman += pack_toman * (weight / weight_total)
+                    break
+        else:
+            total_usd += pack_usd / Decimal(len(services))
+            total_toman += pack_toman / Decimal(len(services))
+    return {
+        'usd': total_usd.quantize(Decimal('0.01')),
+        'toman': total_toman.quantize(Decimal('0.01')),
+        'source': 'welcome_pack_usage_allocated',
+    }
+
+
+def _empty_compensation():
+    z = lambda: Decimal('0.00')  # noqa: E731 - one-line zero factory
+    return {
+        'cash_usd': z(), 'cash_toman': z(),
+        'product_usd': z(), 'product_toman': z(),
+        'total_usd': z(), 'total_toman': z(),
+        'payout_count': 0, 'by_role': {},
+    }
+
+
+def _empty_period_totals():
+    """Zeroed operating/claim/purchase blocks for filters with no attribution."""
+    z = lambda: Decimal('0.00')  # noqa: E731 - one-line zero factory
+    empty_line = {'total_usd': z(), 'total_toman': z(), 'count': 0}
+    return {
+        'operating': dict(empty_line),
+        'claims': dict(empty_line),
+        'purchases': {
+            'usd': z(), 'toman': z(), 'count': 0,
+            'by_source': {
+                'purchase_order': {'usd': z(), 'toman': z(), 'count': 0},
+                'direct': {'usd': z(), 'toman': z(), 'count': 0},
+            },
+        },
+    }
+
+
+def welcome_pack_totals(start, end, product_id=None, *, staff_id=None, service_id=None):
     """Welcome-pack cost for the period, counted exactly once.
 
     Pack cost is only ever read from the WelcomePackUsage snapshot. The
     pack-linked ProductUsage rows exist for the consumption log and are
     excluded from product cost, so the same inventory is never charged twice.
+
+    ``product_id`` narrows to that product's pack consumption rows (a period
+    snapshot cannot be split per product). ``staff_id`` follows the visit's
+    staff; ``service_id`` is only meaningful on the product path -- snapshot
+    rows carry no service, so the caller allocates those by revenue share
+    (see build_report).
     """
     if product_id:
         # A period snapshot total cannot be narrowed to one product, so use that
         # product's pack consumption rows instead.
         rows = ProductUsage.objects.filter(
             created_at__gte=start, created_at__lte=end,
-            welcome_pack_usage__isnull=False,
+            welcome_pack_usage__isnull=False, product_id=product_id,
         )
+        if staff_id is not None:
+            rows = rows.filter(visit__staff_id=staff_id)
+        if service_id is not None:
+            rows = rows.filter(service_id=service_id)
         total_usd = _q(rows.aggregate(t=Sum('total_cost_usd_snapshot'))['t'])
         total_toman = ZERO
         for cost_usd, snapshot_rate in rows.values_list('total_cost_usd_snapshot', 'exchange_rate_snapshot'):
@@ -599,6 +863,8 @@ def welcome_pack_totals(start, end, product_id=None):
         return {'usd': total_usd.quantize(Decimal('0.01')), 'toman': total_toman, 'source': 'product_usage'}
 
     wp_usages = WelcomePackUsage.objects.filter(issued_at__gte=start, issued_at__lte=end)
+    if staff_id is not None:
+        wp_usages = wp_usages.filter(visit__staff_id=staff_id)
     return {
         'usd': _q(wp_usages.aggregate(t=Sum('total_cost_usd_snapshot'))['t']).quantize(Decimal('0.01')),
         'toman': _q(wp_usages.aggregate(t=Sum('total_cost_toman_snapshot'))['t']).quantize(Decimal('0.01')),
@@ -607,26 +873,86 @@ def welcome_pack_totals(start, end, product_id=None):
 
 
 def build_report(start, end, *, service_id=None, package_id=None, product_id=None, personnel_id=None):
-    """The authoritative period report every endpoint renders."""
+    """The authoritative period report every endpoint renders.
+
+    Filter scoping: every active filter must narrow each component through an
+    established attribution, or that component is reported as zero -- never
+    silently left clinic-wide.
+
+    * ``personnel_id``: revenue/usages/welcome packs via the visit's staff,
+      compensation via ``StaffPayout.staff``, claims via ``Expense.created_by``,
+      appointments via ``Visit.staff``.
+    * ``package_id``: revenue via ``Sale.package``, material cost via
+      ``ProductUsage.package_sale``, compensation and welcome packs via the
+      unambiguous visit-linkage rules in :func:`package_attribution`.
+    * ``service_id``: revenue as each sale's list-price share of that service
+      on its visit, material cost via ``ProductUsage.service``, compensation
+      via ``StaffPayout.service``, welcome packs as that service's revenue
+      share of each visit's pack issuance, appointments via visit membership.
+    * ``product_id``: material cost via ``ProductUsage.product``, welcome packs
+      via that product's pack consumption rows, purchases via the product
+      ledgers, revenue as sales of visits that consumed the product (the same
+      visit-linkage family welcome-pack attribution uses).
+    * Operating expenses, staff claims (beyond personnel), wallet rewards and
+      purchases (beyond product) carry no filterable attribution and are
+      reported as zero while any filter is active.
+    """
     from customers.models import Visit
+
+    service_id = _opt_int(service_id)
+    package_id = _opt_int(package_id)
+    product_id = _opt_int(product_id)
+    personnel_id = _opt_int(personnel_id)
+    any_filter = any(
+        value is not None
+        for value in (service_id, package_id, product_id, personnel_id)
+    )
 
     sales = Sale.objects.filter(
         created_at__gte=start, created_at__lte=end, status__in=REVENUE_STATUSES,
     )
-    if personnel_id:
+    if personnel_id is not None:
         sales = sales.filter(visit__staff_id=personnel_id)
-    if package_id:
+    if package_id is not None:
         sales = sales.filter(package_id=package_id)
 
-    revenue_usd = _q(sales.aggregate(t=Sum('amount_usd'))['t']).quantize(Decimal('0.01'))
-    revenue_toman = _q(sales.aggregate(t=Sum('amount_toman'))['t']).quantize(Decimal('0.01'))
-    revenue_sale_count = sales.count()
+    product_visit_ids = None
+    if product_id is not None:
+        product_visit_ids = set(
+            ProductUsage.objects.filter(
+                created_at__gte=start, created_at__lte=end, product_id=product_id,
+            ).exclude(visit_id=None).values_list('visit_id', flat=True)
+        )
+        sales = sales.filter(visit_id__in=product_visit_ids)
+
+    if service_id is not None:
+        sales = sales.filter(visit__services=service_id)
+
+    if service_id is not None:
+        revenue_usd = ZERO
+        revenue_toman = ZERO
+        revenue_sale_count = 0
+        for sale in sales.select_related('visit').prefetch_related('visit__services'):
+            share_usd, share_toman = _sale_service_share(sale, service_id)
+            revenue_usd += share_usd
+            revenue_toman += share_toman
+            revenue_sale_count += 1
+        revenue_usd = revenue_usd.quantize(Decimal('0.01'))
+        revenue_toman = revenue_toman.quantize(Decimal('0.01'))
+    else:
+        revenue_usd = _q(sales.aggregate(t=Sum('amount_usd'))['t']).quantize(Decimal('0.01'))
+        revenue_toman = _q(sales.aggregate(t=Sum('amount_toman'))['t']).quantize(Decimal('0.01'))
+        revenue_sale_count = sales.count()
 
     usages = ProductUsage.objects.filter(created_at__gte=start, created_at__lte=end)
-    if service_id:
+    if service_id is not None:
         usages = usages.filter(service_id=service_id)
-    if product_id:
+    if product_id is not None:
         usages = usages.filter(product_id=product_id)
+    if personnel_id is not None:
+        usages = usages.filter(visit__staff_id=personnel_id)
+    if package_id is not None:
+        usages = usages.filter(package_sale__package_id=package_id)
     cost_usages = consumable_usages(usages)
 
     product_cost_usd = _q(cost_usages.aggregate(t=Sum('total_cost_usd_snapshot'))['t']).quantize(Decimal('0.01'))
@@ -635,16 +961,60 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
         product_cost_toman += _q(cost_usd) * (snapshot_rate or get_rate('USD', 'TOMAN'))
     product_cost_toman = product_cost_toman.quantize(Decimal('0.01'))
 
-    welcome_pack_cost = welcome_pack_totals(start, end, product_id=product_id)
+    package_attr = None
+    if package_id is not None:
+        package_attr = package_attribution(start, end)
+        welcome_pack_cost = {
+            'usd': package_attr['welcome_pack_usd_by_package'].get(package_id, ZERO).quantize(Decimal('0.01')),
+            'toman': package_attr['welcome_pack_toman_by_package'].get(package_id, ZERO).quantize(Decimal('0.01')),
+            'source': 'package_attribution',
+        }
+    elif product_id is not None:
+        welcome_pack_cost = welcome_pack_totals(
+            start, end, product_id=product_id, staff_id=personnel_id, service_id=service_id,
+        )
+    elif service_id is not None:
+        welcome_pack_cost = _welcome_pack_service_share(start, end, service_id, staff_id=personnel_id)
+    elif personnel_id is not None:
+        welcome_pack_cost = welcome_pack_totals(start, end, staff_id=personnel_id)
+    else:
+        welcome_pack_cost = welcome_pack_totals(start, end)
 
     gross_usd = (revenue_usd - product_cost_usd - welcome_pack_cost['usd']).quantize(Decimal('0.01'))
     gross_toman = (
         revenue_toman - product_cost_toman - welcome_pack_cost['toman']
     ).quantize(Decimal('0.01'))
 
-    staff = staff_compensation_totals(start, end)
-    operating = operating_expense_totals(start, end)
-    claims = claim_totals(start, end, personnel_id=personnel_id)
+    if package_id is not None:
+        payout_ids = package_attr['payout_ids_by_package'].get(package_id, set())
+        if personnel_id is not None:
+            payout_ids = set(
+                StaffPayout.objects.filter(id__in=payout_ids, staff_id=personnel_id)
+                .values_list('id', flat=True)
+            )
+        if service_id is not None:
+            payout_ids = set(
+                StaffPayout.objects.filter(id__in=payout_ids, service_id=service_id)
+                .values_list('id', flat=True)
+            )
+        staff = staff_compensation_totals(start, end, payout_ids=payout_ids)
+    elif product_id is not None:
+        staff = _empty_compensation()
+    else:
+        staff = staff_compensation_totals(start, end, staff_id=personnel_id, service_id=service_id)
+
+    if service_id is not None or package_id is not None or product_id is not None:
+        # Claims are only attributable to a person (the claimant). Service,
+        # package and product filters carry no claim attribution.
+        claims = _empty_period_totals()['claims']
+    else:
+        claims = claim_totals(start, end, personnel_id=personnel_id)
+
+    if any_filter:
+        zeros = _empty_period_totals()
+        operating = zeros['operating']
+    else:
+        operating = operating_expense_totals(start, end)
 
     below_line_usd = (staff['total_usd'] + operating['total_usd'] + claims['total_usd']).quantize(Decimal('0.01'))
     below_line_toman = (
@@ -657,7 +1027,12 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
     # Cash view: what is left once the stock bought this period is also paid
     # for. Deliberately NOT subtracted from net_profit (that would charge the
     # same product twice, here and again as product cost at consumption).
-    purchases = purchase_totals(start, end)
+    if product_id is not None:
+        purchases = purchase_totals(start, end, product_id=product_id)
+    elif any_filter:
+        purchases = _empty_period_totals()['purchases']
+    else:
+        purchases = purchase_totals(start, end)
     net_after_purchases_usd = (net_usd - purchases['usd']).quantize(Decimal('0.01'))
     net_after_purchases_toman = (net_toman - purchases['toman']).quantize(Decimal('0.01'))
 
@@ -679,11 +1054,32 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
         .aggregate(t=Sum('amount_usd'))['t']
     ))
 
-    appointments = Visit.objects.filter(
+    appointments_qs = Visit.objects.filter(
         start_at__gte=start, start_at__lte=end, status=Visit.Status.COMPLETED,
-    ).count()
+    )
+    if any_filter:
+        if personnel_id is not None:
+            appointments_qs = appointments_qs.filter(staff_id=personnel_id)
+        if service_id is not None:
+            appointments_qs = appointments_qs.filter(services=service_id)
+        if product_id is not None:
+            appointments_qs = appointments_qs.filter(id__in=product_visit_ids or set())
+        if package_id is not None:
+            appointments_qs = appointments_qs.filter(
+                sales__package_id=package_id, sales__status=Sale.Status.PAID,
+            ).distinct()
+    appointments = appointments_qs.count()
     packages_sold = sales.filter(package__isnull=False, status=Sale.Status.PAID).count()
     products_sold = _q(usages.aggregate(t=Sum('quantity'))['t'])
+
+    rewards_issued = (
+        ZERO if any_filter else _q(
+            WalletTransaction.objects.filter(
+                transaction_type=WalletTransaction.Type.REWARD,
+                created_at__gte=start, created_at__lte=end,
+            ).aggregate(t=Sum('amount'))['t']
+        )
+    )
 
     return {
         'period': {'start': start, 'end': end},
@@ -724,12 +1120,7 @@ def build_report(start, end, *, service_id=None, package_id=None, product_id=Non
         'payment_methods': method_breakdown,
         'payment_methods_by_method': method_by_method,
         'wallet': {
-            'rewards_issued': _q(
-                WalletTransaction.objects.filter(
-                    transaction_type=WalletTransaction.Type.REWARD,
-                    created_at__gte=start, created_at__lte=end,
-                ).aggregate(t=Sum('amount'))['t']
-            ),
+            'rewards_issued': rewards_issued,
             'wallet_payments': _q(
                 PaymentComponent.objects.filter(
                     sale__in=sales, method=PaymentComponent.Method.WALLET,
