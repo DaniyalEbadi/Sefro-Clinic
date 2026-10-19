@@ -2,7 +2,6 @@ from decimal import Decimal
 from typing import Optional
 
 from django.db import transaction
-from django.utils import timezone
 
 from logs.models import AuditLog
 
@@ -148,7 +147,6 @@ def checkout(
             continue
         wallet_txn = None
         amt_usd = amt
-        amount_toman = to_toman(amt, rate)
 
         if method == 'wallet':
             wallet_txn = debit(
@@ -161,23 +159,10 @@ def checkout(
                 rate=rate,
             )
         else:
-            from customers.models import Payment
             if method == 'cash_toman':
                 amt_usd = from_toman(amt, rate)
-                amount_toman = amt
             else:
                 amt_usd = amt
-                amount_toman = to_toman(amt, rate)
-            Payment.objects.create(
-                customer=customer,
-                visit=visit,
-                amount=amount_toman,
-                amount_usd=amt_usd,
-                exchange_rate=rate,
-                payment_method=method,
-                paid_at=timezone.now(),
-                notes=description or f'Sale {sale.id}',
-            )
         PaymentComponent.objects.create(
             sale=sale,
             method=method,

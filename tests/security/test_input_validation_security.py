@@ -111,10 +111,10 @@ class BoundaryValidationTests(TestCase):
             'first_name': 'P', 'last_name': 'N',
             'mobile_number': '09126667777', 'national_id': '070-0000070',
         }, format='json').data
-        response = client.post('/api/payments/', {
+        response = client.post('/api/finance/checkout/', {
             'customer': customer['id'],
-            'amount': '-5000',
-            'paid_at': '1404-06-15 10:00',
+            'amount_usd': '-5',
+            'components': [{'method': 'cash', 'amount_usd': '-5'}],
         }, format='json')
         self.assertEqual(response.status_code, 400)
 

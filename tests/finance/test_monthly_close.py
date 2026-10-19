@@ -23,7 +23,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from finance.models import StaffPayout
-from finance.services import accounting, payments, reporting
+from finance.services import payments, reporting
 from finance.services.inventory import record_product_purchase
 from Sefro_Clinic.periods import SHAMSI_MONTH_NAMES, shamsi_months_of_year
 from tests.finance.test_staff_compensation import CompensationFixtureMixin, make_rule
@@ -51,9 +51,6 @@ class MonthlyCloseTests(CompensationFixtureMixin, TestCase):
         super().setUp()
         self.client = admin_client()
         make_rule()  # doctor: 50% of the service's collected revenue
-        # Consumption first, so the payout checkout is about to generate is
-        # computed against the real material cost, not a zero one.
-        accounting.record_visit_consumption(self.visit, rate=RATE)
         payments.checkout(
             customer=self.customer, amount_usd=Decimal('200'),
             visit=self.visit, rate=RATE,

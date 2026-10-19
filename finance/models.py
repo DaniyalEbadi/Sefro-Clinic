@@ -375,6 +375,10 @@ class ProductUsage(models.Model):
     )
     exchange_rate_snapshot = rate_field(null=True, blank=True)
     is_commission = models.BooleanField(default=False)
+    zero_reason = models.TextField(
+        null=True, blank=True,
+        help_text='Required explanation when a recipe product was explicitly not used.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -404,9 +408,6 @@ class Sale(models.Model):
     )
     package = models.ForeignKey(
         Package, on_delete=models.SET_NULL, null=True, blank=True, related_name='sales',
-    )
-    payment = models.ForeignKey(
-        'customers.Payment', on_delete=models.SET_NULL, null=True, blank=True, related_name='sales',
     )
     amount_usd = usd_field(default=Decimal('0'))
     discount_usd = usd_field(default=Decimal('0'))

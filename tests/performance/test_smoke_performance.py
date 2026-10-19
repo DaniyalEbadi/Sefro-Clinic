@@ -1,11 +1,13 @@
 import os
 import time
 import unittest
+from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
+from finance.models import Sale
 from tests.helpers import admin_client
 
 
@@ -26,11 +28,11 @@ class ReportPerformanceSmokeTests(TestCase):
         service = Service.objects.create(name='Bulk Service')
         visit = Visit.objects.create(customer=customer, start_at=timezone.now(), end_at=timezone.now())
         visit.services.add(service)
-        Payment.objects.bulk_create([
-            Payment(
+        Sale.objects.bulk_create([
+            Sale(
                 customer=customer,
-                amount=str(1000 + index),
-                paid_at=timezone.now(),
+                amount_usd=Decimal('1'), amount_toman=Decimal(1000 + index),
+                status=Sale.Status.PAID, created_at=timezone.now(),
             )
             for index in range(500)
         ])

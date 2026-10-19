@@ -326,7 +326,7 @@ class ProductUsageSerializer(serializers.ModelSerializer):
             'customer', 'customer_name',
             'quantity', 'unit_cost_usd_snapshot', 'total_cost_usd_snapshot',
             'unit_cost_toman_snapshot', 'total_cost_toman_snapshot',
-            'exchange_rate_snapshot', 'is_commission', 'created_at',
+            'exchange_rate_snapshot', 'is_commission', 'zero_reason', 'created_at',
         ]
 
     def get_customer_name(self, obj):
@@ -360,7 +360,7 @@ class SaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Sale
         fields = [
-            'id', 'customer', 'visit', 'package', 'payment', 'amount_usd',
+            'id', 'customer', 'visit', 'package', 'amount_usd',
             'discount_usd', 'exchange_rate', 'amount_toman', 'status',
             'idempotency_key', 'created_at',
         ]

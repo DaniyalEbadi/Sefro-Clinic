@@ -2,7 +2,8 @@ from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Service
+from customers.models import Customer, Service
+from finance.models import Sale
 from tests.helpers import admin_client
 
 
@@ -74,27 +75,31 @@ class ApiDuplicateTests(TestCase):
 
 
 class CascadeTests(TestCase):
-    def test_deleting_customer_cascades_visits_and_payments(self):
+    def test_deleting_customer_cascades_visits_and_sales(self):
         from customers.models import Visit
         customer = make_customer()
         visit = Visit.objects.create(customer=customer, start_at=timezone.now(), end_at=timezone.now())
-        Payment.objects.create(customer=customer, visit=visit, amount='1000', paid_at=timezone.now())
+        Sale.objects.create(
+            customer=customer, visit=visit, amount_usd='1', amount_toman='1000',
+            status=Sale.Status.PAID,
+        )
 
         customer.delete()
 
         self.assertFalse(Visit.objects.filter(id=visit.id).exists())
-        self.assertFalse(Payment.objects.filter(customer_id=customer.id).exists())
+        self.assertFalse(Sale.objects.filter(customer_id=customer.id).exists())
 
-    def test_deleting_visit_nulls_payment_visit_reference(self):
+    def test_deleting_visit_nulls_sale_visit_reference(self):
         from customers.models import Visit
         customer = make_customer()
         visit = Visit.objects.create(customer=customer, start_at=timezone.now(), end_at=timezone.now())
-        payment = Payment.objects.create(
-            customer=customer, visit=visit, amount='1000', paid_at=timezone.now(),
+        sale = Sale.objects.create(
+            customer=customer, visit=visit, amount_usd='1', amount_toman='1000',
+            status=Sale.Status.PAID,
         )
 
         visit.delete()
 
-        payment.refresh_from_db()
-        self.assertIsNone(payment.visit)
-        self.assertEqual(payment.customer_id, customer.id)
+        sale.refresh_from_db()
+        self.assertIsNone(sale.visit)
+        self.assertEqual(sale.customer_id, customer.id)

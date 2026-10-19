@@ -173,14 +173,16 @@ def calculate_visit_financials(visit, rate=None):
     The collected sale total is split across the visit's services in proportion
     to their list price, so each service is credited with the part of the money
     that its price represents and the parts always add back up to the total.
-    Services whose consumption was never recorded fall back to the recipe
-    estimate so a payout is still possible, and are flagged via ``cost_basis``.
+    Completed visits use only ProductUsage snapshots for material cost. A
+    completed visit missing a snapshot is treated as zero actual cost and
+    flagged, rather than silently using today's recipe price. Incomplete
+    visits retain the recipe estimate as a planning value only.
     """
     rate = rate if rate is not None else get_rate('USD', 'TOMAN')
     services = list(visit.services.all())
 
     revenue_usd, revenue_toman, basis = visit_revenue(visit, rate=rate)
-    costs, unattributed_usd, unattributed_toman = service_costs_for_visit(visit, rate=rate)
+    costs, total_product_cost_usd, total_product_cost_toman = service_costs_for_visit(visit, rate=rate)
 
     # Compensation owed for this visit, read from the payout ledger (the same
     # source the period report uses) rather than recomputed, so the per-visit
@@ -206,8 +208,11 @@ def calculate_visit_financials(visit, rate=None):
     weight_total = sum(weights, ZERO)
 
     rows = {}
-    summed_cost_usd = unattributed_usd
-    summed_cost_toman = unattributed_toman
+    # ``service_costs_for_visit`` already returns the visit total, including
+    # usage rows that cannot be attributed to a service.  Start from that
+    # total; adding each service row again would double-count material cost.
+    summed_cost_usd = total_product_cost_usd
+    summed_cost_toman = total_product_cost_toman
     for index, service in enumerate(services):
         price_usd = _q(service.price_usd)
         if weight_total > 0:
@@ -232,9 +237,13 @@ def calculate_visit_financials(visit, rate=None):
         if recorded is not None:
             cost_usd, cost_toman = recorded
             cost_basis = 'product_usage_snapshot'
+        elif visit.status == 'completed':
+            cost_usd = ZERO
+            cost_toman = ZERO
+            cost_basis = 'missing_consumption_snapshot'
         else:
-            # Consumption not recorded for this service. Estimate from the
-            # recipe so compensation and reporting still work, and say so.
+            # Incomplete visits may show the recipe estimate as planning data,
+            # but it is never authoritative for a completed visit.
             cost_usd = estimate_usd
             cost_toman = (cost_usd * rate).quantize(Decimal('0.01'))
             cost_basis = 'service_item_estimate'
@@ -258,8 +267,6 @@ def calculate_visit_financials(visit, rate=None):
         profit_usd = (share - cost_usd).quantize(Decimal('0.01'))
         clinic_share_usd = (share - cost_usd - operator_compensation_usd - wp_share_usd).quantize(Decimal('0.01'))
         clinic_share_toman = (share_toman - cost_toman - operator_compensation_toman - wp_share_toman).quantize(Decimal('0.01'))
-        summed_cost_usd += cost_usd
-        summed_cost_toman += cost_toman
         rows[service.id] = {
             'service_id': service.id,
             'service': service,

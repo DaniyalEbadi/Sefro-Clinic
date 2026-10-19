@@ -113,14 +113,9 @@ class CRUDBenchmarkTests(TestCase):
         save_result('crud_visit_list', result)
         self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
 
-    def test_payment_list(self):
-        result = self.meter.run('get', '/api/payments/', iterations=30)
-        save_result('crud_payment_list', result)
-        self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
-
-    def test_payment_by_service(self):
-        result = self.meter.run('get', '/api/payments/by_service/', iterations=20)
-        save_result('crud_payment_by_service', result)
+    def test_sale_list(self):
+        result = self.meter.run('get', '/api/finance/sales/', iterations=30)
+        save_result('crud_sale_list', result)
         self.assertLess(result['p95_ms'], BUDGETS['crud_list_p95_ms_fast_mode'])
 
     def test_service_list(self):
@@ -351,7 +346,7 @@ class ResponseSizeTests(TestCase):
         endpoints = [
             '/api/customers/',
             '/api/visits/',
-            '/api/payments/',
+            '/api/finance/sales/',
             '/api/services/',
             '/api/inventory/products/',
             '/api/dashboard/',

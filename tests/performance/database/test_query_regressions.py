@@ -81,8 +81,8 @@ class EndpointQueryBudgetTests(TestCase):
         services_queries = probe.statements_matching('visits_services')
         self.assertLessEqual(len(services_queries), 1, 'services M2M fetched more than once')
 
-    def test_payment_list_selects_related(self):
-        probe, response = self._get('/api/payments/')
+    def test_sale_list_selects_related(self):
+        probe, response = self._get('/api/finance/sales/')
         self.assertEqual(response.status_code, 200)
         self.assertLessEqual(probe.count, BUDGETS['max_queries_payment_list'])
         per_row_lookups = [
@@ -90,11 +90,6 @@ class EndpointQueryBudgetTests(TestCase):
             if 'customers_customer' in sql and 'WHERE' in sql and 'id =' in sql
         ]
         self.assertEqual(per_row_lookups, [], 'per-row customer lookup leaked into payment list')
-
-    def test_payment_by_service_is_bounded(self):
-        probe, response = self._get('/api/payments/by_service/')
-        self.assertEqual(response.status_code, 200)
-        self.assertLessEqual(probe.count, 6, f'by_service issued {probe.count} queries')
 
     def test_service_list_within_budget(self):
         probe, response = self._get('/api/services/')

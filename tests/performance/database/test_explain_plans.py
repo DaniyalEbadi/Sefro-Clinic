@@ -53,17 +53,17 @@ class CriticalQueryPlanTests(TestCase):
         cls.admin = User.objects.get(username='sefro_admin')
 
     def test_payments_paid_at_range_plan(self):
-        from customers.models import Payment
-        Payment.objects.all().update(paid_at=timezone.now() - timedelta(days=50))
-        Payment.objects.filter(pk__in=Payment.objects.values_list('pk', flat=True)[:200]).update(
-            paid_at=timezone.now() - timedelta(days=1),
+        from finance.models import Sale
+        Sale.objects.all().update(created_at=timezone.now() - timedelta(days=50))
+        Sale.objects.filter(pk__in=Sale.objects.values_list('pk', flat=True)[:200]).update(
+            created_at=timezone.now() - timedelta(days=1),
         )
-        _analyze_table(Payment._meta.db_table)
+        _analyze_table(Sale._meta.db_table)
 
         window_start = timezone.now() - timedelta(days=2)
-        qs = Payment.objects.filter(
-            paid_at__gte=window_start,
-            paid_at__lt=window_start + timedelta(hours=24),
+        qs = Sale.objects.filter(
+            created_at__gte=window_start,
+            created_at__lt=window_start + timedelta(hours=24),
         )
         plan = explain(qs, analyze=True)
         plan_text = '\n'.join(plan)
@@ -140,11 +140,11 @@ class HeavyPlanTests(TestCase):
     def test_payment_aggregation_uses_index(self):
         from django.db.models import Sum
 
-        from customers.models import Payment
-        _analyze_table(Payment._meta.db_table)
+        from finance.models import Sale
+        _analyze_table(Sale._meta.db_table)
         now = timezone.now()
-        qs = Payment.objects.filter(paid_at__gte=now - timedelta(days=30), paid_at__lt=now)
-        plan_text = '\n'.join(explain(qs.aggregate(total=Sum('amount')), analyze=True))
+        qs = Sale.objects.filter(created_at__gte=now - timedelta(days=30), created_at__lt=now)
+        plan_text = '\n'.join(explain(qs.aggregate(total=Sum('amount_toman')), analyze=True))
         save_result('explain_heavy_payment_agg', {'uses_index': _plan_uses_index(plan_text)})
 
     def test_report_service_popularity_plan(self):

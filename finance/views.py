@@ -408,7 +408,7 @@ class SaleViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(status=params['status'])
         if params.get('package'):
             qs = qs.filter(package_id=params['package'])
-        return qs.select_related('customer', 'visit', 'package', 'payment')
+        return qs.select_related('customer', 'visit', 'package')
 
     @extend_schema(request=RefundSerializer, responses=SaleSerializer)
     @action(detail=True, methods=['post'], permission_classes=[IsEmployeeOrAdmin])
@@ -649,9 +649,13 @@ class RecordConsumptionView(APIView):
                 'selected_products': serializers.DictField(
                     required=False,
                     help_text=(
-                        'Optional mapping of service ID to [product ID, quantity] pairs. '
-                        'Mandatory products are automatic; choose exactly one product from each selection group.'
+                        'Mapping of service ID to actual [product ID, quantity] pairs. '
+                        'Recipe quantities are estimates; submit actual quantities.'
                     ),
+                ),
+                'zero_consumption': serializers.DictField(
+                    required=False,
+                    help_text='Mapping of service ID to a required reason when no recipe product was used.',
                 ),
                 'extra_products': serializers.ListField(
                     required=False,
@@ -684,9 +688,11 @@ class RecordConsumptionView(APIView):
             return Response({'error': 'Visit not found.'}, status=status.HTTP_404_NOT_FOUND)
         selected = request.data.get('selected_products')
         extras = request.data.get('extra_products')
+        zero_consumption = request.data.get('zero_consumption')
         try:
             usages = accounting.record_visit_consumption(
                 visit, selected_products=selected, extra_products=extras,
+                zero_consumption=zero_consumption,
             )
         except Exception as exc:
             return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)

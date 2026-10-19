@@ -230,7 +230,10 @@ class CheckoutIntegrationTests(TestCase):
         visit = Visit.objects.create(customer=customer, start_at=timezone.now(), end_at=timezone.now() + timezone.timedelta(minutes=30), status=Visit.Status.COMPLETED)
         visit.services.add(service)
         # First consumption
-        usages1 = accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
+        usages1 = accounting.record_visit_consumption(
+            visit, selected_products={str(service.id): [[product.id, '2']]},
+            at=timezone.now(), rate=Decimal('100000'),
+        )
         # Second call with same visit should create another set? but idempotency via checkout prevents duplicate sale; here we test historical cost not duplicated incorrectly
         # For this service, usages are deterministic - we just verify snapshot preserved
         self.assertEqual(usages1[0].unit_cost_usd_snapshot, Decimal('5.00'))
@@ -503,7 +506,10 @@ class ProductCostHistoryIntegrationTests(TestCase):
         ServiceItem.objects.create(service=service, product=product, quantity=Decimal('3'))
         visit = Visit.objects.create(customer=customer, start_at=timezone.now(), end_at=timezone.now() + timezone.timedelta(minutes=30), status=Visit.Status.COMPLETED)
         visit.services.add(service)
-        usages = accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
+        usages = accounting.record_visit_consumption(
+            visit, selected_products={str(service.id): [[product.id, '3']]},
+            at=timezone.now(), rate=Decimal('100000'),
+        )
         self.assertEqual(usages[0].total_cost_usd_snapshot, Decimal('21.00'))  # 7*3
         # change product cost should not affect computed profit via usages
         record_product_purchase(product=product, quantity=Decimal('10'), unit_cost_usd=Decimal('100'), purchase_date=timezone.now().date())

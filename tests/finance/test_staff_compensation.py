@@ -12,7 +12,7 @@ from django.utils import timezone
 
 from customers.models import Service, Visit
 from finance.models import ProductUsage, ServiceItem, StaffCompensationRule, StaffCompensationRuleProduct, StaffPayout
-from finance.services import staff_compensation
+from finance.services import accounting, staff_compensation
 from finance.services.exchange_rates import set_rate
 from inventory.models import Product
 from tests.helpers import admin_client, employee_client, make_customer, make_employee
@@ -58,6 +58,11 @@ class CompensationFixtureMixin:
             status=Visit.Status.COMPLETED,
         )
         self.visit.services.add(self.service)
+        accounting.record_visit_consumption(
+            self.visit,
+            selected_products={str(self.service.id): [[self.product.id, '2']]},
+            rate=RATE,
+        )
 
 
 class CalculateVisitProfitTests(CompensationFixtureMixin, TestCase):
@@ -244,13 +249,13 @@ class GenerateVisitPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(payout.payout_product_qty, Decimal('2'))
         self.assertEqual(payout.payout_product_value_usd, Decimal('50.00'))
 
-        usage = ProductUsage.objects.get()
+        usage = ProductUsage.objects.get(is_commission=True)
         self.assertEqual(usage.product, self.product)
         self.assertEqual(usage.quantity, Decimal('2'))
         self.assertEqual(usage.total_cost_usd_snapshot, Decimal('50.00'))
 
         self.product.refresh_from_db()
-        self.assertEqual(self.product.count, 8)
+        self.assertEqual(self.product.count, 6)
 
     def test_regenerating_does_not_duplicate_commission_usage(self):
         make_rule(
@@ -260,7 +265,7 @@ class GenerateVisitPayoutsTests(CompensationFixtureMixin, TestCase):
         )
         staff_compensation.generate_visit_payouts(self.visit)
         staff_compensation.generate_visit_payouts(self.visit)
-        self.assertEqual(ProductUsage.objects.count(), 1)
+        self.assertEqual(ProductUsage.objects.filter(is_commission=True).count(), 1)
 
 
 class StaffPayoutReportTests(CompensationFixtureMixin, TestCase):
@@ -505,8 +510,16 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         self.client = admin_client()
         Visit.objects.filter(pk=self.visit.pk).update(status=Visit.Status.CONFIRMED)
 
+    def _record_created_visit(self, visit_id):
+        return self.client.post(
+            f'/api/finance/visits/{visit_id}/record-consumption/',
+            {'selected_products': {str(self.service.id): [[self.product.id, '2']]}},
+            format='json',
+        )
+
     def test_completing_visit_creates_payout(self):
         make_rule()
+        self._record_created_visit(self.visit.id)
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200, response.data)
         payout = StaffPayout.objects.get()
@@ -516,6 +529,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
 
     def test_completing_visit_without_rule_creates_nothing(self):
         StaffCompensationRule.objects.all().delete()
+        self._record_created_visit(self.visit.id)
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(StaffPayout.objects.count(), 0)
@@ -523,6 +537,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
     def test_completing_compensable_visit_without_staff_is_rejected(self):
         make_rule()
         Visit.objects.filter(pk=self.visit.pk).update(staff=None)
+        self._record_created_visit(self.visit.id)
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 400)
         self.assertIn('staff', response.data['error'])
@@ -530,6 +545,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
 
     def test_recompleting_visit_does_not_duplicate_payout(self):
         make_rule()
+        self._record_created_visit(self.visit.id)
         self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(StaffPayout.objects.count(), 1)
@@ -537,6 +553,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
     def test_employee_can_complete_and_get_payout(self):
         make_rule()
         Visit.objects.filter(pk=self.visit.pk).update(staff=self.staff)
+        self._record_created_visit(self.visit.id)
         employee = employee_client(username='emp_user')
         response = employee.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200)
@@ -547,6 +564,7 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
             calculation_type=StaffCompensationRule.CalculationType.MONTHLY_SALARY,
             fixed_amount_usd=Decimal('500.00'),
         )
+        self._record_created_visit(self.visit.id)
         response = self.client.post(f'/api/visits/{self.visit.id}/complete/')
         self.assertEqual(response.status_code, 200, response.data)
         payout = StaffPayout.objects.get()
@@ -577,6 +595,8 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
 
         confirm = self.client.post(f"/api/visits/{create.data['id']}/confirm/")
         self.assertEqual(confirm.status_code, 200, confirm.data)
+        recorded = self._record_created_visit(create.data['id'])
+        self.assertEqual(recorded.status_code, 201, recorded.data)
         complete = self.client.post(f"/api/visits/{create.data['id']}/complete/")
         self.assertEqual(complete.status_code, 200, complete.data)
 
@@ -600,9 +620,13 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(create.status_code, 201, create.data)
         self.assertIsNone(create.data['staff'])
 
+        confirm = self.client.post(f"/api/visits/{create.data['id']}/confirm/")
+        self.assertEqual(confirm.status_code, 200, confirm.data)
+        recorded = self._record_created_visit(create.data['id'])
+        self.assertEqual(recorded.status_code, 201, recorded.data)
         complete = self.client.post(f"/api/visits/{create.data['id']}/complete/")
         self.assertEqual(complete.status_code, 400)
-        self.assertIn('staff', complete.data['error'])
+        self.assertIn('staff', str(complete.data))
         self.assertEqual(StaffPayout.objects.count(), 0)
 
     def test_posting_visit_already_completed_settles_payout(self):
@@ -618,9 +642,14 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
             'services': [self.service.id],
             'start_at': greg_to_shamsi_dt(start),
             'end_at': greg_to_shamsi_dt(end),
-            'status': 'completed',
+            'status': 'confirmed',
         }, format='json')
         self.assertEqual(create.status_code, 201, create.data)
+        self.assertEqual(self._record_created_visit(create.data['id']).status_code, 201)
+        complete = self.client.patch(
+            f"/api/visits/{create.data['id']}/", {'status': 'completed'}, format='json',
+        )
+        self.assertEqual(complete.status_code, 200, complete.data)
         payout = StaffPayout.objects.get(visit_id=create.data['id'])
         self.assertEqual(payout.staff, self.staff)
         self.assertEqual(payout.payout_cash_usd, Decimal('100.00'))
@@ -638,11 +667,16 @@ class VisitCompletionGeneratesPayoutsTests(CompensationFixtureMixin, TestCase):
             'services': [self.service.id],
             'start_at': greg_to_shamsi_dt(start),
             'end_at': greg_to_shamsi_dt(end),
-            'status': 'completed',
+            'status': 'confirmed',
         }, format='json')
-        self.assertEqual(create.status_code, 400, create.data)
-        self.assertIn('status', create.data)
-        self.assertEqual(Visit.objects.count(), before)
+        self.assertEqual(create.status_code, 201, create.data)
+        self.assertEqual(self._record_created_visit(create.data['id']).status_code, 201)
+        complete = self.client.patch(
+            f"/api/visits/{create.data['id']}/", {'status': 'completed'}, format='json',
+        )
+        self.assertEqual(complete.status_code, 400, complete.data)
+        self.assertIn('staff', str(complete.data))
+        self.assertGreater(Visit.objects.count(), before)
         self.assertEqual(StaffPayout.objects.count(), 0)
 
 
@@ -745,7 +779,7 @@ class MonthlySalaryPayoutTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(payout.payout_product_value_usd, Decimal('50.00'))
         self.assertEqual(ProductUsage.objects.filter(is_commission=True).count(), 1)
         self.product.refresh_from_db()
-        self.assertEqual(self.product.count, 8)
+        self.assertEqual(self.product.count, 6)
 
 
 class MultiProductPayoutTests(CompensationFixtureMixin, TestCase):
@@ -788,7 +822,7 @@ class MultiProductPayoutTests(CompensationFixtureMixin, TestCase):
         self.assertEqual(usages.count(), 2)
         self.product.refresh_from_db()
         self.other_product.refresh_from_db()
-        self.assertEqual(self.product.count, 8)
+        self.assertEqual(self.product.count, 6)
         self.assertEqual(self.other_product.count, 2)
 
     def test_regenerating_does_not_duplicate_lines_or_usage(self):

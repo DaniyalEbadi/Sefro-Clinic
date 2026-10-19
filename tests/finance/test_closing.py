@@ -46,7 +46,7 @@ from finance.models import (
     Sale,
     StaffPayout,
 )
-from finance.services import accounting, closing, payments, staff_compensation
+from finance.services import closing, payments, staff_compensation
 from finance.services import expenses as expense_svc
 from finance.services import operating_expenses as opex_svc
 from finance.services import purchases as purchase_svc
@@ -124,7 +124,6 @@ class ClosingFixture(CompensationFixtureMixin, TestCase):
         self.client = admin_client()
         self.admin_user = make_admin()
         make_rule()  # doctor: 50% of the collected revenue
-        accounting.record_visit_consumption(self.visit, rate=RATE)
         payments.checkout(
             customer=self.customer, amount_usd=Decimal('200'),
             visit=self.visit, rate=RATE,

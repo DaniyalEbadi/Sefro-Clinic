@@ -1,7 +1,8 @@
 from django.test import TestCase
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
+from finance.models import Sale
 from tests.helpers import admin_client
 
 
@@ -23,7 +24,10 @@ class DashboardTests(TestCase):
             first_name='Ali', last_name='Rezaei',
             mobile_number='09121111111', national_id='001-0000001',
         )
-        Payment.objects.create(customer=customer, amount='300000', paid_at=timezone.now())
+        Sale.objects.create(
+            customer=customer, amount_usd='3', amount_toman='300000',
+            status=Sale.Status.PAID,
+        )
         Visit.objects.create(
             customer=customer,
             start_at=timezone.now(),

@@ -39,7 +39,7 @@ class ConcurrencySmokeTests(TestCase):
         endpoints = [
             ('/api/customers/', 'GET'),
             ('/api/visits/', 'GET'),
-            ('/api/payments/', 'GET'),
+            ('/api/finance/sales/', 'GET'),
             ('/api/dashboard/', 'GET'),
         ]
         result = run_concurrent(
@@ -63,7 +63,7 @@ class HeavyConcurrencyTests(TestCase):
         endpoints = [
             ('/api/customers/', 'GET'),
             ('/api/visits/?page=1', 'GET'),
-            ('/api/payments/?page=1', 'GET'),
+            ('/api/finance/sales/?page=1', 'GET'),
             ('/api/dashboard/', 'GET'),
             ('/api/services/', 'GET'),
             ('/api/inventory/products/', 'GET'),

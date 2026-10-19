@@ -111,7 +111,11 @@ class AccountingServiceTests(TestCase):
         )
         visit.services.add(self.service)
         ServiceItem.objects.create(service=self.service, product=self.product, quantity=Decimal('3'))
-        usages = accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
+        usages = accounting.record_visit_consumption(
+            visit,
+            selected_products={str(self.service.id): [(self.product.id, Decimal('3'))]},
+            at=timezone.now(), rate=Decimal('100000'),
+        )
         self.assertEqual(len(usages), 1)
         self.assertEqual(usages[0].total_cost_usd_snapshot, Decimal('30.00'))
 
@@ -193,11 +197,9 @@ class PaymentsServiceTests(TestCase):
         comp = sale.components.first()
         self.assertEqual(comp.method, 'cash_toman')
         self.assertEqual(comp.amount_usd, Decimal('100.00'))
-        # Legacy Payment record should have correct Toman amount
-        from customers.models import Payment
-        legacy = Payment.objects.get(customer=customer)
-        self.assertEqual(legacy.amount, Decimal('10000000.00'))
-        self.assertEqual(legacy.amount_usd, Decimal('100.00'))
+        # The Sale ledger and its component are the sole payment record.
+        self.assertEqual(sale.components.count(), 1)
+        self.assertEqual(sale.components.get().amount_usd, Decimal('100.00'))
 
     def test_checkout_cash_usd_only(self):
         """Test checkout with only cash_usd payment method."""
@@ -487,7 +489,11 @@ class ReportingServiceTests(TestCase):
         )
         visit.services.add(self.service)
         ServiceItem.objects.create(service=self.service, product=self.product, quantity=Decimal('3'))
-        accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
+        accounting.record_visit_consumption(
+            visit,
+            selected_products={str(self.service.id): [(self.product.id, Decimal('3'))]},
+            at=timezone.now(), rate=Decimal('100000'),
+        )
         rows = reporting.profit_by_service(timezone.now() - timezone.timedelta(days=1), timezone.now() + timezone.timedelta(days=1))
         self.assertTrue(any(r['service_id'] == self.service.id for r in rows))
         svc_row = next(r for r in rows if r['service_id'] == self.service.id)
@@ -567,7 +573,11 @@ class InventoryServiceTests(TestCase):
             status=Visit.Status.COMPLETED,
         )
         visit.services.add(self.service)
-        usages = accounting.record_visit_consumption(visit, at=timezone.now(), rate=Decimal('100000'))
+        usages = accounting.record_visit_consumption(
+            visit,
+            selected_products={str(self.service.id): [(self.product.id, Decimal('3'))]},
+            at=timezone.now(), rate=Decimal('100000'),
+        )
         self.assertEqual(len(usages), 1)
         self.assertEqual(usages[0].total_cost_usd_snapshot, Decimal('30.00'))
 

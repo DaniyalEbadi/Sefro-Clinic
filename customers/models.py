@@ -102,7 +102,10 @@ class Customer(models.Model):
 
     @property
     def total_payments(self):
-        total = self.payments.aggregate(total=models.Sum('amount'))['total']
+        from finance.models import Sale
+        total = self.sales.filter(
+            status__in=[Sale.Status.PAID, Sale.Status.REFUNDED, Sale.Status.PARTIALLY_REFUNDED],
+        ).aggregate(total=models.Sum('amount_toman'))['total']
         return total or Decimal('0')
 
     @property
@@ -115,7 +118,7 @@ class Customer(models.Model):
 
     @property
     def last_payment(self):
-        return self.payments.order_by('-paid_at').first()
+        return self.sales.order_by('-created_at').first()
 
 
 class Visit(models.Model):
@@ -294,37 +297,3 @@ class VisitService(models.Model):
         return f'{self.service} @ {self.visit_id} -> {self.staff or "unassigned"}'
 
 
-class Payment(models.Model):
-    class Method(models.TextChoices):
-        CASH = 'cash', 'Cash'
-        CARD = 'card', 'Card'
-        TRANSFER = 'transfer', 'Transfer'
-        WALLET = 'wallet', 'Wallet'
-        MIXED = 'mixed', 'Mixed'
-
-    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='payments')
-    visit = models.ForeignKey(Visit, on_delete=models.SET_NULL, related_name='payments', null=True, blank=True)
-    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0'))])
-    amount_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True,
-        validators=[MinValueValidator(Decimal('0'))],
-        help_text='USD snapshot of the paid amount, when recorded through the financial system.',
-    )
-    exchange_rate = models.DecimalField(
-        max_digits=18, decimal_places=6, null=True, blank=True,
-        validators=[MinValueValidator(Decimal('0'))],
-        help_text='Toman-per-USD exchange rate snapshot at payment time.',
-    )
-    payment_method = models.CharField(max_length=20, choices=Method.choices, default=Method.CARD)
-    paid_at = models.DateTimeField()
-    notes = models.TextField(blank=True, validators=TEXT_SANITIZERS)
-
-    class Meta:
-        ordering = ['-paid_at']
-        indexes = [
-            models.Index(fields=['paid_at'], name='payments_paid_at_idx'),
-            models.Index(fields=['paid_at', 'customer'], name='payments_paid_at_customer_idx'),
-        ]
-
-    def __str__(self):
-        return f'{self.customer} - {self.amount}'

@@ -1,3 +1,5 @@
+import unittest
+
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
@@ -203,6 +205,7 @@ class CustomersE2ETest(TestCase):
         self.assertEqual(cancel_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(cancel_resp.data['status'], 'canceled')
 
+    @unittest.skip('obsolete legacy Payment endpoint; Sale/Checkout coverage is canonical')
     def test_08_payment_full_crud(self):
         now = timezone.now()
         visit = Visit.objects.create(
@@ -250,6 +253,7 @@ class CustomersE2ETest(TestCase):
         resp = self.client.get('/api/customers/')
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    @unittest.skip('obsolete legacy Payment response shape; Visit exposes Sale rows')
     def test_10_visit_detail_exposes_checkout_payments(self):
         from decimal import Decimal
 

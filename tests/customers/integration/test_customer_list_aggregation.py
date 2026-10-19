@@ -16,7 +16,8 @@ from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Visit
+from customers.models import Customer, Visit
+from finance.models import Sale
 from Sefro_Clinic.fields import greg_to_shamsi_date
 from tests.helpers import admin_client
 from tests.performance.conftest import BUDGETS, QueryProbe
@@ -51,11 +52,12 @@ def _visit(customer, days_ago, minutes=60):
 
 
 def _payment(customer, amount, days_ago):
-    return Payment.objects.create(
+    return Sale.objects.create(
         customer=customer,
-        amount=amount,
-        payment_method=Payment.Method.CARD,
-        paid_at=timezone.now() - timedelta(days=days_ago),
+        amount_toman=amount,
+        amount_usd=Decimal('1'),
+        status=Sale.Status.PAID,
+        created_at=timezone.now() - timedelta(days=days_ago),
     )
 
 
@@ -206,7 +208,7 @@ class CustomerAggregationRegressionTests(TestCase):
         # user lookup legitimately runs twice (JWT auth + permission check).
         dup_statements = [
             sql for sql in probe.duplicates()
-            if 'customers_customer' in sql or 'customers_visit' in sql or 'customers_payment' in sql
+            if 'customers_customer' in sql or 'customers_visit' in sql or 'finance_sale' in sql
         ]
         self.assertEqual(dup_statements, [], f'duplicate statements detected: {dup_statements[:2]}')
 

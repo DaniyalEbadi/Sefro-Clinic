@@ -26,6 +26,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminOrEmployee, IsAdminOrReadOnly
+from finance.models import Sale
+from finance.services.financials import REVENUE_STATUSES
 from Sefro_Clinic.fields import SHAMSI_DATE_FORMAT, shamsi_to_greg_date
 from Sefro_Clinic.periods import (
     shamsi_month_bounds,
@@ -37,10 +39,9 @@ from Sefro_Clinic.periods import (
     shamsi_period_range as _period_range,
 )
 
-from .models import Customer, Payment, Service, ServiceCategory, Visit, VisitService
+from .models import Customer, Service, ServiceCategory, Visit, VisitService
 from .serializers import (
     CustomerSerializer,
-    PaymentSerializer,
     ServiceCategorySerializer,
     ServiceSerializer,
     VisitSerializer,
@@ -54,6 +55,14 @@ def _uncovered_operator_message(uncovered_roles):
         'This visit has a service that requires an operator, but no matching staff '
         f'member is assigned for: {roles}. Assign staff (or an operator per service) '
         'before completing it.'
+    )
+
+
+def _missing_consumption_message(service_names):
+    names = ', '.join(service_names)
+    return (
+        'Actual product consumption must be recorded before completing this visit. '
+        f'Missing consumption for service(s): {names}.'
     )
 
 
@@ -95,9 +104,10 @@ class DashboardAPIView(APIView):
             'loyal_customer_count': Customer.objects.annotate(
                 vc=Count('visits'),
             ).filter(vc__gte=5).count(),
-            'today_sales': Payment.objects.filter(
-                paid_at__gte=shamsi_start, paid_at__lt=shamsi_end,
-            ).aggregate(total=Sum('amount'))['total'] or 0,
+            'today_sales': Sale.objects.filter(
+                status__in=REVENUE_STATUSES,
+                created_at__gte=shamsi_start, created_at__lt=shamsi_end,
+            ).aggregate(total=Sum('amount_toman'))['total'] or 0,
             'today_visits': Visit.objects.filter(
                 start_at__gte=shamsi_start, start_at__lt=shamsi_end,
             ).count(),
@@ -427,7 +437,7 @@ class CustomerViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         # Aggregates are computed by independent correlated subqueries, one
-        # per relation. Annotating Count('visits') and Sum('payments__amount')
+        # per relation. Annotating Count('visits') and Sum('sales__amount_toman')
         # in a single .annotate() call joins both relations in the same FROM
         # clause, so a customer with 4 visits and 4 payments yields 4 x 4 = 16
         # joined rows and both aggregates are inflated (num_visits = 16).
@@ -442,17 +452,17 @@ class CustomerViewSet(viewsets.ModelViewSet):
             .values('n')
         )
         payment_sum_qs = (
-            Payment.objects
-            .filter(customer=OuterRef('pk'))
+            Sale.objects
+            .filter(customer=OuterRef('pk'), status__in=REVENUE_STATUSES)
             .order_by()
             .values('customer')
-            .annotate(t=Sum('amount'))
+            .annotate(t=Sum('amount_toman'))
             .values('t')
         )
         last_visit_subquery = Subquery(
             Visit.objects.filter(customer=OuterRef('pk')).order_by('-start_at').values('start_at')[:1],
         )
-        last_payment_qs = Payment.objects.filter(customer=OuterRef('pk')).order_by('-paid_at')
+        last_payment_qs = Sale.objects.filter(customer=OuterRef('pk')).order_by('-created_at')
         return Customer.objects.annotate(
             num_visits=Coalesce(
                 Subquery(visit_count_qs, output_field=IntegerField()),
@@ -469,10 +479,10 @@ class CustomerViewSet(viewsets.ModelViewSet):
             ),
             last_visit_at=last_visit_subquery,
             last_payment_id=Subquery(last_payment_qs.values('id')[:1]),
-            last_payment_amount=Subquery(last_payment_qs.values('amount')[:1]),
+            last_payment_amount=Subquery(last_payment_qs.values('amount_toman')[:1]),
             last_payment_amount_usd=Subquery(last_payment_qs.values('amount_usd')[:1]),
-            last_payment_method=Subquery(last_payment_qs.values('payment_method')[:1]),
-            last_payment_paid_at=Subquery(last_payment_qs.values('paid_at')[:1]),
+            last_payment_status=Subquery(last_payment_qs.values('status')[:1]),
+            last_payment_created_at=Subquery(last_payment_qs.values('created_at')[:1]),
         )
 
 
@@ -551,7 +561,10 @@ class VisitViewSet(viewsets.ModelViewSet):
         .select_related('customer', 'staff')
         .prefetch_related(
             'services',
-            Prefetch('payments', queryset=Payment.objects.select_related('customer')),
+            # VisitSaleSerializer exposes customer_name, so include the sale
+            # customer in the prefetch query instead of resolving it once per
+            # sale during list serialization.
+            Prefetch('sales', queryset=Sale.objects.select_related('customer').order_by('-created_at')),
             # Serializes the per-service operator rows without an N+1 on list.
             Prefetch(
                 'service_links',
@@ -575,11 +588,15 @@ class VisitViewSet(viewsets.ModelViewSet):
         rejected visit (compensable services, no operator) from persisting.
         """
         from finance.services import staff_compensation
+        from finance.services.accounting import missing_recipe_services
 
         with transaction.atomic():
             visit = serializer.save()
             if visit.status != Visit.Status.COMPLETED:
                 return
+            missing = missing_recipe_services(visit)
+            if missing:
+                raise ValidationError({'status': _missing_consumption_message(missing)})
             uncovered = visit.resolve_operators()
             if uncovered:
                 raise ValidationError({'status': _uncovered_operator_message(uncovered)})
@@ -600,7 +617,13 @@ class VisitViewSet(viewsets.ModelViewSet):
         if not becoming_completed:
             return
         from finance.services import staff_compensation
+        from finance.services.accounting import missing_recipe_services
 
+        missing = missing_recipe_services(visit)
+        if missing:
+            visit.status = previous_status
+            visit.save(update_fields=['status'])
+            raise ValidationError({'status': _missing_consumption_message(missing)})
         uncovered = visit.resolve_operators()
         if uncovered:
             # Keep the row consistent with the complete action: a compensable
@@ -660,6 +683,14 @@ class VisitViewSet(viewsets.ModelViewSet):
         # the primary staff fallback), otherwise compensation would be silently
         # skipped or booked against the wrong person. Rejected up front.
         from finance.services import staff_compensation
+        from finance.services.accounting import missing_recipe_services
+
+        missing = missing_recipe_services(visit)
+        if missing:
+            return Response(
+                {'error': _missing_consumption_message(missing)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         uncovered = visit.resolve_operators()
         if uncovered:
@@ -769,61 +800,3 @@ class VisitViewSet(viewsets.ModelViewSet):
         return Response(VisitSerializer(visit).data, status=status.HTTP_201_CREATED)
 
 
-@extend_schema(tags=['Payments'])
-class PaymentViewSet(viewsets.ModelViewSet):
-    queryset = Payment.objects.select_related('customer', 'visit')
-    serializer_class = PaymentSerializer
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['customer__first_name', 'customer__last_name', 'customer__id', 'customer__mobile_number']
-    ordering_fields = ['paid_at', 'amount', 'payment_method']
-    ordering = ['-paid_at']
-
-    def get_queryset(self):
-        qs = super().get_queryset()
-        params = self.request.query_params
-        visit = params.get('visit')
-        if visit and visit.isdigit():
-            qs = qs.filter(visit_id=int(visit))
-        customer = params.get('customer')
-        if customer and customer.isdigit():
-            qs = qs.filter(customer_id=int(customer))
-        return qs
-
-    @action(detail=False, methods=['get'])
-    @extend_schema(
-        tags=['Payments'],
-        responses=inline_serializer('ServicePaymentSummary', fields={
-            'service_id': serializers.IntegerField(),
-            'service_name': serializers.CharField(),
-            'total_payments': serializers.DecimalField(max_digits=14, decimal_places=2),
-            'count': serializers.IntegerField(),
-        }),
-    )
-    def by_service(self, request):
-        qs = Payment.objects.select_related('visit').prefetch_related('visit__services')
-        date_from = request.query_params.get('date_from')
-        date_to = request.query_params.get('date_to')
-        if date_from:
-            qs = qs.filter(paid_at__gte=shamsi_to_greg_date(date_from))
-        if date_to:
-            qs = qs.filter(paid_at__lt=shamsi_to_greg_date(date_to) + timedelta(days=1))
-
-        service_totals = {}
-        for payment in qs.all():
-            if not payment.visit:
-                continue
-            for service in payment.visit.services.all():
-                key = service.id
-                if key not in service_totals:
-                    service_totals[key] = {
-                        'service_id': service.id,
-                        'service_name': service.name,
-                        'total_payments': Decimal('0'),
-                        'count': 0,
-                    }
-                service_totals[key]['total_payments'] += payment.amount
-                service_totals[key]['count'] += 1
-        for row in service_totals.values():
-            row['total_payments'] = float(row['total_payments'])
-        return Response(list(service_totals.values()))

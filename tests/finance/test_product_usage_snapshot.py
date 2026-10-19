@@ -193,7 +193,9 @@ class CustomerLinkTests(TestCase):
         visit = make_visit(self.customer, service)
 
         accounting.record_visit_consumption(
-            visit, extra_products=[[extra.id, '2']], rate=RATE,
+            visit,
+            selected_products={str(service.id): [[recipe.id, '1']]},
+            extra_products=[[extra.id, '2']], rate=RATE,
         )
 
         rows = ProductUsage.objects.filter(visit=visit)
@@ -213,7 +215,9 @@ class CustomerLinkTests(TestCase):
         ServiceItem.objects.create(service=service, product=self.product, quantity=Decimal('1'))
         visit = make_visit(self.customer, service)
 
-        accounting.record_visit_consumption(visit, rate=RATE)
+        accounting.record_visit_consumption(
+            visit, selected_products={str(service.id): [[self.product.id, '1']]}, rate=RATE,
+        )
         with self.assertRaises(ConsumptionError):
             accounting.record_visit_consumption(visit, rate=RATE)
 

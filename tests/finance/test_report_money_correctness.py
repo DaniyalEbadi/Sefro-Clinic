@@ -224,9 +224,17 @@ class ProfitByServiceRevenueTests(TestCase):
         for service in services:
             visit.services.add(service)
         if consume:
-            # Real consumption, so the usage rows are linked to this visit and
-            # the service, with a frozen cost snapshot.
-            accounting.record_visit_consumption(visit, rate=RATE)
+            # Real quantities are supplied explicitly; recipe quantities are
+            # estimates and are not silently treated as actual usage.
+            selected = {
+                str(service.id): [
+                    [item.product_id, str(item.quantity)]
+                    for item in service.items.all()
+                    if not item.selection_group
+                ]
+                for service in services
+            }
+            accounting.record_visit_consumption(visit, selected_products=selected, rate=RATE)
         return visit
 
     def test_service_price_is_counted_once_per_visit_not_once_per_consumable(self):

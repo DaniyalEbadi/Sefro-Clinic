@@ -123,8 +123,7 @@ class CheckoutAndWalletPaymentTests(FinanceBase):
             WalletTransaction.objects.filter(transaction_type=WalletTransaction.Type.REWARD, amount=Decimal('5.00')).exists()
         )
         self.assertEqual(sale.components.filter(method='card').count(), 1)
-        from customers.models import Payment
-        self.assertEqual(Payment.objects.filter(payment_method='card').count(), 1)
+        self.assertEqual(sale.components.filter(method='card').count(), 1)
 
     def test_idempotent_checkout(self):
         params = dict(customer=self.customer, amount_usd=Decimal('100'),
@@ -188,7 +187,10 @@ class ProductCostAndConsumptionTests(FinanceBase):
             status=Visit.Status.COMPLETED,
         )
         visit.services.add(self.service)
-        usages = accounting.record_visit_consumption(visit, at=timezone.now(), rate=self.rate)
+        usages = accounting.record_visit_consumption(
+            visit, selected_products={str(self.service.id): [[self.product.id, '3']]},
+            at=timezone.now(), rate=self.rate,
+        )
         self.assertEqual(len(usages), 1)
         self.assertEqual(usages[0].total_cost_usd_snapshot, Decimal('30.00'))
 
@@ -290,7 +292,10 @@ class ReportingTests(FinanceBase):
         )
         visit.services.add(self.service)
         ServiceItem.objects.create(service=self.service, product=self.product, quantity=Decimal('3'))
-        accounting.record_visit_consumption(visit, at=timezone.now(), rate=self.rate)
+        accounting.record_visit_consumption(
+            visit, selected_products={str(self.service.id): [[self.product.id, '3']]},
+            at=timezone.now(), rate=self.rate,
+        )
         rows = reporting.profit_by_service(timezone.now() - timezone.timedelta(days=1), timezone.now() + timezone.timedelta(days=1))
         self.assertTrue(any(r['service_id'] == self.service.id for r in rows))
         svc_row = next(r for r in rows if r['service_id'] == self.service.id)

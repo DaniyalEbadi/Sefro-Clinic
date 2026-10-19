@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework import status
 
-from customers.models import Customer, Payment, Service
+from customers.models import Customer, Service
 from inventory.models import Product
 from tests.helpers import admin_client
 
@@ -69,38 +69,6 @@ class AdminServiceCRUDTests(TestCase):
     def test_delete_service(self):
         s = Service.objects.create(name='Delete Me', price='100000.00', time=30)
         response = self.client.delete(f'/api/services/{s.id}/')
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-
-
-class AdminPaymentCRUDTests(TestCase):
-    """Admin must have full CRUD on payments."""
-
-    def setUp(self):
-        self.client = admin_client()
-        self.customer = Customer.objects.create(
-            first_name='Zahra', last_name='Hosseini',
-            mobile_number='09134444444', national_id='104-0000004',
-        )
-
-    def test_list_payments(self):
-        self.assertEqual(self.client.get('/api/payments/').status_code, 200)
-
-    def test_create_payment(self):
-        from django.utils import timezone
-        p = Payment.objects.create(
-            customer=self.customer, amount='500000.00',
-            payment_method='card', paid_at=timezone.now(),
-        )
-        response = self.client.get(f'/api/payments/{p.id}/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_delete_payment(self):
-        from django.utils import timezone
-        p = Payment.objects.create(
-            customer=self.customer, amount='300000.00',
-            payment_method='cash', paid_at=timezone.now(),
-        )
-        response = self.client.delete(f'/api/payments/{p.id}/')
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
 
@@ -257,7 +225,7 @@ class AnonymousAccessTests(TestCase):
         self.assertEqual(self.client.get('/api/visits/').status_code, 401)
 
     def test_payments_blocked(self):
-        self.assertEqual(self.client.get('/api/payments/').status_code, 401)
+        self.assertEqual(self.client.get('/api/finance/checkout/').status_code, 401)
 
     def test_products_blocked(self):
         self.assertEqual(self.client.get('/api/inventory/products/').status_code, 401)

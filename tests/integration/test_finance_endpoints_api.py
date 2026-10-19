@@ -329,7 +329,11 @@ class ProductUsageAPITests(TestCase):
         )
         visit.services.add(service)
 
-        response = self.client.post(f'/api/finance/visits/{visit.id}/record-consumption/', {}, format='json')
+        response = self.client.post(
+            f'/api/finance/visits/{visit.id}/record-consumption/',
+            {'selected_products': {str(service.id): [[self.product.id, '1']]}},
+            format='json',
+        )
         self.assertEqual(response.status_code, 201, response.data)
 
         row = response.data[0]
@@ -469,7 +473,16 @@ class RecordConsumptionAPITests(TestCase):
         self.visit.services.add(self.service)
 
     def _post(self, pk, payload=None):
-        return self.client.post(self.URL.format(pk=pk), payload or {}, format='json')
+        if payload is None:
+            mandatory = ServiceItem.objects.filter(
+                service=self.service, selection_group__isnull=True,
+            ).values_list('product_id', 'quantity')
+            payload = {
+                'selected_products': {
+                    str(self.service.id): [[product_id, str(quantity)] for product_id, quantity in mandatory],
+                },
+            }
+        return self.client.post(self.URL.format(pk=pk), payload, format='json')
 
     def test_records_usage_from_service_items(self):
         response = self._post(self.visit.id)
@@ -488,7 +501,7 @@ class RecordConsumptionAPITests(TestCase):
         ServiceItem.objects.create(
             service=self.service, product=other, quantity=Decimal('1'), selection_group='serum',
         )
-        payload = {'selected_products': {str(self.service.id): [[other.id, '1']]}}
+        payload = {'selected_products': {str(self.service.id): [[self.product.id, '2'], [other.id, '1']]}}
         response = self._post(self.visit.id, payload)
         self.assertEqual(response.status_code, 201, response.data)
         usage = ProductUsage.objects.get(product=other)
@@ -505,7 +518,7 @@ class RecordConsumptionAPITests(TestCase):
         self.assertIn('Missing required selection group', missing.data['error'])
 
         response = self._post(self.visit.id, {
-            'selected_products': {str(self.service.id): [[alternative.id, '1.000']]},
+            'selected_products': {str(self.service.id): [[self.product.id, '2.000'], [alternative.id, '1.000']]},
         })
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(ProductUsage.objects.filter(product=self.product).count(), 1)
@@ -578,7 +591,10 @@ class RecordConsumptionAPITests(TestCase):
 
     def test_extra_products_deduct_stock_and_record_cost(self):
         extra = make_product(name='Alkarisah', sku='SKU-9', count=Decimal('4'), cost_usd=Decimal('10.00'))
-        response = self._post(self.visit.id, {'extra_products': [[extra.id, '1.5']]})
+        response = self._post(self.visit.id, {
+            'selected_products': {str(self.service.id): [[self.product.id, '2']]},
+            'extra_products': [[extra.id, '1.5']],
+        })
         self.assertEqual(response.status_code, 201, response.data)
         extra.refresh_from_db()
         self.assertEqual(extra.count, Decimal('2.500'))

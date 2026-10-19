@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
 
 
 class CustomerModelTest(TestCase):
@@ -54,18 +54,3 @@ class VisitModelTest(TestCase):
         self.assertEqual(v.status, Visit.Status.PENDING)
 
 
-class PaymentModelTest(TestCase):
-    def setUp(self):
-        self.customer = Customer.objects.create(
-            first_name='Ali', last_name='Rezaei',
-            mobile_number='09121111111', national_id='001-0000001',
-            bitmoji_code='B001',
-        )
-
-    def test_str(self):
-        from django.utils import timezone
-        p = Payment.objects.create(
-            customer=self.customer, amount=Decimal('50000'),
-            paid_at=timezone.now(),
-        )
-        self.assertIn('Ali', str(p))

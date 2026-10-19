@@ -161,6 +161,6 @@ class VisitUnrestrictedTimeTest(TestCase):
 
     def test_other_endpoints_unchanged(self):
         client = self._employee_client()
-        for url in ['/api/customers/', '/api/services/', '/api/payments/', '/api/dashboard/']:
+        for url in ['/api/customers/', '/api/services/', '/api/dashboard/']:
             resp = client.get(url)
             self.assertEqual(resp.status_code, status.HTTP_200_OK, f'{url} failed')

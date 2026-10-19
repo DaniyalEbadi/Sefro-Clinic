@@ -10,7 +10,6 @@ from .views import (
                     DailyReportView,
                     DashboardAPIView,
                     MonthlyReportView,
-                    PaymentViewSet,
                     QuarterlyReportView,
                     ReferralReportView,
                     ReportsAPIView,
@@ -27,7 +26,6 @@ router.register('customers', CustomerViewSet, basename='customer')
 router.register('service-categories', ServiceCategoryViewSet, basename='service-category')
 router.register('services', ServiceViewSet, basename='service')
 router.register('visits', VisitViewSet, basename='visit')
-router.register('payments', PaymentViewSet, basename='payment')
 
 urlpatterns = [
     path('dashboard/', DashboardAPIView.as_view(), name='dashboard'),

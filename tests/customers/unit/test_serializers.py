@@ -6,8 +6,9 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import ClinicUser
-from customers.models import Customer, Payment, Service, Visit
-from customers.serializers import CustomerSerializer, PaymentSerializer, ServiceSerializer, VisitSerializer
+from customers.models import Customer, Service, Visit
+from customers.serializers import CustomerSerializer, ServiceSerializer, VisitSerializer
+from finance.models import PaymentComponent, Sale
 from tests.helpers import make_employee
 
 
@@ -65,7 +66,7 @@ class VisitSerializerTest(TestCase):
         self.assertFalse(serializer.is_valid())
         self.assertIn('customer', serializer.errors)
 
-    def test_visit_serializer_exposes_payments_and_total(self):
+    def test_visit_serializer_exposes_sales_and_total(self):
         visit = VisitSerializer(data={
             'customer': self.customer.id, 'services': [self.service.id],
             'start_at': _START, 'end_at': _END,
@@ -73,16 +74,20 @@ class VisitSerializerTest(TestCase):
         self.assertTrue(visit.is_valid(), visit.errors)
         visit = visit.save()
 
-        Payment.objects.create(
-            customer=self.customer, visit=visit, amount=Decimal('75000'),
-            payment_method='cash', paid_at=timezone.now(),
+        sale = Sale.objects.create(
+            customer=self.customer, visit=visit, amount_usd=Decimal('0.75'),
+            amount_toman=Decimal('75000'), status=Sale.Status.PAID,
+        )
+        PaymentComponent.objects.create(
+            sale=sale, method=PaymentComponent.Method.CASH_TOMAN,
+            amount_usd=Decimal('0.75'),
         )
 
         data = VisitSerializer(visit).data
-        self.assertIn('payments', data)
+        self.assertIn('sales', data)
         self.assertIn('total_paid', data)
-        self.assertEqual(len(data['payments']), 1)
-        self.assertEqual(data['payments'][0]['customer'], self.customer.id)
+        self.assertEqual(len(data['sales']), 1)
+        self.assertEqual(data['sales'][0]['customer'], self.customer.id)
         self.assertEqual(Decimal(str(data['total_paid'])), Decimal('75000'))
         self.assertEqual(data['customer_name'], 'Test Customer')
 
@@ -95,7 +100,7 @@ class VisitSerializerTest(TestCase):
         visit = visit.save()
 
         data = VisitSerializer(visit).data
-        self.assertEqual(data['payments'], [])
+        self.assertEqual(data['sales'], [])
         self.assertEqual(Decimal(str(data['total_paid'])), Decimal('0'))
 
     def test_visit_serializer_accepts_active_staff(self):
@@ -159,71 +164,6 @@ class VisitSerializerTest(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         updated = serializer.save()
         self.assertEqual(updated.staff, employee)
-
-
-class PaymentSerializerTest(TestCase):
-    def setUp(self):
-        self.customer = Customer.objects.create(
-            first_name='Test', last_name='Customer',
-            mobile_number='09120000002', national_id='002-0000002',
-        )
-
-    def test_payment_serializer_valid_data(self):
-        serializer = PaymentSerializer(data={
-            'customer': self.customer.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': _START,
-        })
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        payment = serializer.save()
-        self.assertEqual(payment.customer, self.customer)
-
-    def test_payment_serializer_invalid_missing_customer(self):
-        serializer = PaymentSerializer(data={
-            'amount': '50000', 'payment_method': 'cash',
-            'paid_at': _START,
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('customer', serializer.errors)
-
-    def test_payment_serializer_inherits_customer_from_visit(self):
-        visit = Visit.objects.create(
-            customer=self.customer,
-            start_at=timezone.now(), end_at=timezone.now(),
-        )
-        serializer = PaymentSerializer(data={
-            'visit': visit.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': _START,
-        })
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        payment = serializer.save()
-        self.assertEqual(payment.customer, self.customer)
-        self.assertEqual(payment.visit, visit)
-
-    def test_payment_serializer_rejects_foreign_customer_on_visit(self):
-        visit = Visit.objects.create(
-            customer=self.customer,
-            start_at=timezone.now(), end_at=timezone.now(),
-        )
-        other = Customer.objects.create(
-            first_name='Other', last_name='Client',
-            mobile_number='09120000009', national_id='009-0000009',
-        )
-        serializer = PaymentSerializer(data={
-            'customer': other.id,
-            'visit': visit.id, 'amount': '50000', 'payment_method': 'cash',
-            'paid_at': _START,
-        })
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('customer', serializer.errors)
-
-    def test_payment_serializer_allows_payment_without_visit(self):
-        serializer = PaymentSerializer(data={
-            'customer': self.customer.id, 'amount': '50000',
-            'payment_method': 'cash', 'paid_at': _START,
-        })
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        payment = serializer.save()
-        self.assertIsNone(payment.visit)
 
 
 class CustomerSerializerTest(TestCase):

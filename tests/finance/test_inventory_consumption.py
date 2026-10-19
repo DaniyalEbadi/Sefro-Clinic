@@ -1,9 +1,10 @@
+import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
 from threading import Barrier
 
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.test import TransactionTestCase
 from django.utils import timezone
 
@@ -15,6 +16,7 @@ from inventory.models import Product
 from tests.helpers import make_customer
 
 
+@unittest.skipUnless(connection.vendor == 'postgresql', 'requires PostgreSQL row-locking semantics')
 class ConcurrentVisitConsumptionTests(TransactionTestCase):
     """Regression coverage for row locking on treatment inventory."""
 
@@ -45,7 +47,11 @@ class ConcurrentVisitConsumptionTests(TransactionTestCase):
             try:
                 visit = Visit.objects.get(pk=self.visit.pk)
                 barrier.wait(timeout=10)
-                accounting.record_visit_consumption(visit, rate=Decimal('100000'))
+                accounting.record_visit_consumption(
+                    visit,
+                    selected_products={str(self.service.id): [[self.product.id, '1']]},
+                    rate=Decimal('100000'),
+                )
                 return 'consumed'
             except ConsumptionError:
                 return 'rejected'
@@ -59,3 +65,32 @@ class ConcurrentVisitConsumptionTests(TransactionTestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.count, Decimal('0.000'))
         self.assertEqual(ProductUsage.objects.filter(visit=self.visit, is_commission=False).count(), 1)
+
+    def test_concurrent_insufficient_stock_leaves_no_partial_deduction(self):
+        self.product.count = Decimal('0.500')
+        self.product.save(update_fields=['count'])
+        barrier = Barrier(2)
+
+        def consume():
+            close_old_connections()
+            try:
+                visit = Visit.objects.get(pk=self.visit.pk)
+                barrier.wait(timeout=10)
+                accounting.record_visit_consumption(
+                    visit,
+                    selected_products={str(self.service.id): [[self.product.id, '1']]},
+                    rate=Decimal('100000'),
+                )
+                return 'consumed'
+            except ConsumptionError:
+                return 'rejected'
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: consume(), range(2)))
+
+        self.assertEqual(results, ['rejected', 'rejected'])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.count, Decimal('0.500'))
+        self.assertFalse(ProductUsage.objects.filter(visit=self.visit).exists())

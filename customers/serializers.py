@@ -1,11 +1,13 @@
 from decimal import Decimal
 
+from django.db.models import Sum
 from rest_framework import serializers
 
 from accounts.models import ClinicUser
+from finance.models import Sale
 from Sefro_Clinic.fields import ShamsiDateField, ShamsiDateTimeField
 
-from .models import Customer, Payment, Service, ServiceCategory, Visit, VisitService
+from .models import Customer, Service, ServiceCategory, Visit, VisitService
 
 
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -151,16 +153,16 @@ class ServiceSerializer(serializers.ModelSerializer):
 from finance.serializers import ServiceItemSerializer  # noqa: E402, F401
 
 
-class VisitPaymentSerializer(serializers.ModelSerializer):
-    """Read-only payment row embedded in a visit (id + customer + money)."""
+class VisitSaleSerializer(serializers.ModelSerializer):
+    """Read-only canonical sale row embedded in a visit."""
 
     customer_name = serializers.SerializerMethodField()
-    paid_at = ShamsiDateTimeField(read_only=True)
+    created_at = ShamsiDateTimeField(read_only=True)
 
     class Meta:
-        model = Payment
-        fields = ['id', 'customer', 'customer_name', 'amount', 'amount_usd',
-                  'exchange_rate', 'payment_method', 'paid_at']
+        model = Sale
+        fields = ['id', 'customer', 'customer_name', 'amount_usd', 'amount_toman',
+                  'discount_usd', 'status', 'created_at']
         read_only_fields = fields
 
     def get_customer_name(self, obj):
@@ -202,7 +204,7 @@ class VisitSerializer(serializers.ModelSerializer):
     # automatically from their compensation role on save/complete.
     service_operators = VisitServiceOperatorSerializer(many=True, required=False, write_only=True)
     customer_name = serializers.SerializerMethodField()
-    payments = VisitPaymentSerializer(many=True, read_only=True)
+    sales = VisitSaleSerializer(many=True, read_only=True)
     total_paid = serializers.SerializerMethodField()
     operators = serializers.SerializerMethodField()
 
@@ -210,14 +212,24 @@ class VisitSerializer(serializers.ModelSerializer):
         model = Visit
         fields = ['id', 'customer', 'customer_name', 'staff', 'services', 'service_names',
                   'service_operators', 'operators', 'start_at', 'end_at', 'status', 'notes',
-                  'payments', 'total_paid']
+                  'sales', 'total_paid']
 
     def get_customer_name(self, obj):
         return str(obj.customer) if obj.customer_id else ''
 
     def get_total_paid(self, obj):
-        payments = list(obj.payments.all()) if hasattr(obj, 'payments') else []
-        return sum((p.amount for p in payments), Decimal('0'))
+        from finance.services.financials import REVENUE_STATUSES
+        # VisitViewSet prefetches sales for list responses.  Filtering the
+        # related manager here would bypass that cache and issue one query
+        # per visit, turning a paginated list into an N+1 endpoint.
+        prefetched_sales = getattr(obj, '_prefetched_objects_cache', {}).get('sales')
+        if prefetched_sales is not None:
+            return sum(
+                (sale.amount_toman for sale in prefetched_sales if sale.status in REVENUE_STATUSES),
+                Decimal('0'),
+            )
+        sales = obj.sales.filter(status__in=REVENUE_STATUSES)
+        return sales.aggregate(total=Sum('amount_toman'))['total'] or Decimal('0')
 
     def get_operators(self, obj):
         """The resolved per-service operator rows (auto + explicit assignments)."""
@@ -335,50 +347,6 @@ class VisitSerializer(serializers.ModelSerializer):
         return attrs
 
 
-class PaymentSerializer(serializers.ModelSerializer):
-    paid_at = ShamsiDateTimeField(required=False)
-    customer_name = serializers.SerializerMethodField()
-    # Optional at field level: the customer can be inherited from the visit
-    # in validate(), which is what keeps the two records in sync.
-    customer = serializers.PrimaryKeyRelatedField(
-        queryset=Customer.objects.all(), required=False, allow_null=True,
-    )
-
-    class Meta:
-        model = Payment
-        fields = ['id', 'customer', 'customer_name', 'visit', 'amount', 'amount_usd', 'exchange_rate',
-                  'payment_method', 'paid_at', 'notes']
-
-    def get_customer_name(self, obj):
-        return str(obj.customer)
-
-    def validate(self, attrs):
-        """A payment booked on a visit must belong to that visit's customer.
-
-        When the payload carries a `visit` but no `customer`, the customer is
-        inherited from the visit so the two can never drift apart.
-        """
-        instance = self.instance
-        if 'visit' not in attrs and 'customer' not in attrs:
-            if instance is not None or self.partial:
-                return attrs
-        visit = attrs.get('visit', getattr(instance, 'visit', None) if instance else None)
-        customer = attrs.get('customer', getattr(instance, 'customer', None) if instance else None)
-
-        if visit is not None:
-            if customer is None:
-                attrs['customer'] = visit.customer
-            elif customer.pk != visit.customer_id:
-                raise serializers.ValidationError({
-                    'customer': 'Payment customer must match the customer of the linked visit.',
-                })
-            return attrs
-
-        if customer is None:
-            raise serializers.ValidationError({'customer': 'This field is required.'})
-        return attrs
-
-
 class CustomerSerializer(serializers.ModelSerializer):
     visit_number = serializers.SerializerMethodField()
     is_new_customer = serializers.SerializerMethodField()
@@ -446,16 +414,16 @@ class CustomerSerializer(serializers.ModelSerializer):
                 'id': obj.last_payment_id,
                 'amount': str(obj.last_payment_amount),
                 'amount_usd': str(amount_usd) if amount_usd is not None else None,
-                'payment_method': obj.last_payment_method,
-                'paid_at': greg_to_shamsi_dt(obj.last_payment_paid_at),
+                'status': obj.last_payment_status,
+                'created_at': greg_to_shamsi_dt(obj.last_payment_created_at),
             }
         payment = obj.last_payment
         if not payment:
             return None
         return {
             'id': payment.id,
-            'amount': str(payment.amount),
+            'amount': str(payment.amount_toman),
             'amount_usd': str(payment.amount_usd) if payment.amount_usd is not None else None,
-            'payment_method': payment.payment_method,
-            'paid_at': greg_to_shamsi_dt(payment.paid_at),
+            'status': payment.status,
+            'created_at': greg_to_shamsi_dt(payment.created_at),
         }

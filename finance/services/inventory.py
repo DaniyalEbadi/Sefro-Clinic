@@ -187,6 +187,7 @@ def record_product_usage(
     at: Optional[object] = None,
     rate: Optional[Decimal] = None,
     is_commission: bool = False,
+    zero_reason: Optional[str] = None,
     decrement_stock: bool = False,
 ):
     """Consume stock and freeze the price of that consumption.
@@ -201,7 +202,17 @@ def record_product_usage(
     # The rate is looked up for the moment of consumption, not "now", so a
     # backdated usage carries the exchange rate that was actually in effect.
     rate = rate if rate is not None else get_rate('USD', 'TOMAN', at=at)
-    quantity = _valid_quantity(quantity)
+    try:
+        quantity = Decimal(str(quantity))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise InventoryError('Quantity must be a valid decimal.') from exc
+    if quantity == 0:
+        if not zero_reason:
+            raise InventoryError('A zero consumption quantity requires a reason.')
+        if quantity.as_tuple().exponent < -3:
+            raise InventoryError('Quantity cannot have more than three decimal places.')
+    else:
+        quantity = _valid_quantity(quantity)
     if decrement_stock or is_commission:
         product = product.__class__.objects.select_for_update().get(pk=product.pk)
         stock = Decimal(product.count or 0)
@@ -235,6 +246,7 @@ def record_product_usage(
         total_cost_toman_snapshot=total_cost_toman,
         exchange_rate_snapshot=rate,
         is_commission=is_commission,
+        zero_reason=zero_reason,
     )
     return usage
 

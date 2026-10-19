@@ -12,7 +12,8 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
+from finance.models import Sale
 from inventory.models import Product
 from website.models import ContactMessage, SitePackage, SiteProduct, SiteService, TeamMember, Testimonial
 
@@ -26,7 +27,6 @@ STATUS_POOL = (
     + [Visit.Status.PENDING] * 1
     + [Visit.Status.CANCELED] * 1
 )
-METHOD_POOL = [Payment.Method.CASH, Payment.Method.CARD, Payment.Method.TRANSFER]
 SATISFACTION_POOL = [3, 4, 5, 5, 4, 5, 2]
 
 
@@ -133,15 +133,16 @@ def create_payments(customers, visits_by_customer=None, payments_per_customer=3)
         for p in range(payments_per_customer):
             visit = random.choice(customer_visits) if customer_visits else None
             payments.append(
-                Payment(
+                Sale(
                     customer=customer,
                     visit=visit,
-                    amount=Decimal(random.randint(30000, 5000000)),
-                    payment_method=random.choice(METHOD_POOL),
-                    paid_at=now - timedelta(days=(c_idx % 90), hours=p),
+                    amount_usd=Decimal(random.randint(1, 100)),
+                    amount_toman=Decimal(random.randint(30000, 5000000)),
+                    status=Sale.Status.PAID,
+                    created_at=now - timedelta(days=(c_idx % 90), hours=p),
                 )
             )
-    return Payment.objects.bulk_create(payments, batch_size=2000)
+    return Sale.objects.bulk_create(payments, batch_size=2000)
 
 
 def build_clinic_dataset(customers=200, visits_per_customer=2, payments_per_customer=2, services=25):

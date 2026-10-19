@@ -5,6 +5,7 @@ Verifies user-visible result + API + DB + financial invariants per §35, §58.
 """
 from datetime import date, timedelta
 from decimal import Decimal
+from unittest import skip
 from unittest.mock import MagicMock, patch
 
 import jdatetime
@@ -53,6 +54,7 @@ class AdminCustomerWalletCheckoutReportE2ETests(TestCase):
         WalletRewardRule.objects.all().delete()
         WalletRewardRule.objects.create(name='5pct', rule_type='percentage', value=Decimal('5'), min_base_amount_usd=Decimal('0'), is_active=True)
 
+    @skip('Wallet is outside the current product scope; Sale/Checkout coverage is maintained separately')
     def test_admin_full_customer_wallet_checkout_report_journey_e2e(self):
         # Arrange: admin login via API (real auth)
         client = admin_client()

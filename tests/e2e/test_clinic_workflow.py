@@ -41,12 +41,11 @@ class FullClinicWorkflowE2ETests(TestCase):
         self.assertEqual(complete_resp.status_code, 200)
         self.assertEqual(complete_resp.data['status'], 'completed')
 
-        payment_resp = client.post('/api/payments/', {
+        payment_resp = client.post('/api/finance/checkout/', {
             'customer': customer_id,
             'visit': visit_id,
-            'amount': '800000',
-            'payment_method': 'card',
-            'paid_at': '1404-06-15 11:30',
+            'amount_usd': '8',
+            'components': [{'method': 'card', 'amount_usd': '8'}],
         }, format='json')
         self.assertEqual(payment_resp.status_code, 201)
 
@@ -150,8 +149,17 @@ class ServiceCategoryProductPricingE2ETests(TestCase):
         self.assertEqual(reserve.status_code, 201)
         visit_id = reserve.data['id']
         client.post(f'/api/visits/{visit_id}/confirm/')
+        consume = client.post(
+            f'/api/finance/visits/{visit_id}/record-consumption/',
+            {'selected_products': {str(svc_id): [[p1.data['id'], '50'], [p2.data['id'], '10']]}},
+            format='json',
+        )
+        self.assertEqual(consume.status_code, 201, consume.data)
         client.post(f'/api/visits/{visit_id}/complete/')
-        pay = client.post('/api/payments/', {'customer': cust_id, 'visit': visit_id, 'amount': '500000', 'payment_method': 'card', 'paid_at': '1404-06-15 11:30'}, format='json')
+        pay = client.post('/api/finance/checkout/', {
+            'customer': cust_id, 'visit': visit_id, 'amount_usd': '5',
+            'components': [{'method': 'card', 'amount_usd': '5'}],
+        }, format='json')
         self.assertEqual(pay.status_code, 201)
 
 
@@ -164,7 +172,7 @@ class AnonymousSurfaceTests(TestCase):
             ('post', '/api/customers/'),
             ('get', '/api/services/'),
             ('get', '/api/visits/'),
-            ('get', '/api/payments/'),
+            ('get', '/api/finance/checkout/'),
             ('get', '/api/dashboard/'),
             ('get', '/api/logs/'),
             ('get', '/api/auth/me/'),

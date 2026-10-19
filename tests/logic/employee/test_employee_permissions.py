@@ -10,7 +10,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from customers.models import Customer, Payment, Service, Visit
+from customers.models import Customer, Service, Visit
 from inventory.models import Product
 
 User = get_user_model()
@@ -112,48 +112,6 @@ class EmployeeServiceCRUDTests(TestCase):
     def test_delete_service(self):
         s = Service.objects.create(name='Skin Cleansing', price='300000.00', time=45)
         response = self.client.delete(f'/api/services/{s.id}/')
-        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-
-
-class EmployeePaymentCRUDTests(TestCase):
-    """Employees must have full CRUD on payments."""
-
-    def setUp(self):
-        self.client, self.user = _employee_client()
-        self.customer = Customer.objects.create(
-            first_name='Sara', last_name='Ahmadi',
-            mobile_number='09125555555', national_id='005-0000005',
-        )
-
-    def test_list_payments(self):
-        response = self.client.get('/api/payments/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_create_payment(self):
-        p = Payment.objects.create(
-            customer=self.customer, amount='250000.00',
-            payment_method='cash', paid_at=timezone.now(),
-        )
-        response = self.client.get(f'/api/payments/{p.id}/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['amount'], '250000.00')
-
-    def test_update_payment(self):
-        p = Payment.objects.create(
-            customer=self.customer, amount='100000.00',
-            payment_method='card', paid_at=timezone.now(),
-        )
-        response = self.client.patch(
-            f'/api/payments/{p.id}/', {'amount': '200000.00'}, format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-
-    def test_delete_payment(self):
-        p = Payment.objects.create(
-            customer=self.customer, amount='150000.00',
-            payment_method='transfer', paid_at=timezone.now(),
-        )
-        response = self.client.delete(f'/api/payments/{p.id}/')
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
 
 

@@ -116,7 +116,13 @@ class FinancialTestBase(TestCase):
         for service in services:
             visit.services.add(service)
         if consume:
-            accounting.record_visit_consumption(visit, rate=RATE)
+            selected = {}
+            for service in services:
+                selected[str(service.id)] = [
+                    [item.product_id, str(item.quantity)]
+                    for item in service.items.filter(selection_group__isnull=True)
+                ]
+            accounting.record_visit_consumption(visit, selected_products=selected, rate=RATE)
         return visit
 
     def complete(self, visit):
@@ -277,7 +283,7 @@ class LaserSalaryTests(FinancialTestBase):
 
 class StaffAssignmentTests(FinancialTestBase):
     def test_completing_a_compensable_visit_without_staff_is_rejected(self):
-        visit = self.make_visit(self.doctor_service, staff=None, consume=False)
+        visit = self.make_visit(self.doctor_service, staff=None)
         visit.staff = None
         visit.save(update_fields=['staff'])
 
@@ -303,7 +309,7 @@ class StaffAssignmentTests(FinancialTestBase):
         self.assertEqual(StaffPayout.objects.filter(visit=visit).count(), 1)
 
     def test_patch_to_completed_without_staff_is_rejected(self):
-        visit = self.make_visit(self.doctor_service, staff=None, consume=False)
+        visit = self.make_visit(self.doctor_service, staff=None)
         visit.staff = None
         visit.save(update_fields=['staff'])
         response = self.client.patch(
