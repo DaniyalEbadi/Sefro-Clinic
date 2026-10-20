@@ -20,6 +20,7 @@ from ..models import (
     TeamMember,
     Testimonial,
 )
+from .pricing import usd_price_from_toman
 from .sync import fetch_website_rate
 
 BASE_URL = 'https://barancliniccenter.com'
@@ -218,7 +219,7 @@ def _about_data(about_source: str, home_source: str) -> dict:
 
 
 def _usd(toman: Decimal, rate: Decimal) -> Decimal:
-    return (toman / rate).quantize(Decimal('0.01'))
+    return usd_price_from_toman(toman, rate)
 
 
 def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:

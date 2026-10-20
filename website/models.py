@@ -26,7 +26,7 @@ class SiteService(models.Model):
     is_from_price = models.BooleanField(default=False)
     source_url = models.URLField(blank=True)
     price_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal('0.00'),
+        max_digits=24, decimal_places=12, default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
         help_text='Editable USD base price. The public Toman price is derived from this value.',
     )
@@ -55,7 +55,7 @@ class SitePackage(models.Model):
     badge = models.CharField(max_length=30, blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
     price_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal('0.00'),
+        max_digits=24, decimal_places=12, default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
         help_text='Editable USD base price. The public Toman price is derived from this value.',
     )
@@ -64,7 +64,7 @@ class SitePackage(models.Model):
         validators=[MinValueValidator(0)],
     )
     original_price_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, null=True, blank=True,
+        max_digits=24, decimal_places=12, null=True, blank=True,
         validators=[MinValueValidator(0)],
         help_text='Editable USD list price used to derive original_price.',
     )
@@ -98,7 +98,7 @@ class SiteProduct(models.Model):
     short_description = models.CharField(max_length=255, blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
     price_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal('0.00'),
+        max_digits=24, decimal_places=12, default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
         help_text='Editable USD base price. The public Toman price is derived from this value.',
     )
@@ -150,7 +150,7 @@ class SitePackagePriceOption(models.Model):
     gift_session_count = models.PositiveSmallIntegerField(default=0)
     price = models.DecimalField(max_digits=14, decimal_places=2, validators=[MinValueValidator(0)])
     price_usd = models.DecimalField(
-        max_digits=14, decimal_places=2, default=Decimal('0.00'),
+        max_digits=24, decimal_places=12, default=Decimal('0.00'),
         validators=[MinValueValidator(0)],
     )
     source_url = models.URLField(blank=True)

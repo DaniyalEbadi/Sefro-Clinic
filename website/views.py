@@ -1,4 +1,4 @@
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -71,9 +71,19 @@ class WebsitePriceDashboardMixin:
     lookup_field = 'slug'
     http_method_names = ['get', 'patch', 'head', 'options']
 
+    @extend_schema(
+        description='Set a price using price (Toman) OR price_usd (USD). '
+                    'Toman input is rounded upward to a whole Toman and converted to a precise USD base '
+                    'for subsequent exchange-rate synchronization. Do not send both currencies for the same price. '
+                    'Packages also accept original_price OR original_price_usd; null clears the original price.',
+        examples=[
+            OpenApiExample('Set price in Toman', value={'price': '1800000'}, request_only=True),
+            OpenApiExample('Set price in USD', value={'price_usd': '10.50'}, request_only=True),
+        ],
+    )
     def partial_update(self, request, *args, **kwargs):
         rate = get_current_usd_to_toman_rate()
-        if rate is None:
+        if rate is None or not rate.is_finite() or rate <= 0:
             return Response(
                 {'detail': 'A valid exchange rate is required before changing website prices.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -109,7 +119,7 @@ class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
 
     def _rate_context(self):
         rate = get_current_usd_to_toman_rate()
-        if rate is None:
+        if rate is None or not rate.is_finite() or rate <= 0:
             return None, Response(
                 {'detail': 'A valid exchange rate is required before changing website prices.'},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,

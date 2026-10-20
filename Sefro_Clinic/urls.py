@@ -23,6 +23,8 @@ class SiteSchemaView(EnUsJSONSchemaView):
             {'name': 'Website Dashboard - Login', 'description': 'Secure website-dashboard login using HttpOnly cookies.'},
             {'name': 'Website Dashboard - Services', 'description': 'Website service price management.'},
             {'name': 'Website Dashboard - Packages', 'description': 'Website package price management.'},
+            {'name': 'Website Dashboard - Package Price Options', 'description': 'Session options with editable Toman or USD prices.'},
+            {'name': 'Website Dashboard - Settings', 'description': 'Clinic content and contact settings.'},
             {'name': 'Website Dashboard - Products', 'description': 'Website product price management.'},
             {'name': 'Website Dashboard - Sync', 'description': 'Website price synchronization status.'},
         ],

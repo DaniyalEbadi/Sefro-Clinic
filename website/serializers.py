@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
 from Sefro_Clinic.fields import ShamsiDateTimeField
@@ -13,6 +15,7 @@ from .models import (
     Testimonial,
     WebsitePriceSyncRun,
 )
+from .services.pricing import round_toman_up, toman_price_from_usd, usd_price_from_toman
 
 
 class SiteServiceSerializer(serializers.ModelSerializer):
@@ -68,46 +71,78 @@ class SiteProductSerializer(serializers.ModelSerializer):
         ]
 
 
-class SiteServiceDashboardSerializer(serializers.ModelSerializer):
+class TomanPriceField(serializers.DecimalField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            max_digits=None, decimal_places=None, min_value=Decimal('0'),
+            max_value=Decimal('999999999999'),
+            required=False, **kwargs,
+        )
+
+    def to_representation(self, value):
+        return format(value, '.2f') if value is not None else None
+
+
+class WebsitePriceInputMixin:
+    """Accept either currency for each price and store the matching pair."""
+
+    price_pairs = (('price', 'price_usd'),)
+    require_price_update = True
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        price_fields = {field for pair in self.price_pairs for field in pair}
+        if self.require_price_update and not price_fields.intersection(attrs):
+            raise serializers.ValidationError({'price': 'Provide a Toman price or a USD price.'})
+        for toman_field, usd_field in self.price_pairs:
+            if toman_field in attrs and usd_field in attrs:
+                raise serializers.ValidationError({
+                    toman_field: f'Provide either {toman_field} (Toman) or {usd_field} (USD), not both.',
+                })
+            if toman_field not in attrs and usd_field not in attrs:
+                continue
+            if attrs.get(toman_field, attrs.get(usd_field)) is None:
+                attrs[toman_field] = attrs[usd_field] = None
+                continue
+            rate = self.context['exchange_rate']
+            if toman_field in attrs:
+                attrs[toman_field] = round_toman_up(attrs[toman_field])
+                attrs[usd_field] = self.fields[usd_field].run_validation(
+                    usd_price_from_toman(attrs[toman_field], rate),
+                )
+            else:
+                attrs[toman_field] = toman_price_from_usd(attrs[usd_field], rate)
+            field = self.Meta.model._meta.get_field(toman_field)
+            maximum = Decimal(10) ** (field.max_digits - field.decimal_places) - 1
+            if attrs[toman_field] > maximum:
+                raise serializers.ValidationError({toman_field: f'Price must not exceed {maximum} Toman.'})
+        return attrs
+
+
+class SiteServiceDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+    price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
+
     class Meta:
         model = SiteService
         fields = ['id', 'name', 'slug', 'category', 'price', 'price_usd', 'source_category', 'is_from_price']
-        read_only_fields = ['id', 'name', 'slug', 'category', 'price', 'source_category', 'is_from_price']
-
-    def validate(self, attrs):
-        if 'price_usd' not in attrs:
-            raise serializers.ValidationError({'price_usd': 'This field is required for a price update.'})
-        return attrs
-
-    def update(self, instance, validated_data):
-        instance.price_usd = validated_data.get('price_usd', instance.price_usd)
-        instance.price = self.context['exchange_rate'] * instance.price_usd
-        from .services.pricing import round_toman_up
-        instance.price = round_toman_up(instance.price)
-        instance.save(update_fields=['price_usd', 'price'])
-        return instance
+        read_only_fields = ['id', 'name', 'slug', 'category', 'source_category', 'is_from_price']
 
 
-class SiteProductDashboardSerializer(serializers.ModelSerializer):
+class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+    price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
+
     class Meta:
         model = SiteProduct
         fields = ['id', 'name', 'slug', 'price', 'price_usd', 'source_url']
-        read_only_fields = ['id', 'name', 'slug', 'price', 'source_url']
-
-    def validate(self, attrs):
-        if 'price_usd' not in attrs:
-            raise serializers.ValidationError({'price_usd': 'This field is required for a price update.'})
-        return attrs
-
-    def update(self, instance, validated_data):
-        instance.price_usd = validated_data.get('price_usd', instance.price_usd)
-        from .services.pricing import toman_price_from_usd
-        instance.price = toman_price_from_usd(instance.price_usd, self.context['exchange_rate'])
-        instance.save(update_fields=['price_usd', 'price'])
-        return instance
+        read_only_fields = ['id', 'name', 'slug', 'source_url']
 
 
-class SitePackageDashboardSerializer(serializers.ModelSerializer):
+class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+    price_pairs = (('price', 'price_usd'), ('original_price', 'original_price_usd'))
+    price = TomanPriceField(help_text='Current Toman price. Send price OR price_usd.')
+    original_price = TomanPriceField(
+        allow_null=True, help_text='Original Toman price; null removes it. Send original_price OR original_price_usd.',
+    )
     services = SiteServiceMiniSerializer(many=True, read_only=True)
     price_options = SitePackagePriceOptionSerializer(many=True, read_only=True)
     discount_percent = serializers.IntegerField(read_only=True)
@@ -119,60 +154,25 @@ class SitePackageDashboardSerializer(serializers.ModelSerializer):
             'original_price', 'original_price_usd', 'discount_percent', 'services', 'price_options',
         ]
         read_only_fields = [
-            'id', 'name', 'slug', 'price', 'original_price', 'discount_percent', 'services',
+            'id', 'name', 'slug', 'discount_percent', 'services',
         ]
 
-    def validate(self, attrs):
-        if not {'price_usd', 'original_price_usd'} & attrs.keys():
-            raise serializers.ValidationError(
-                {'price_usd': 'Provide price_usd or original_price_usd for a price update.'}
-            )
-        return attrs
 
-    def update(self, instance, validated_data):
-        from .services.pricing import toman_price_from_usd
-        instance.price_usd = validated_data.get('price_usd', instance.price_usd)
-        instance.price = toman_price_from_usd(instance.price_usd, self.context['exchange_rate'])
-        if 'original_price_usd' in validated_data:
-            instance.original_price_usd = validated_data['original_price_usd']
-            instance.original_price = (
-                toman_price_from_usd(instance.original_price_usd, self.context['exchange_rate'])
-                if instance.original_price_usd is not None else None
-            )
-        instance.save(update_fields=['price_usd', 'price', 'original_price_usd', 'original_price'])
-        return instance
-
-
-class SitePackagePriceOptionDashboardSerializer(serializers.ModelSerializer):
+class SitePackagePriceOptionDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+    price = TomanPriceField(help_text='Toman price for this option. Send price OR price_usd.')
     class Meta:
         model = SitePackagePriceOption
         fields = [
             'id', 'package', 'label', 'session_count', 'gift_session_count',
             'price', 'price_usd', 'source_url', 'sort_order', 'is_active',
         ]
-        read_only_fields = ['id', 'price', 'source_url']
+        read_only_fields = ['id', 'source_url']
 
     def validate(self, attrs):
-        if 'price_usd' not in attrs:
-            raise serializers.ValidationError({'price_usd': 'This field is required for a price update.'})
-        return attrs
-
-    def update(self, instance, validated_data):
-        from .services.pricing import toman_price_from_usd
-        instance.price_usd = validated_data['price_usd']
-        instance.price = toman_price_from_usd(instance.price_usd, self.context['exchange_rate'])
-        for field in ('label', 'session_count', 'gift_session_count', 'sort_order', 'is_active'):
-            if field in validated_data:
-                setattr(instance, field, validated_data[field])
-        instance.save()
-        return instance
-
-    def create(self, validated_data):
-        from .services.pricing import toman_price_from_usd
-        validated_data['price'] = toman_price_from_usd(
-            validated_data['price_usd'], self.context['exchange_rate'],
-        )
-        return super().create(validated_data)
+        self.require_price_update = self.instance is None
+        if self.instance is not None and 'package' in attrs and attrs['package'] != self.instance.package:
+            raise serializers.ValidationError({'package': 'An existing price option cannot be moved to another package.'})
+        return super().validate(attrs)
 
 
 class SiteSettingsSerializer(serializers.ModelSerializer):
