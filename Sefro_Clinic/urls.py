@@ -20,6 +20,11 @@ class SiteSchemaView(EnUsJSONSchemaView):
             {'name': 'Site Testimonials', 'description': 'Customer testimonials.'},
             {'name': 'Site Contact', 'description': 'Public contact/consultation intake.'},
             {'name': 'Site', 'description': 'API health and version info.'},
+            {'name': 'Website Dashboard - Login', 'description': 'Secure website-dashboard login using HttpOnly cookies.'},
+            {'name': 'Website Dashboard - Services', 'description': 'Website service price management.'},
+            {'name': 'Website Dashboard - Packages', 'description': 'Website package price management.'},
+            {'name': 'Website Dashboard - Products', 'description': 'Website product price management.'},
+            {'name': 'Website Dashboard - Sync', 'description': 'Website price synchronization status.'},
         ],
     }
 

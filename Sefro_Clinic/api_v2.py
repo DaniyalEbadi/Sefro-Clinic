@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from website.urls import dashboard_urlpatterns
 from website.urls import urlpatterns as website_patterns
 
 
@@ -31,6 +32,7 @@ urlpatterns = [
         'api/v2/',
         include([
             path('site/info/', SiteInfoAPIView.as_view(), name='site-info'),
+            path('site-dashboard/', include(dashboard_urlpatterns)),
             path('', include(website_patterns)),
         ]),
     ),
