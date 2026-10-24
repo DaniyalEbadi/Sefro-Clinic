@@ -3,6 +3,8 @@ venv/
 __pycache__/
 db.sqlite3
 .env
+.env.*
+!.env.example
 *.log
 server.err
 server.log
@@ -16,4 +18,5 @@ staticfiles/
 coverage.xml
 .run_pid
 .ruff_cache/
+backups/
 outfile.txt

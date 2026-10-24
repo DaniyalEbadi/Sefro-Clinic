@@ -220,6 +220,9 @@ class CloseFreezesTheMonthTests(ClosingFixture):
         self.assertEqual(payload['net_profit']['usd'], '50.00')
         self.assertEqual(payload['purchases']['usd'], '40.00')
         self.assertIn('outstanding', payload)
+        self.assertTrue(payload['period']['start'].startswith(f'{self.year}-'))
+        self.assertNotIn('gregorian_start', payload)
+        self.assertNotIn('gregorian_end', payload)
 
         close_logs = AuditLog.objects.filter(
             model_name='finance.monthlyclose',
@@ -230,6 +233,24 @@ class CloseFreezesTheMonthTests(ClosingFixture):
         self.assertEqual(log.user_id, self.admin_user.id)
         self.assertEqual(log.changes.get('note'), 'oct books')
         self.assertEqual(log.changes.get('period'), f'{self.year}-{self.month:02d}')
+
+    def test_legacy_closed_snapshot_dates_are_shamsi_on_read(self):
+        self.assertEqual(self._close().status_code, 200)
+        row = self._row()
+        old_payload = dict(row.payload)
+        old_payload['gregorian_start'] = self.bounds['start'].date().isoformat()
+        old_payload['gregorian_end'] = self.bounds['end'].date().isoformat()
+        old_payload['period'] = {
+            'start': self.bounds['start'].isoformat(),
+            'end': self.bounds['end'].isoformat(),
+        }
+        MonthlyClose.objects.filter(pk=row.pk).update(payload=old_payload)
+
+        month = self._month_row()
+        self.assertNotIn('gregorian_start', month)
+        self.assertNotIn('gregorian_end', month)
+        self.assertTrue(month['period']['start'].startswith(f'{self.year}-'))
+        self.assertEqual(month['revenue']['usd'], old_payload['revenue']['usd'])
 
     def test_only_past_months_can_be_closed(self):
         today = shamsi_today()

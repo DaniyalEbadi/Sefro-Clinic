@@ -5,6 +5,8 @@ from typing import Optional
 from django.db import transaction
 from django.utils import timezone
 
+from Sefro_Clinic.shamsi_storage import shamsi_storage_value
+
 from ..models import ProductCostHistory, ProductPurchase, ProductUsage
 from .exchange_rates import convert_usd_to_toman, get_rate
 from .periods_guard import ensure_open
@@ -99,12 +101,14 @@ def apply_purchase_receipt(*, product, quantity: Decimal, unit_cost_usd: Decimal
     product.save(update_fields=['cost_usd', 'count'])
 
     # Close the previously active cost history entry.
+    effective_to = timezone.make_aware(datetime.combine(purchase_date, time.min))
     ProductCostHistory.objects.filter(
         product=product,
         effective_to__isnull=True,
-    ).update(effective_to=timezone.make_aware(
-        datetime.combine(purchase_date, time.min),
-    ))
+    ).update(
+        effective_to=effective_to,
+        effective_to_shamsi=shamsi_storage_value(effective_to),
+    )
 
     ProductCostHistory.objects.create(
         product=product,

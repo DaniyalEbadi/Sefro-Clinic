@@ -1,9 +1,11 @@
 from decimal import Decimal
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 
@@ -154,7 +156,7 @@ class SkinCareTip(models.Model):
     avoid_ingredients = models.JSONField(default=list)
     related_service_slug = models.CharField(max_length=100, blank=True, default='')
     related_service = models.ForeignKey(
-        'customers.Service',
+        'website.SiteService',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -164,5 +166,27 @@ class SkinCareTip(models.Model):
     class Meta:
         ordering = ['sort_order', 'id']
 
+    def clean(self):
+        """Keep the denormalized analysis/plan relationship consistent."""
+        super().clean()
+        if self.analysis_id and self.plan_id:
+            plan_analysis_id = getattr(self.plan, 'analysis_id', None)
+            if plan_analysis_id is None:
+                plan_analysis_id = SkinCarePlan.objects.filter(
+                    pk=self.plan_id,
+                ).values_list('analysis_id', flat=True).first()
+            if plan_analysis_id != self.analysis_id:
+                raise ValidationError({
+                    'plan': 'The skincare plan must belong to the selected analysis.',
+                })
+
+    def save(self, *args, **kwargs):
+        """Validate direct saves; bulk_create remains controlled by the service layer."""
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
     def __str__(self):
         return f'{self.period}: {self.title}'
+
+
+install_shamsi_mirrors(globals())

@@ -1,7 +1,6 @@
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
-from finance.models import ExchangeRate
 from finance.services.exchange_rates import (
     BrsApiExchangeRateProvider,
     ExternalExchangeRateProvider,
@@ -9,6 +8,13 @@ from finance.services.exchange_rates import (
 
 from ..models import SitePackage, SitePackagePriceOption, SiteProduct, SiteService, WebsitePriceSyncRun
 from .pricing import toman_price_from_usd
+
+
+class WebsitePriceSyncAlreadyRunning(RuntimeError):
+    pass
+
+
+_SYNC_LOCK_ID = 7742026
 
 
 def fetch_website_rate():
@@ -30,7 +36,7 @@ def _update_prices(queryset, usd_field='price_usd', toman_field='price', rate=No
     return len(objects)
 
 
-def sync_website_prices():
+def _sync_website_prices_unlocked():
     run = WebsitePriceSyncRun.objects.create(status=WebsitePriceSyncRun.Status.RUNNING)
     try:
         rate, provider = fetch_website_rate()
@@ -42,10 +48,6 @@ def sync_website_prices():
             return run
 
         with transaction.atomic():
-            ExchangeRate.objects.create(
-                currency_from='USD', currency_to='TOMAN', rate=rate,
-                effective_at=timezone.now(), source=f'website-sync:{provider}', is_active=True,
-            )
             service_count = _update_prices(SiteService.objects.all(), rate=rate)
             product_count = _update_prices(SiteProduct.objects.all(), rate=rate)
             package_count = _update_prices(SitePackage.objects.all(), rate=rate)
@@ -81,3 +83,18 @@ def sync_website_prices():
         run.save(update_fields=['status', 'error', 'finished_at'])
         raise
     return run
+
+
+def sync_website_prices():
+    """Allow only one website sync at a time across API and scheduler workers."""
+    if connection.vendor != 'postgresql':
+        return _sync_website_prices_unlocked()
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_try_advisory_lock(%s)', [_SYNC_LOCK_ID])
+        if not cursor.fetchone()[0]:
+            raise WebsitePriceSyncAlreadyRunning('A website price sync is already running.')
+    try:
+        return _sync_website_prices_unlocked()
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_advisory_unlock(%s)', [_SYNC_LOCK_ID])

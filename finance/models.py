@@ -5,6 +5,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 USD_MAX_DIGITS = 14
@@ -452,6 +453,39 @@ class PaymentComponent(models.Model):
 
     def __str__(self):
         return f'{self.method} {self.amount_usd}'
+
+
+class VisitSettlement(models.Model):
+    """Atomic receipt for a visit checkout operation.
+
+    The record is committed in the same transaction as inventory consumption,
+    sales, welcome-pack issuance, visit completion, and payouts. Its unique
+    client key and canonical request hash make a retried request return the
+    same receipt while rejecting key reuse for different payment data.
+    """
+
+    visit = models.ForeignKey('customers.Visit', on_delete=models.PROTECT, related_name='settlements')
+    customer = models.ForeignKey('customers.Customer', on_delete=models.PROTECT, related_name='visit_settlements')
+    service_sale = models.ForeignKey(Sale, on_delete=models.PROTECT, related_name='service_settlements')
+    goods_sale = models.ForeignKey(
+        Sale, on_delete=models.PROTECT, null=True, blank=True, related_name='goods_settlements',
+    )
+    welcome_pack_usage = models.ForeignKey(
+        WelcomePackUsage, on_delete=models.PROTECT, null=True, blank=True, related_name='visit_settlements',
+    )
+    idempotency_key = models.CharField(max_length=64, unique=True)
+    request_hash = models.CharField(max_length=64)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='visit_settlements_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'VisitSettlement {self.visit_id} ({self.idempotency_key})'
 
 
 class ExpenseCategory(models.Model):
@@ -972,3 +1006,6 @@ class MonthlyClose(models.Model):
 
     def __str__(self):
         return f'{self.period_key} [{self.status}]'
+
+
+install_shamsi_mirrors(globals())

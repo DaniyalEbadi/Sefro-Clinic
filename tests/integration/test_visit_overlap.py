@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.test import TestCase
 from django.utils import timezone
@@ -6,11 +6,8 @@ from rest_framework import status
 
 from accounts.models import ClinicUser
 from customers.models import Customer, Service
+from Sefro_Clinic.fields import greg_to_shamsi_dt
 from tests.helpers import admin_client, make_employee
-
-
-def at(year, month, day, hour=10, minute=0):
-    return timezone.make_aware(datetime(year, month, day, hour, minute))
 
 
 def future_slot(days_ahead=7, hour=10):
@@ -36,8 +33,8 @@ class VisitOverlapPreventionTests(TestCase):
     def _payload(self, customer_id, start, end, visit_id=None):
         data = {
             'customer': customer_id,
-            'start_at': start.strftime('%Y-%m-%d %H:%M'),
-            'end_at': end.strftime('%Y-%m-%d %H:%M'),
+            'start_at': greg_to_shamsi_dt(start),
+            'end_at': greg_to_shamsi_dt(end),
             'services': [self.service.id],
         }
         if visit_id:

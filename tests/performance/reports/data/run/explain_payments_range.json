@@ -1,7 +1,7 @@
 {
   "plan_lines": [
-    "Sort  (cost=23.73..23.93 rows=80 width=84) (actual time=0.083..0.087 rows=80 loops=1)",
-    "  ->  Seq Scan on customers_payment  (cost=0.00..21.20 rows=80 width=84) (actual time=0.043..0.058 rows=80 loops=1)"
+    "Sort  (cost=30.73..30.93 rows=80 width=253) (actual time=0.163..0.166 rows=80 loops=1)",
+    "  ->  Seq Scan on finance_sale  (cost=0.00..28.20 rows=80 width=253) (actual time=0.105..0.126 rows=80 loops=1)"
   ],
   "uses_index": false
 }

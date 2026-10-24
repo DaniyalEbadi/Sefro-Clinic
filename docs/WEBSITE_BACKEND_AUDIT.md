@@ -27,7 +27,8 @@ backend; it does not confirm that the deployed frontend consumes this backend.
   exchange rate preserves a newly entered whole-Toman amount.
 - Supplying both currencies for the same price returns 400; invalid amounts,
   negative values, and values that overflow the Toman field are rejected.
-- Existing authentication and the 20-item public pagination contract remain.
+- The 20-item public pagination contract remains. Website-dashboard authentication
+  is now a separate credential and cookie session; see `WEBSITE_DASHBOARD_BACKEND.md`.
 - Session option prices are edited through `package-price-options`; changing
   the legacy package price does not replace every session option price.
 
@@ -45,8 +46,8 @@ editing change and should not be treated as completed backend features.
 | Public settings | Settings currently have an authenticated dashboard endpoint only. A public settings read endpoint is needed before frontend clinic content can be driven by these records. |
 | Product descriptions | The live product detail page contains longer descriptive text, but `SiteProduct` stores only its card's short description. |
 | Team/testimonial import | The current importer contains hardcoded team/testimonial text rather than parsing their live sections and does not reconcile missing people/testimonials. |
-| Financial isolation | Website sync currently writes a shared `finance.ExchangeRate` cache row, and its dashboard rate accessor can refresh that shared cache. This is a remaining coupling to separate if strict data isolation is required. No financial code was modified in this change. |
-| Import overwrite behavior | Rerunning the importer overwrites catalog prices from the live site. Do not run it to refresh content after dashboard price edits unless this overwrite is intended. |
+| Financial isolation | Updated 2026-10-24: website price synchronization no longer writes `finance.ExchangeRate`; dashboard rate lookup uses website sync history or the external providers without refreshing the financial ledger. |
+| Import overwrite behavior | Updated 2026-10-24: dashboard-edited catalog, settings, team, and testimonial records are marked manually managed and preserved on later imports. Unedited imported records continue to follow the live source. |
 | Shopping cart | A product detail page shows an add-to-cart action. Site API v2 currently has no cart, order, payment, or checkout APIs; a commerce flow would require a separate specification. |
 
 The catalog read and price-editing APIs are available. The findings above

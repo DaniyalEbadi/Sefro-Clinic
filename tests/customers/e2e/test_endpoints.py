@@ -205,6 +205,23 @@ class CustomersE2ETest(TestCase):
         self.assertEqual(cancel_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(cancel_resp.data['status'], 'canceled')
 
+    def test_invalid_shamsi_visit_filter_returns_400(self):
+        response = self.client.get('/api/visits/?date_from=not-a-date')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_canceled_visit_cannot_be_completed(self):
+        response = self.client.post('/api/visits/', {
+            'customer': self.customer.id,
+            'start_at': '1404-07-01 10:00',
+            'end_at': '1404-07-01 11:00',
+            'services': [self.service.id],
+        }, format='json')
+        visit_id = response.data['id']
+        self.assertEqual(self.client.post(f'/api/visits/{visit_id}/cancel/').status_code, status.HTTP_200_OK)
+        rejected = self.client.post(f'/api/visits/{visit_id}/complete/')
+        self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Visit.objects.get(pk=visit_id).status, Visit.Status.CANCELED)
+
     @unittest.skip('obsolete legacy Payment endpoint; Sale/Checkout coverage is canonical')
     def test_08_payment_full_crud(self):
         now = timezone.now()

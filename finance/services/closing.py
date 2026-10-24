@@ -15,6 +15,7 @@ payload. Both events land in the audit trail with the acting user.
 Roles: any authenticated staff (admin or employee) may close and reopen, by
 business decision. The audit log records who did it.
 """
+from datetime import date, datetime
 from decimal import Decimal
 
 import jdatetime
@@ -22,6 +23,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from logs.models import AuditLog
+from Sefro_Clinic.fields import greg_to_shamsi_date, greg_to_shamsi_dt
 from Sefro_Clinic.periods import shamsi_months_of_year
 
 from ..models import Expense, MonthlyClose, StaffPayout
@@ -41,7 +43,7 @@ class ClosingError(Exception):
 
 
 def _jsonable(value):
-    """JSON-safe copy of a report payload: Decimals -> str, dates -> iso."""
+    """JSON-safe copy of a report payload with Persian-calendar dates."""
     if isinstance(value, dict):
         return {k: _jsonable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -50,6 +52,10 @@ def _jsonable(value):
         return str(value)
     if isinstance(value, (jdatetime.date, jdatetime.datetime)):
         return str(value)
+    if isinstance(value, datetime):
+        return greg_to_shamsi_dt(value)
+    if isinstance(value, date):
+        return greg_to_shamsi_date(value)
     if hasattr(value, 'isoformat'):
         return value.isoformat()
     return value

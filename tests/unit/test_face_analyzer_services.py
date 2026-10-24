@@ -10,10 +10,10 @@ import numpy as np
 from django.test import SimpleTestCase, TestCase, override_settings
 from PIL import Image
 
-from customers.models import Service
 from face_analyzer.exceptions import (
     PERSIAN_ANALYZE_FAILURE,
     AnalyzerError,
+    AnalyzerUnavailable,
     FaceAnalyzerError,
 )
 from face_analyzer.models import FaceAnalysis, SkinCareTip
@@ -73,6 +73,7 @@ from face_analyzer.services.tips import (
     recommended_frequency,
 )
 from face_analyzer.views import FaceAnalyzerThrottle, _can_view_all
+from website.models import SiteService
 
 LANDMARK_COUNT = 468
 TEST_MEDIA_ROOT = tempfile.mkdtemp(prefix='face_analyzer_unit_media_')
@@ -436,9 +437,18 @@ class LocalBackendTests(SimpleTestCase):
         from face_analyzer.services.analyzer import detect_faces
 
         with mock.patch('face_analyzer.services.analyzer.mp', None):
-            with self.assertRaises(FaceAnalyzerError) as ctx:
+            with self.assertRaises(AnalyzerUnavailable) as ctx:
                 detect_faces(png_bytes())
-        self.assertEqual(str(ctx.exception.detail), PERSIAN_ANALYZE_FAILURE)
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    @override_settings(FACE_ANALYZER_MODEL_PATH='missing-face-landmarker.task')
+    def test_missing_tasks_model_is_service_unavailable(self):
+        from face_analyzer.services.analyzer import detect_faces
+
+        with mock.patch('face_analyzer.services.analyzer.mp', SimpleNamespace()):
+            with self.assertRaises(AnalyzerUnavailable) as ctx:
+                detect_faces(png_bytes())
+        self.assertEqual(ctx.exception.status_code, 503)
 
     def test_pipeline_failure_maps_to_persian_default(self):
         with mock.patch(
@@ -698,7 +708,7 @@ class TipsRuleTests(SimpleTestCase):
         }
         self.assertEqual(
             slugs,
-            {'ipl', 'extraction', 'carboxy-therapy', 'microneedling', 'hydrafacial', 'chemical-peel'},
+            {'acid-therapy', 'skin-cleansing', 'carboxy-eye-therapy', 'mesonidling-face'},
         )
 
     def test_derive_skin_type(self):
@@ -886,15 +896,20 @@ class TipsPersistenceTests(TestCase):
         self.assertEqual(SkinCareTip.objects.filter(analysis=self.analysis).count(), count)
 
     def test_generate_and_store_plan_resolves_service_names(self):
-        service = Service.objects.create(name='Hydrafacial', price_usd=120, is_active=True)
-        inactive = Service.objects.create(name='Chemical Peel', price_usd=90, is_active=False)
+        service = SiteService.objects.create(
+            name='Skin Cleansing', slug='skin-cleansing', category='skin', price=120, is_active=True,
+        )
+        inactive = SiteService.objects.create(
+            name='Acid Therapy', slug='acid-therapy', category='skin', price=90, is_active=False,
+        )
 
         plan = generate_and_store_plan(self.analysis)
-        hydra_tip = SkinCareTip.objects.get(analysis=self.analysis, related_service_slug='hydrafacial')
-        self.assertEqual(hydra_tip.related_service, service)
+        cleansing_tip = SkinCareTip.objects.get(analysis=self.analysis, related_service_slug='skin-cleansing')
+        self.assertEqual(cleansing_tip.related_service, service)
 
-        peel_tip = SkinCareTip.objects.get(analysis=self.analysis, related_service_slug='chemical-peel')
-        self.assertIsNone(peel_tip.related_service)  # inactive services are skipped
+        self.assertFalse(SkinCareTip.objects.filter(
+            analysis=self.analysis, related_service_slug='acid-therapy',
+        ).exists())  # unavailable treatments are not proposed
         self.assertEqual(inactive.is_active, False)
 
         payload = SkinCarePlanSerializer_data(plan)
@@ -903,9 +918,11 @@ class TipsPersistenceTests(TestCase):
         self.assertIn(payload['skin_type'], {'oily', 'dry', 'combination', 'normal'})
 
     def test_resolve_services_maps_slugs(self):
-        service = Service.objects.create(name='IPL', price_usd=200, is_active=True)
-        mapping = _resolve_services({'ipl', 'nope', ''})
-        self.assertEqual(mapping['ipl'], service)
+        service = SiteService.objects.create(
+            name='Skin Cleansing', slug='skin-cleansing', category='skin', price=200, is_active=True,
+        )
+        mapping = _resolve_services({'skin-cleansing', 'nope', ''})
+        self.assertEqual(mapping['skin-cleansing'], service)
         self.assertIsNone(mapping['nope'])
         self.assertNotIn('', mapping)
         self.assertEqual(_resolve_services(set()), {})
@@ -918,9 +935,11 @@ class TipsPersistenceTests(TestCase):
         self.assertIn('Return ONLY minified JSON', prompt)
         self.assertNotIn('base64', prompt)
 
-        Service.objects.create(name='Microneedling', price_usd=150, is_active=True)
+        SiteService.objects.create(
+            name='Meso', slug='mesonidling-face', category='face', price=150, is_active=True,
+        )
         prompt_with_services = LLMTipsProvider()._build_prompt(self.analysis)
-        self.assertIn('Microneedling', prompt_with_services)
+        self.assertIn('mesonidling-face', prompt_with_services)
 
 
 def _analysis_image():

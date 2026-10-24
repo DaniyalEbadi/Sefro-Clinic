@@ -9,8 +9,6 @@ from typing import Iterable
 from django.db import transaction
 from django.utils.text import slugify
 
-from finance.services.exchange_rates import get_current_usd_to_toman_rate
-
 from ..models import (
     SitePackage,
     SitePackagePriceOption,
@@ -20,7 +18,7 @@ from ..models import (
     TeamMember,
     Testimonial,
 )
-from .pricing import usd_price_from_toman
+from .pricing import get_website_dashboard_rate, usd_price_from_toman
 from .sync import fetch_website_rate
 
 BASE_URL = 'https://barancliniccenter.com'
@@ -237,7 +235,7 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
     if rate is None:
         rate, _ = fetch_website_rate()
     if rate is None:
-        rate = get_current_usd_to_toman_rate()
+        rate = get_website_dashboard_rate()
     if rate is None or rate <= 0:
         raise ValueError('A valid exchange rate is required for the initial website import.')
 
@@ -246,6 +244,8 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
         seen_services = set()
         for row in service_rows:
             seen_services.add(row['slug'])
+            if SiteService.objects.filter(slug=row['slug'], is_manually_managed=True).exists():
+                continue
             defaults = {
                 'name': row['name'], 'category': _category(row['source_category'], row['name']),
                 'source_category': row['source_category'], 'short_description': row['description'][:255],
@@ -255,13 +255,17 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                 'is_active': True, 'sort_order': row['sort_order'],
             }
             SiteService.objects.update_or_create(slug=row['slug'], defaults=defaults)
-        SiteService.objects.exclude(slug__in=seen_services).update(is_active=False)
+        SiteService.objects.filter(is_manually_managed=False).exclude(slug__in=seen_services).update(is_active=False)
         result.services = len(seen_services)
 
         seen_packages = set()
         seen_options = set()
         for row in package_rows:
             seen_packages.add(row['slug'])
+            existing_package = SitePackage.objects.filter(slug=row['slug']).first()
+            if existing_package and existing_package.is_manually_managed:
+                seen_options.update(existing_package.price_options.values_list('pk', flat=True))
+                continue
             first = row['options'][0]
             package, _ = SitePackage.objects.update_or_create(
                 slug=row['slug'],
@@ -285,14 +289,16 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                     },
                 )
                 seen_options.add(option_obj.pk)
-        SitePackage.objects.exclude(slug__in=seen_packages).update(is_active=False)
-        SitePackagePriceOption.objects.exclude(pk__in=seen_options).update(is_active=False)
+        SitePackage.objects.filter(is_manually_managed=False).exclude(slug__in=seen_packages).update(is_active=False)
+        SitePackagePriceOption.objects.filter(package__is_manually_managed=False).exclude(pk__in=seen_options).update(is_active=False)
         result.packages = len(seen_packages)
         result.package_options = len(seen_options)
 
         seen_products = set()
         for row in product_rows:
             seen_products.add(row['slug'])
+            if SiteProduct.objects.filter(slug=row['slug'], is_manually_managed=True).exists():
+                continue
             SiteProduct.objects.update_or_create(
                 slug=row['slug'],
                 defaults={
@@ -302,15 +308,31 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                     'is_active': True, 'sort_order': row['sort_order'],
                 },
             )
-        SiteProduct.objects.exclude(slug__in=seen_products).update(is_active=False)
+        SiteProduct.objects.filter(is_manually_managed=False).exclude(slug__in=seen_products).update(is_active=False)
         result.products = len(seen_products)
 
-        SiteSettings.objects.update_or_create(singleton_key='default', defaults=_about_data(about_source, home_source))
+        if not SiteSettings.objects.filter(singleton_key='default', is_manually_managed=True).exists():
+            SiteSettings.objects.update_or_create(singleton_key='default', defaults=_about_data(about_source, home_source))
 
-        team = TeamMember.objects.update_or_create(
-            name='دکتر بهدخت سراجی',
-            defaults={'role': 'متخصص پوست و زیبایی', 'bio': '', 'is_active': True, 'sort_order': 0},
-        )[0]
+        team = TeamMember.objects.filter(source_key='import:team-main').first()
+        if team is None:
+            team = TeamMember.objects.filter(name='دکتر بهدخت سراجی', source_key__isnull=True).first()
+        if team is None:
+            team = TeamMember.objects.create(
+                source_key='import:team-main', name='دکتر بهدخت سراجی',
+                role='متخصص پوست و زیبایی', bio='', is_active=True, sort_order=0,
+            )
+        elif not team.is_manually_managed:
+            team.source_key = 'import:team-main'
+            team.name = 'دکتر بهدخت سراجی'
+            team.role = 'متخصص پوست و زیبایی'
+            team.bio = ''
+            team.is_active = True
+            team.sort_order = 0
+            team.save()
+        elif team.source_key is None:
+            team.source_key = 'import:team-main'
+            team.save(update_fields=['source_key'])
         result.team_members = 1 if team else 0
         testimonials = [
             ('سارا احمدی', 'مشتری وفادار', 'من از خدمات بوتاکس کلینیک زیبا بسیار راضی هستم. نتیجه عالی بود و پرسنل بسیار حرفه‌ای هستند.'),
@@ -318,9 +340,27 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
             ('نیلوفر کریمی', 'مشتری وفادار', 'پاکسازی پوست صورتم را اینجا انجام دادم و پوستم خیلی شفاف و نرم شد. حتماً دوباره مراجعه می‌کنم.'),
         ]
         for order, (name, label, text) in enumerate(testimonials):
-            Testimonial.objects.update_or_create(
-                customer_name=name, text=text,
-                defaults={'label': label, 'is_active': True, 'sort_order': order},
-            )
+            source_key = f'import:testimonial:{order}'
+            testimonial = Testimonial.objects.filter(source_key=source_key).first()
+            if testimonial is None:
+                testimonial = Testimonial.objects.filter(
+                    customer_name=name, text=text, source_key__isnull=True,
+                ).first()
+            if testimonial is None:
+                Testimonial.objects.create(
+                    source_key=source_key, customer_name=name, label=label,
+                    text=text, is_active=True, sort_order=order,
+                )
+            elif not testimonial.is_manually_managed:
+                testimonial.source_key = source_key
+                testimonial.customer_name = name
+                testimonial.label = label
+                testimonial.text = text
+                testimonial.is_active = True
+                testimonial.sort_order = order
+                testimonial.save()
+            elif testimonial.source_key is None:
+                testimonial.source_key = source_key
+                testimonial.save(update_fields=['source_key'])
         result.testimonials = len(testimonials)
     return result

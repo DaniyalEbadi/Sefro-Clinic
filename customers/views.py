@@ -26,7 +26,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminOrEmployee, IsAdminOrReadOnly
-from finance.models import Sale
+from finance.models import Sale, StaffPayout
 from finance.services.financials import REVENUE_STATUSES
 from Sefro_Clinic.fields import SHAMSI_DATE_FORMAT, shamsi_to_greg_date
 from Sefro_Clinic.periods import (
@@ -609,29 +609,34 @@ class VisitViewSet(viewsets.ModelViewSet):
         staff payout at all, so compensation could be bypassed entirely by
         editing instead of using the complete action.
         """
-        previous_status = serializer.instance.status
-        visit = serializer.save()
-        becoming_completed = (previous_status != Visit.Status.COMPLETED) and (
-            visit.status == Visit.Status.COMPLETED
-        )
-        if not becoming_completed:
-            return
         from finance.services import staff_compensation
         from finance.services.accounting import missing_recipe_services
 
-        missing = missing_recipe_services(visit)
-        if missing:
-            visit.status = previous_status
-            visit.save(update_fields=['status'])
-            raise ValidationError({'status': _missing_consumption_message(missing)})
-        uncovered = visit.resolve_operators()
-        if uncovered:
-            # Keep the row consistent with the complete action: a compensable
-            # visit is never left completed without its operators' payouts.
-            visit.status = previous_status
-            visit.save(update_fields=['status'])
-            raise ValidationError({'status': _uncovered_operator_message(uncovered)})
-        staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
+        previous_status = serializer.instance.status
+        requested_status = serializer.validated_data.get('status', previous_status)
+        with transaction.atomic():
+            locked = Visit.objects.select_for_update().get(pk=serializer.instance.pk)
+            self._assert_transition(locked.status, requested_status)
+            if requested_status == Visit.Status.CANCELED and locked.sales.filter(
+                status__in=[Sale.Status.PAID, Sale.Status.PARTIALLY_REFUNDED],
+            ).exists():
+                raise ValidationError({'status': 'Refund the visit sale before cancelling this visit.'})
+            if requested_status == Visit.Status.CANCELED and locked.staff_payouts.filter(
+                status=StaffPayout.Status.PAID,
+            ).exists():
+                raise ValidationError({'status': 'A paid staff payout must be reversed before cancelling this visit.'})
+            visit = serializer.save()
+            if visit.status == Visit.Status.CANCELED:
+                staff_compensation.cancel_payouts_for_visit(visit, reason='visit cancelled')
+            if previous_status == Visit.Status.COMPLETED or visit.status != Visit.Status.COMPLETED:
+                return
+            missing = missing_recipe_services(visit)
+            if missing:
+                raise ValidationError({'status': _missing_consumption_message(missing)})
+            uncovered = visit.resolve_operators()
+            if uncovered:
+                raise ValidationError({'status': _uncovered_operator_message(uncovered)})
+            staff_compensation.generate_visit_payouts(visit, actor=self.request.user)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -642,13 +647,14 @@ class VisitViewSet(viewsets.ModelViewSet):
         # Shamsi year/month filter
         year = self.request.query_params.get('year')
         month = self.request.query_params.get('month')
+        if bool(year) != bool(month):
+            raise ValidationError({'year': 'Both year and month are required.'})
         if year and month:
             try:
                 day_start, day_end = shamsi_month_bounds(int(year), int(month))
-            except ValueError:
-                pass
-            else:
-                qs = qs.filter(start_at__gte=day_start, start_at__lte=day_end)
+            except (ValueError, TypeError):
+                raise ValidationError({'year': 'Invalid Shamsi year/month.'})
+            qs = qs.filter(start_at__gte=day_start, start_at__lte=day_end)
 
         date_from = self.request.query_params.get('date_from')
         if date_from:
@@ -656,28 +662,56 @@ class VisitViewSet(viewsets.ModelViewSet):
                 gdate = shamsi_to_greg_date(date_from)
                 qs = qs.filter(start_at__date__gte=gdate)
             except (ValueError, TypeError, serializers.ValidationError):
-                pass
+                raise ValidationError({'date_from': 'Invalid Shamsi date. Use YYYY-MM-DD.'})
         date_to = self.request.query_params.get('date_to')
         if date_to:
             try:
                 gdate = shamsi_to_greg_date(date_to)
                 qs = qs.filter(start_at__date__lte=gdate)
             except (ValueError, TypeError, serializers.ValidationError):
-                pass
+                raise ValidationError({'date_to': 'Invalid Shamsi date. Use YYYY-MM-DD.'})
+        if date_from and date_to:
+            try:
+                greg_from = shamsi_to_greg_date(date_from)
+                greg_to = shamsi_to_greg_date(date_to)
+            except (ValueError, TypeError, serializers.ValidationError):
+                raise ValidationError({'date_from': 'Invalid Shamsi date range.'})
+            if greg_from > greg_to:
+                raise ValidationError({'date_to': 'date_to must be on or after date_from.'})
         return qs
+
+    @staticmethod
+    def _assert_transition(current, target):
+        allowed = {
+            Visit.Status.PENDING: {Visit.Status.CONFIRMED, Visit.Status.COMPLETED, Visit.Status.CANCELED},
+            Visit.Status.CONFIRMED: {Visit.Status.COMPLETED, Visit.Status.CANCELED},
+            Visit.Status.COMPLETED: {Visit.Status.CANCELED},
+            Visit.Status.CANCELED: set(),
+        }
+        if current == target:
+            return
+        if target not in allowed.get(current, set()):
+            raise ValidationError({'status': f'Cannot transition visit from {current} to {target}.'})
 
     @action(detail=True, methods=['post'])
     @extend_schema(responses=VisitSerializer)
     def confirm(self, request, pk=None):
-        visit = self.get_object()
-        visit.status = Visit.Status.CONFIRMED
-        visit.save(update_fields=['status'])
+        with transaction.atomic():
+            visit = Visit.objects.select_for_update().get(pk=self.get_object().pk)
+            self._assert_transition(visit.status, Visit.Status.CONFIRMED)
+            visit.status = Visit.Status.CONFIRMED
+            visit.save(update_fields=['status'])
         return Response(self.get_serializer(visit).data)
 
     @action(detail=True, methods=['post'])
     @extend_schema(responses=VisitSerializer)
     def complete(self, request, pk=None):
-        visit = self.get_object()
+        with transaction.atomic():
+            visit = Visit.objects.select_for_update().get(pk=self.get_object().pk)
+            self._assert_transition(visit.status, Visit.Status.COMPLETED)
+            return self._complete_locked(request, visit)
+
+    def _complete_locked(self, request, visit):
         # A visit whose services carry a compensation role must resolve an
         # operator for each of them (explicit, auto-assigned from the role, or
         # the primary staff fallback), otherwise compensation would be silently
@@ -711,15 +745,19 @@ class VisitViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     @extend_schema(responses=VisitSerializer)
     def cancel(self, request, pk=None):
-        visit = self.get_object()
-        visit.status = Visit.Status.CANCELED
-        visit.save(update_fields=['status'])
-        # Revenue the clinic no longer keeps must not leave live compensation
-        # behind, so any session payout for this visit is voided (not deleted,
-        # and monthly salaries are untouched because they cover the whole month).
-        from finance.services import staff_compensation
-
-        staff_compensation.cancel_payouts_for_visit(visit, reason='visit cancelled')
+        with transaction.atomic():
+            visit = Visit.objects.select_for_update().get(pk=self.get_object().pk)
+            self._assert_transition(visit.status, Visit.Status.CANCELED)
+            if visit.sales.filter(status__in=['paid', 'partially_refunded']).exists():
+                raise ValidationError({'status': 'Refund the visit sale before cancelling this visit.'})
+            if visit.staff_payouts.filter(status=StaffPayout.Status.PAID).exists():
+                raise ValidationError({'status': 'A paid staff payout must be reversed before cancelling this visit.'})
+            visit.status = Visit.Status.CANCELED
+            visit.save(update_fields=['status'])
+            # Revenue the clinic no longer keeps must not leave live compensation
+            # behind, so any session payout is voided in the same transaction.
+            from finance.services import staff_compensation
+            staff_compensation.cancel_payouts_for_visit(visit, reason='visit cancelled')
         return Response(self.get_serializer(visit).data)
 
     @action(detail=False, methods=['post'])

@@ -36,6 +36,11 @@ def shamsi_to_greg_dt(value):
     for fmt in (SHAMSI_DATETIME_FORMAT, '%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
         try:
             dt = jdatetime.datetime.strptime(str(value), fmt)
+            if not SHAMSI_YEAR_MIN <= dt.year <= SHAMSI_YEAR_MAX:
+                raise serializers.ValidationError(
+                    f'Invalid Shamsi (Jalali) datetime: year must be between '
+                    f'{SHAMSI_YEAR_MIN} and {SHAMSI_YEAR_MAX}.'
+                )
             return dt.togregorian()
         except ValueError:
             continue

@@ -18,12 +18,13 @@ from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from customers.models import Service
 from face_analyzer.models import FaceAnalysis, SkinCarePlan, SkinCareTip
+from face_analyzer.serializers import SkinCarePlanSerializer
 from face_analyzer.services.analyzer import FaceAnalysisResult
 from face_analyzer.services.tips import RuleBasedTipsProvider, generate_and_store_plan
 from logs.models import AuditLog
 from tests.helpers import admin_client, employee_client, make_employee
+from website.models import SiteService
 
 ANALYZE_URL = '/api/v3/face/analyze/'
 HISTORY_URL = '/api/v3/face/history/'
@@ -41,6 +42,7 @@ RESPONSE_KEYS = {
     'detected_attributes',
     'suggestions',
     'skin_plan',
+    'recommendations',
     'created_at',
     'provider',
     'model_version',
@@ -126,7 +128,8 @@ class FaceAnalyzeEndpointTests(TestCase):
         self.assertEqual(plan['primary_concerns'], MOCK_CONCERNS)
         for period in ('morning', 'evening', 'weekly', 'lifestyle', 'professional'):
             self.assertIn(period, plan)
-            self.assertGreaterEqual(len(plan[period]), 1, period)
+            if period != 'professional':
+                self.assertGreaterEqual(len(plan[period]), 1, period)
             for tip in plan[period]:
                 self.assertEqual(tip['period'], period)
                 self.assertIn(tip['priority'], {'low', 'medium', 'high'})
@@ -278,6 +281,27 @@ class FaceAnalysisTipsEndpointTests(TestCase):
         response = self.client.post('/api/v3/face/999999/tips/')
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_anonymous_cannot_regenerate_staff_owned_analysis(self):
+        owner = make_employee()
+        analysis = FaceAnalysis.objects.create(
+            user=owner,
+            image=make_image_file(),
+            overall_score=7.0,
+            symmetry_score=7.5,
+            skin_clarity_score=6.5,
+            youthfulness_score=8.0,
+            harmony_score=7.2,
+            detected_attributes={'concerns': []},
+            suggestions=[],
+            raw_model_output={'method': 'test'},
+            provider='local',
+            model_version='test-v1',
+        )
+
+        response = self.client.post(f'/api/v3/face/{analysis.pk}/tips/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
 
 @override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)
 class SkinCareTipsEngineTests(TestCase):
@@ -337,29 +361,19 @@ class SkinCareTipsEngineTests(TestCase):
         self.assertEqual(plan.provider, 'rule_based')
 
     def test_skin_tips_link_to_existing_services(self):
-        service = Service.objects.create(name='Hydrafacial', price_usd=120, is_active=True)
+        service = SiteService.objects.create(
+            name='Skin Cleansing', slug='skin-cleansing', category='skin', price=120, is_active=True,
+        )
         analysis = self.create_analysis(concerns=['enlarged_pores'])
 
         plan = generate_and_store_plan(analysis)
-        tip = SkinCareTip.objects.get(analysis=analysis, related_service_slug='hydrafacial')
+        tip = SkinCareTip.objects.get(analysis=analysis, related_service_slug='skin-cleansing')
         self.assertEqual(tip.related_service, service)
 
-        payload = {
-            'summary': plan.summary,
-            'skin_type': plan.skin_type,
-            'professional': [
-                {
-                    'title': tip.title,
-                    'related_service_slug': tip.related_service_slug,
-                    'related_service': {
-                        'id': tip.related_service.id,
-                        'name': tip.related_service.name,
-                        'price_usd': str(tip.related_service.price_usd),
-                    },
-                },
-            ],
-        }
+        payload = SkinCarePlanSerializer(plan).data
         self.assertEqual(payload['professional'][0]['related_service']['id'], service.id)
+        self.assertEqual(payload['professional'][0]['related_service']['slug'], service.slug)
+        self.assertEqual(payload['professional'][0]['related_service']['price'], '120.00')
 
 
 @override_settings(MEDIA_ROOT=TEST_MEDIA_ROOT)

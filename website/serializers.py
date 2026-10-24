@@ -120,12 +120,37 @@ class WebsitePriceInputMixin:
 
 
 class SiteServiceDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+    require_price_update = False
     price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
 
     class Meta:
         model = SiteService
-        fields = ['id', 'name', 'slug', 'category', 'price', 'price_usd', 'source_category', 'is_from_price']
-        read_only_fields = ['id', 'name', 'slug', 'category', 'source_category', 'is_from_price']
+        fields = [
+            'id', 'name', 'slug', 'category', 'source_category', 'short_description',
+            'description', 'price', 'price_usd', 'is_from_price', 'duration_label',
+            'image_url', 'image_object_key', 'source_url', 'is_active', 'sort_order',
+        ]
+        read_only_fields = ['id', 'image_object_key']
+
+    def validate(self, attrs):
+        self.require_price_update = self.instance is None
+        if self.instance is not None and 'slug' in attrs and attrs['slug'] != self.instance.slug:
+            raise serializers.ValidationError({'slug': 'An existing catalog slug cannot be changed.'})
+        return super().validate(attrs)
+
+    def create(self, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if 'image_url' in validated_data and validated_data['image_url'] != instance.image_url:
+            validated_data['image_object_key'] = ''
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
+
+
+class SiteServiceImageUploadSerializer(serializers.Serializer):
+    image = serializers.ImageField(help_text='JPEG, PNG, or WebP; maximum 5 MB.')
 
 
 class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
@@ -133,8 +158,25 @@ class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
 
     class Meta:
         model = SiteProduct
-        fields = ['id', 'name', 'slug', 'price', 'price_usd', 'source_url']
-        read_only_fields = ['id', 'name', 'slug', 'source_url']
+        fields = [
+            'id', 'name', 'slug', 'short_description', 'price', 'price_usd',
+            'image_url', 'source_url', 'is_active', 'sort_order',
+        ]
+        read_only_fields = ['id']
+
+    def validate(self, attrs):
+        self.require_price_update = self.instance is None
+        if self.instance is not None and 'slug' in attrs and attrs['slug'] != self.instance.slug:
+            raise serializers.ValidationError({'slug': 'An existing catalog slug cannot be changed.'})
+        return super().validate(attrs)
+
+    def create(self, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
 
 
 class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
@@ -144,18 +186,36 @@ class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
         allow_null=True, help_text='Original Toman price; null removes it. Send original_price OR original_price_usd.',
     )
     services = SiteServiceMiniSerializer(many=True, read_only=True)
+    service_ids = serializers.PrimaryKeyRelatedField(
+        source='services', many=True, queryset=SiteService.objects.filter(is_active=True),
+        required=False, write_only=True,
+    )
     price_options = SitePackagePriceOptionSerializer(many=True, read_only=True)
     discount_percent = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = SitePackage
         fields = [
-            'id', 'name', 'slug', 'price', 'price_usd',
-            'original_price', 'original_price_usd', 'discount_percent', 'services', 'price_options',
+            'id', 'name', 'slug', 'tier', 'tagline', 'badge', 'free_service_count',
+            'price', 'price_usd', 'original_price', 'original_price_usd',
+            'discount_percent', 'services', 'service_ids', 'price_options',
+            'source_url', 'is_active', 'sort_order',
         ]
-        read_only_fields = [
-            'id', 'name', 'slug', 'discount_percent', 'services',
-        ]
+        read_only_fields = ['id', 'discount_percent', 'services', 'price_options']
+
+    def validate(self, attrs):
+        self.require_price_update = self.instance is None
+        if self.instance is not None and 'slug' in attrs and attrs['slug'] != self.instance.slug:
+            raise serializers.ValidationError({'slug': 'An existing catalog slug cannot be changed.'})
+        return super().validate(attrs)
+
+    def create(self, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
 
 
 class SitePackagePriceOptionDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
@@ -174,8 +234,20 @@ class SitePackagePriceOptionDashboardSerializer(WebsitePriceInputMixin, serializ
             raise serializers.ValidationError({'package': 'An existing price option cannot be moved to another package.'})
         return super().validate(attrs)
 
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        SitePackage.objects.filter(pk=instance.package_id).update(is_manually_managed=True)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        SitePackage.objects.filter(pk=instance.package_id).update(is_manually_managed=True)
+        return instance
+
 
 class SiteSettingsSerializer(serializers.ModelSerializer):
+    updated_at = ShamsiDateTimeField(read_only=True)
+
     class Meta:
         model = SiteSettings
         fields = [
@@ -184,8 +256,15 @@ class SiteSettingsSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'updated_at']
 
+    def update(self, instance, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
+
 
 class WebsitePriceSyncRunSerializer(serializers.ModelSerializer):
+    started_at = ShamsiDateTimeField(read_only=True)
+    finished_at = ShamsiDateTimeField(read_only=True, allow_null=True)
+
     class Meta:
         model = WebsitePriceSyncRun
         fields = [
@@ -218,3 +297,42 @@ class ContactMessageSerializer(serializers.ModelSerializer):
         model = ContactMessage
         fields = ['id', 'full_name', 'phone', 'message', 'created_at']
         read_only_fields = ['id', 'created_at']
+
+
+class TeamMemberDashboardSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeamMember
+        fields = ['id', 'name', 'role', 'bio', 'image_url', 'is_active', 'sort_order']
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
+
+
+class TestimonialDashboardSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Testimonial
+        fields = ['id', 'customer_name', 'label', 'text', 'is_active', 'sort_order']
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data['is_manually_managed'] = True
+        return super().update(instance, validated_data)
+
+
+class ContactMessageDashboardSerializer(serializers.ModelSerializer):
+    created_at = ShamsiDateTimeField(read_only=True)
+
+    class Meta:
+        model = ContactMessage
+        fields = ['id', 'full_name', 'phone', 'message', 'created_at', 'is_handled']
+        read_only_fields = ['id', 'full_name', 'phone', 'message', 'created_at']

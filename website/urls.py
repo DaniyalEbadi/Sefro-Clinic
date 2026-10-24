@@ -8,13 +8,19 @@ from .views import (
     SiteServiceViewSet,
     TeamMemberListView,
     TestimonialListView,
+    WebsiteContactDashboardViewSet,
     WebsiteDashboardLoginAPIView,
+    WebsiteDashboardLogoutAPIView,
+    WebsiteDashboardMeAPIView,
     WebsitePackageDashboardViewSet,
     WebsitePackagePriceOptionDashboardViewSet,
+    WebsitePriceSyncRunView,
     WebsitePriceSyncStatusView,
     WebsiteProductDashboardViewSet,
     WebsiteServiceDashboardViewSet,
     WebsiteSettingsDashboardView,
+    WebsiteTeamDashboardViewSet,
+    WebsiteTestimonialDashboardViewSet,
 )
 
 router = DefaultRouter()
@@ -34,10 +40,16 @@ dashboard_router.register('services', WebsiteServiceDashboardViewSet, basename='
 dashboard_router.register('packages', WebsitePackageDashboardViewSet, basename='website-dashboard-package')
 dashboard_router.register('package-price-options', WebsitePackagePriceOptionDashboardViewSet, basename='website-dashboard-package-price-option')
 dashboard_router.register('products', WebsiteProductDashboardViewSet, basename='website-dashboard-product')
+dashboard_router.register('team', WebsiteTeamDashboardViewSet, basename='website-dashboard-team')
+dashboard_router.register('testimonials', WebsiteTestimonialDashboardViewSet, basename='website-dashboard-testimonial')
+dashboard_router.register('contact-messages', WebsiteContactDashboardViewSet, basename='website-dashboard-contact-message')
 
 dashboard_urlpatterns = [
     path('', include(dashboard_router.urls)),
     path('login/', WebsiteDashboardLoginAPIView.as_view(), name='website-dashboard-login-api'),
+    path('me/', WebsiteDashboardMeAPIView.as_view(), name='website-dashboard-me'),
+    path('logout/', WebsiteDashboardLogoutAPIView.as_view(), name='website-dashboard-logout'),
     path('price-sync/status/', WebsitePriceSyncStatusView.as_view(), name='website-price-sync-status'),
+    path('price-sync/run/', WebsitePriceSyncRunView.as_view(), name='website-price-sync-run'),
     path('settings/', WebsiteSettingsDashboardView.as_view(), name='website-dashboard-settings'),
 ]

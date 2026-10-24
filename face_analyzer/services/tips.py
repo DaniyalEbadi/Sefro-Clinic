@@ -2,7 +2,7 @@
 
 ``generate_and_store_plan`` is the single persistence entry point: it
 upserts the SkinCarePlan, replaces all SkinCareTip rows for the analysis and
-resolves each tip's ``related_service_slug`` to a customers.Service FK.
+resolves each tip's ``related_service_slug`` to a website.SiteService FK.
 """
 
 import json
@@ -14,6 +14,7 @@ from django.db import transaction
 
 from ..models import SkinCarePlan, SkinCareTip
 from .analyzer import sanitize_structure, sanitize_text
+from .recommendations import SERVICE_MATCHES
 
 PERIODS = ('morning', 'evening', 'weekly', 'lifestyle', 'professional')
 VALID_PERIODS = frozenset(PERIODS)
@@ -62,7 +63,7 @@ RULES: dict = {
         {'title': 'Tranexamic acid treatment', 'description': 'A tranexamic-acid serum at night helps fade stubborn post-acne marks.', 'priority': 'medium', 'category': 'serum', 'key_ingredients': ['tranexamic acid'], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('hyperpigmentation', 'professional'): [
-        {'title': 'In-clinic IPL', 'description': 'Professional IPL sessions target deeper pigment that topical products cannot reach.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'ipl'},
+        {'title': 'In-clinic acid therapy consultation', 'description': 'Ask a clinician whether the clinic acid therapy is suitable for your pigmentation concern.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'acid-therapy'},
     ],
     ('acne', 'morning'): [
         {'title': 'Niacinamide serum', 'description': 'A 5-10% niacinamide serum in the morning regulates oil and calms breakout inflammation.', 'priority': 'high', 'category': 'serum', 'key_ingredients': ['niacinamide'], 'avoid_ingredients': [], 'related_service_slug': ''},
@@ -77,7 +78,7 @@ RULES: dict = {
         {'title': 'Low-glycemic meals', 'description': 'Reduce high-glycemic snacks and dairy-heavy meals, which can aggravate breakouts.', 'priority': 'medium', 'category': 'diet', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('acne', 'professional'): [
-        {'title': 'In-clinic extraction', 'description': 'Have inflamed comedones professionally extracted to avoid scarring from at-home picking.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'extraction'},
+        {'title': 'In-clinic skin cleansing consultation', 'description': 'Ask a clinician whether the clinic skin-cleansing service fits your current skin condition.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'skin-cleansing'},
     ],
     ('redness', 'morning'): [
         {'title': 'Azelaic acid', 'description': 'Azelaic acid evens tone and reduces visible redness without irritation.', 'priority': 'medium', 'category': 'serum', 'key_ingredients': ['azelaic acid'], 'avoid_ingredients': ['fragrance'], 'related_service_slug': ''},
@@ -95,7 +96,7 @@ RULES: dict = {
         {'title': 'Sleep hygiene', 'description': 'Aim for 7-8 hours of sleep and keep a consistent schedule to reduce shadowing.', 'priority': 'high', 'category': 'lifestyle', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('dark_circles', 'professional'): [
-        {'title': 'In-clinic carboxy therapy', 'description': 'Carboxy therapy improves under-eye microcirculation for vascular dark circles.', 'priority': 'low', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'carboxy-therapy'},
+        {'title': 'Under-eye consultation', 'description': 'Ask a clinician whether the clinic under-eye carboxy service is appropriate for your concern.', 'priority': 'low', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'carboxy-eye-therapy'},
     ],
     ('fine_lines', 'morning'): [
         {'title': 'Peptide serum', 'description': 'A peptide serum in the morning supports collagen and softens fine lines over time.', 'priority': 'medium', 'category': 'serum', 'key_ingredients': ['peptides'], 'avoid_ingredients': [], 'related_service_slug': ''},
@@ -104,7 +105,7 @@ RULES: dict = {
         {'title': 'Retinol at night', 'description': 'Start retinol twice weekly at night and increase as tolerated; always pair with SPF.', 'priority': 'high', 'category': 'treatment', 'key_ingredients': ['retinol'], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('fine_lines', 'professional'): [
-        {'title': 'In-clinic microneedling', 'description': 'Microneedling or RF microneedling stimulates collagen in the dermis for deeper lines.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'microneedling'},
+        {'title': 'Face mesonidling consultation', 'description': 'Ask a clinician whether face mesonidling is suitable for the lines you want to address.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'mesonidling-face'},
     ],
     ('dryness', 'morning'): [
         {'title': 'Hyaluronic acid serum', 'description': 'Apply hyaluronic acid to damp skin, then moisturize, to lock in hydration.', 'priority': 'high', 'category': 'serum', 'key_ingredients': ['hyaluronic acid'], 'avoid_ingredients': [], 'related_service_slug': ''},
@@ -135,7 +136,7 @@ RULES: dict = {
         {'title': 'BHA exfoliant', 'description': 'A leave-on BHA twice weekly clears the inside of pores so they look smaller.', 'priority': 'high', 'category': 'exfoliant', 'key_ingredients': ['salicylic acid'], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('enlarged_pores', 'professional'): [
-        {'title': 'In-clinic hydrafacial', 'description': 'A professional hydrafacial deeply vacuums and hydrates congested pores.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'hydrafacial'},
+        {'title': 'In-clinic skin cleansing consultation', 'description': 'Ask a clinician whether the clinic skin-cleansing service fits your pore concern.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'skin-cleansing'},
     ],
     ('dullness', 'morning'): [
         {'title': 'Vitamin C for glow', 'description': 'Morning vitamin C restores radiance and defends against oxidative dulling.', 'priority': 'medium', 'category': 'serum', 'key_ingredients': ['vitamin C'], 'avoid_ingredients': [], 'related_service_slug': ''},
@@ -147,7 +148,7 @@ RULES: dict = {
         {'title': 'Antioxidant-rich diet', 'description': 'Eat colorful fruit and vegetables daily; omega-3s support a lit-from-within glow.', 'priority': 'low', 'category': 'diet', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': ''},
     ],
     ('dullness', 'professional'): [
-        {'title': 'In-clinic chemical peel', 'description': 'A light professional peel resurfaces dull skin with controlled exfoliation.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'chemical-peel'},
+        {'title': 'In-clinic acid therapy consultation', 'description': 'Ask a clinician whether the clinic acid therapy is suitable for your dullness concern.', 'priority': 'medium', 'category': 'in_clinic', 'key_ingredients': [], 'avoid_ingredients': [], 'related_service_slug': 'acid-therapy'},
     ],
 }
 
@@ -244,7 +245,7 @@ class LLMTipsProvider(SkinCareTipsProvider):
             return fallback
 
     def _build_prompt(self, analysis) -> str:
-        from customers.models import Service
+        from website.models import SiteService
 
         attributes = analysis.detected_attributes if isinstance(analysis.detected_attributes, dict) else {}
         scores = {
@@ -255,7 +256,7 @@ class LLMTipsProvider(SkinCareTipsProvider):
             'harmony_score': analysis.harmony_score,
         }
         services = list(
-            Service.objects.filter(is_active=True).values('id', 'name', 'price_usd', 'category__name')
+            SiteService.objects.filter(is_active=True).values('slug', 'name', 'price', 'category')
         )
         payload = {'attributes': attributes, 'scores': scores, 'services': services}
         schema = (
@@ -271,6 +272,7 @@ class LLMTipsProvider(SkinCareTipsProvider):
             'You are a clinic skincare expert. Return ONLY minified JSON matching this schema: '
             f'{schema}\n'
             'Work only from the derived attributes below; never mention or request the raw image. '
+            'Use only listed service slugs in related_service_slug; do not invent clinic services. '
             f'Data: {json.dumps(payload, default=str)}'
         )
 
@@ -395,66 +397,86 @@ def _sanitize_tip(tip: dict) -> dict:
 
 
 def _resolve_services(slugs: set) -> dict:
-    """Map each non-empty slug to an active Service (slug field or case-insensitive name)."""
-    from customers.models import Service
+    """Map exact slugs to active public website services."""
+    from website.models import SiteService
 
-    mapping = {}
+    slugs = set(slugs) - {''}
     if not slugs:
-        return mapping
-    active = Service.objects.filter(is_active=True)
-    has_slug_field = any(field.name == 'slug' for field in Service._meta.get_fields())
-    for slug in slugs:
-        if not slug:
-            continue
-        if has_slug_field:
-            mapping[slug] = active.filter(slug=slug).first()
-        else:
-            spaced = slug.replace('-', ' ')
-            mapping[slug] = active.filter(name__iexact=spaced).first() or active.filter(name__iexact=slug).first()
-    return mapping
+        return {}
+    found = {
+        item.slug: item for item in SiteService.objects.filter(is_active=True, slug__in=slugs)
+    }
+    return {slug: found.get(slug) for slug in slugs}
 
 
-@transaction.atomic
 def generate_and_store_plan(analysis) -> SkinCarePlan:
     """Generate a draft, upsert the plan, replace tips and resolve service FKs.
 
     Returns the plan with analysis + skin_tips prefetched.
     """
+    # Provider generation may perform CPU-heavy work or an external LLM request.
+    # Keep that work outside the DB transaction so failures/timeouts do not hold
+    # database locks open unnecessarily.
     draft = get_tips_provider().generate(analysis)
-    plan, _created = SkinCarePlan.objects.update_or_create(
-        analysis=analysis,
-        defaults={
-            'summary': sanitize_text(draft.summary),
-            'skin_type': draft.skin_type,
-            'primary_concerns': sanitize_structure(list(draft.primary_concerns)),
-            'recommended_frequency': sanitize_text(draft.recommended_frequency)[:120],
-            'provider': draft.provider if draft.provider in {'rule_based', 'llm'} else 'rule_based',
-            'model_used': sanitize_text(draft.model_used)[:64],
-        },
-    )
-    SkinCareTip.objects.filter(analysis=analysis).delete()
-    tips = [_sanitize_tip(tip) for tip in draft.tips]
-    service_map = _resolve_services({tip['related_service_slug'] for tip in tips})
-    SkinCareTip.objects.bulk_create([
-        SkinCareTip(
+
+    with transaction.atomic():
+        plan, _created = SkinCarePlan.objects.update_or_create(
             analysis=analysis,
-            plan=plan,
-            period=tip['period'],
-            sort_order=tip['sort_order'],
-            title=tip['title'],
-            description=tip['description'],
-            priority=tip['priority'],
-            category=tip['category'],
-            key_ingredients=tip['key_ingredients'],
-            avoid_ingredients=tip['avoid_ingredients'],
-            related_service_slug=tip['related_service_slug'],
-            related_service=service_map.get(tip['related_service_slug']),
+            defaults={
+                'summary': sanitize_text(draft.summary),
+                'skin_type': draft.skin_type,
+                'primary_concerns': sanitize_structure(list(draft.primary_concerns)),
+                'recommended_frequency': sanitize_text(draft.recommended_frequency)[:120],
+                'provider': draft.provider if draft.provider in {'rule_based', 'llm'} else 'rule_based',
+                'model_used': sanitize_text(draft.model_used)[:64],
+            },
         )
-        for tip in tips
-    ])
-    return (
-        SkinCarePlan.objects
-        .select_related('analysis')
-        .prefetch_related('analysis__skin_tips')
-        .get(pk=plan.pk)
-    )
+        SkinCareTip.objects.filter(analysis=analysis).delete()
+        tips = [_sanitize_tip(tip) for tip in draft.tips]
+        service_map = _resolve_services({tip['related_service_slug'] for tip in tips})
+        attributes = analysis.detected_attributes if isinstance(analysis.detected_attributes, dict) else {}
+        concerns = attributes.get('concerns') if isinstance(attributes.get('concerns'), list) else []
+        relevant_services = {
+            slug for concern in concerns if isinstance(concern, str)
+            for slug in SERVICE_MATCHES.get(concern, ())
+        }
+        tips = [
+            tip for tip in tips
+            if (
+                (not tip['related_service_slug'] or service_map.get(tip['related_service_slug']) is not None)
+                and (
+                    tip['period'] != 'professional' and tip['category'] != 'in_clinic'
+                    or tip['related_service_slug'] in relevant_services
+                    and service_map.get(tip['related_service_slug']) is not None
+                )
+            )
+        ]
+        if draft.provider == 'llm':
+            for tip in tips:
+                if tip['category'] == 'in_clinic':
+                    service = service_map[tip['related_service_slug']]
+                    tip['title'] = f'Consultation: {service.name}'[:200]
+                    tip['description'] = 'Ask a clinician whether this website service is suitable for you.'
+        SkinCareTip.objects.bulk_create([
+            SkinCareTip(
+                analysis=analysis,
+                plan=plan,
+                period=tip['period'],
+                sort_order=tip['sort_order'],
+                title=tip['title'],
+                description=tip['description'],
+                priority=tip['priority'],
+                category=tip['category'],
+                key_ingredients=tip['key_ingredients'],
+                avoid_ingredients=tip['avoid_ingredients'],
+                related_service_slug=tip['related_service_slug'],
+                related_service=service_map.get(tip['related_service_slug']),
+            )
+            for tip in tips
+        ])
+        return (
+            SkinCarePlan.objects
+            .select_related('analysis')
+            .prefetch_related('analysis__skin_tips')
+            .get(pk=plan.pk)
+        )

@@ -30,9 +30,12 @@ def _safe_write(msg):
 
 
 def _audit_table_not_ready(error):
-    """Migrations legitimately save models before the audit table exists."""
+    """Migrations can save models before the audit table/mirror exists."""
     cause = getattr(error, '__cause__', None)
-    return isinstance(error, (OperationalError, ProgrammingError)) and getattr(cause, 'pgcode', None) == '42P01'
+    code = getattr(cause, 'pgcode', None)
+    return isinstance(error, (OperationalError, ProgrammingError)) and (
+        code == '42P01' or (code == '42703' and 'timestamp_shamsi' in str(error))
+    )
 
 
 def _current_user():
@@ -58,6 +61,8 @@ def _collect_fields(instance):
             continue
         if f.column in SKIP_COLUMNS:
             continue
+        if f.column.endswith('_shamsi'):
+            continue  # The native date is already rendered as Shamsi below.
         val = f.value_from_object(instance)
         if val is None:
             continue

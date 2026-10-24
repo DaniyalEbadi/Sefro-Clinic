@@ -20,10 +20,12 @@ from finance.models import (
     OperatingExpense,
     OperatingExpenseCategory,
     ProductUsage,
+    Sale,
     StaffCompensationRule,
     StaffPayout,
     WelcomePack,
     WelcomePackItem,
+    WelcomePackUsage,
 )
 from finance.services import accounting, financials, payments, staff_compensation
 from finance.services.exchange_rates import set_rate
@@ -136,6 +138,147 @@ class FinancialTestBase(TestCase):
             customer=self.customer, amount_usd=Decimal(amount_usd), visit=visit, rate=RATE,
             components=[{'method': 'cash_toman', 'amount_usd': Decimal(amount_usd) * RATE}],
         )
+
+
+class PayoutSettlementApiTests(FinancialTestBase):
+    def test_admin_can_approve_then_pay_a_payout(self):
+        visit = self.make_visit(self.doctor_service)
+        self.complete(visit)
+        payout = StaffPayout.objects.get(visit=visit)
+
+        approved = self.client.post(f'/api/finance/staff-payouts/{payout.id}/approve/')
+        self.assertEqual(approved.status_code, 200)
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, StaffPayout.Status.APPROVED)
+        self.assertIsNotNone(payout.approved_at)
+        self.assertIsNotNone(payout.approved_by_id)
+
+        paid = self.client.post(f'/api/finance/staff-payouts/{payout.id}/pay/')
+        self.assertEqual(paid.status_code, 200)
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, StaffPayout.Status.PAID)
+        self.assertIsNotNone(payout.paid_at)
+
+    def test_cannot_pay_pending_payout_directly(self):
+        visit = self.make_visit(self.doctor_service)
+        self.complete(visit)
+        payout = StaffPayout.objects.get(visit=visit)
+        response = self.client.post(f'/api/finance/staff-payouts/{payout.id}/pay/')
+        self.assertEqual(response.status_code, 400)
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, StaffPayout.Status.PENDING)
+
+
+class VisitSettlementApiTests(FinancialTestBase):
+    def test_settlement_commits_all_stages_and_retries_without_duplicate_effects(self):
+        visit = self.make_visit(self.doctor_service, consume=False)
+        extra = Product.objects.create(
+            name='Invoice extra', sku='SETTLE-EXTRA', unit_price=Decimal('2'),
+            cost_usd=Decimal('0.5'), count=Decimal('20'),
+        )
+        pack = WelcomePack.objects.create(name='Settlement pack')
+        WelcomePackItem.objects.create(welcome_pack=pack, product=self.pack_item, quantity=Decimal('1'))
+        payload = {
+            'idempotency_key': 'visit-settlement-atomic-001',
+            'customer': self.customer.id,
+            'consumption': {
+                'selected_products': {str(self.doctor_service.id): [[self.material.id, '1.000']]},
+                'extra_products': [[extra.id, '2.000']],
+            },
+            'service_sale': {
+                'customer': self.customer.id,
+                'visit': visit.id,
+                'amount_usd': '500.00',
+                'components': [{'method': 'cash_toman', 'amount_usd': '50000000'}],
+                'description': 'service fee',
+            },
+            'goods_sale': {
+                'customer': self.customer.id,
+                'amount_usd': '4.00',
+                'components': [{'method': 'cash_toman', 'amount_usd': '400000'}],
+                'description': 'consumables and extras',
+            },
+            'welcome_pack': {'pack': pack.id, 'quantity': '1.000'},
+        }
+
+        first = self.client.post(f'/api/finance/visits/{visit.id}/settle/', payload, format='json')
+
+        self.assertEqual(first.status_code, 201, first.data)
+        visit.refresh_from_db()
+        extra.refresh_from_db()
+        self.pack_item.refresh_from_db()
+        self.assertEqual(visit.status, Visit.Status.COMPLETED)
+        self.assertEqual(Sale.objects.filter(visit=visit).count(), 1)
+        self.assertEqual(Sale.objects.filter(visit__isnull=True, customer=self.customer).count(), 1)
+        self.assertEqual(ProductUsage.objects.filter(visit=visit, service=self.doctor_service).count(), 1)
+        self.assertEqual(ProductUsage.objects.filter(
+            visit=visit, service__isnull=True, welcome_pack_usage__isnull=True,
+        ).count(), 1)
+        self.assertEqual(WelcomePackUsage.objects.filter(visit=visit, welcome_pack=pack).count(), 1)
+        self.assertEqual(extra.count, Decimal('18'))
+        self.assertEqual(self.pack_item.count, Decimal('499'))
+        self.assertEqual(StaffPayout.objects.filter(visit=visit).count(), 1)
+
+        second = self.client.post(f'/api/finance/visits/{visit.id}/settle/', payload, format='json')
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertEqual(second.data['service_sale']['id'], first.data['service_sale']['id'])
+        self.assertEqual(second.data['goods_sale']['id'], first.data['goods_sale']['id'])
+        extra.refresh_from_db()
+        self.pack_item.refresh_from_db()
+        self.assertEqual(extra.count, Decimal('18'))
+        self.assertEqual(self.pack_item.count, Decimal('499'))
+        self.assertEqual(Sale.objects.filter(customer=self.customer).count(), 2)
+        self.assertEqual(StaffPayout.objects.filter(visit=visit).count(), 1)
+
+    def test_settlement_rolls_back_inventory_and_sale_when_later_stage_fails(self):
+        visit = self.make_visit(self.doctor_service, consume=False)
+        before_stock = self.material.count
+        payload = {
+            'idempotency_key': 'visit-settlement-rollback-001',
+            'customer': self.customer.id,
+            'consumption': {'selected_products': {str(self.doctor_service.id): [[self.material.id, '1.000']]}},
+            'service_sale': {
+                'customer': self.customer.id, 'visit': visit.id, 'amount_usd': '500.00',
+                'components': [{'method': 'cash_toman', 'amount_usd': '50000000'}],
+            },
+            'goods_sale': {
+                'customer': self.customer.id, 'amount_usd': '4.00',
+                'components': [{'method': 'cash_toman', 'amount_usd': '1'}],
+            },
+        }
+
+        response = self.client.post(f'/api/finance/visits/{visit.id}/settle/', payload, format='json')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        visit.refresh_from_db()
+        self.material.refresh_from_db()
+        self.assertEqual(visit.status, Visit.Status.CONFIRMED)
+        self.assertEqual(self.material.count, before_stock)
+        self.assertFalse(Sale.objects.filter(customer=self.customer).exists())
+        self.assertFalse(ProductUsage.objects.filter(visit=visit).exists())
+        self.assertFalse(StaffPayout.objects.filter(visit=visit).exists())
+
+    def test_settlement_rejects_reusing_key_with_changed_payload(self):
+        visit = self.make_visit(self.doctor_service, consume=False)
+        payload = {
+            'idempotency_key': 'visit-settlement-payload-001',
+            'customer': self.customer.id,
+            'consumption': {'selected_products': {str(self.doctor_service.id): [[self.material.id, '1.000']]}},
+            'service_sale': {
+                'customer': self.customer.id, 'visit': visit.id, 'amount_usd': '500.00',
+                'components': [{'method': 'cash_toman', 'amount_usd': '50000000'}],
+            },
+        }
+        first = self.client.post(f'/api/finance/visits/{visit.id}/settle/', payload, format='json')
+        changed = {**payload, 'service_sale': {**payload['service_sale'], 'description': 'changed'}}
+
+        second = self.client.post(f'/api/finance/visits/{visit.id}/settle/', changed, format='json')
+
+        self.assertEqual(first.status_code, 201, first.data)
+        self.assertEqual(second.status_code, 409, second.data)
+        self.assertEqual(Sale.objects.filter(visit=visit).count(), 1)
+        self.assertEqual(StaffPayout.objects.filter(visit=visit).count(), 1)
+
 
 
 class DoctorAndFacialPayoutTests(FinancialTestBase):

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 
@@ -295,5 +296,8 @@ class VisitService(models.Model):
 
     def __str__(self):
         return f'{self.service} @ {self.visit_id} -> {self.staff or "unassigned"}'
+
+
+install_shamsi_mirrors(globals())
 
 

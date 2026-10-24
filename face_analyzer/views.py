@@ -95,6 +95,14 @@ ANALYZE_EXAMPLES = [
                 'lifestyle': [],
                 'professional': [],
             },
+            'recommendations': {
+                'summary': 'بر اساس تصویر، چند گزینه برای بررسی بیشتر پیشنهاد می‌شود.',
+                'next_steps': ['روتین مراقبت و محافظت روزانه در برابر آفتاب را بررسی کنید.'],
+                'services': [],
+                'products': [],
+                'packages': [],
+                'disclaimer': 'این نتیجه برآورد تصویری است و تشخیص پزشکی نیست.',
+            },
             'created_at': '1404-07-01 14:30',
             'provider': 'local',
             'model_version': 'mediapipe-0.10.14+sefro-local-v1',
@@ -125,6 +133,11 @@ ANALYZE_EXAMPLES = [
         'Throttled',
         value={'detail': 'Request was throttled.'},
         status_codes=[429],
+    ),
+    OpenApiExample(
+        'Model unavailable',
+        value={'detail': 'مدل تحلیل چهره در دسترس نیست. لطفاً بعداً دوباره تلاش کنید.'},
+        status_codes=[503],
     ),
 ]
 
@@ -173,6 +186,7 @@ class FaceAnalyzeView(APIView):
             200: FaceAnalysisResponseSerializer,
             400: {'type': 'object', 'properties': {'detail': {'type': 'string'}}},
             429: {'type': 'object', 'properties': {'detail': {'type': 'string'}}},
+            503: {'type': 'object', 'properties': {'detail': {'type': 'string'}}},
         },
         examples=ANALYZE_EXAMPLES,
     )
@@ -211,7 +225,7 @@ class FaceAnalyzeView(APIView):
 
 
 class FaceAnalysisTipsView(APIView):
-    """Public, throttled regeneration of the skin-care plan for an existing analysis."""
+    """Throttled plan regeneration with ownership checks for stored analyses."""
 
     permission_classes = [AllowAny]
     throttle_classes = [FaceAnalyzerThrottle]
@@ -227,7 +241,15 @@ class FaceAnalysisTipsView(APIView):
         },
     )
     def post(self, request, pk):
-        analysis = get_object_or_404(FaceAnalysis, pk=pk)
+        queryset = FaceAnalysis.objects.all()
+        user = request.user
+        if getattr(user, 'is_authenticated', False):
+            if not _can_view_all(user):
+                queryset = queryset.filter(user=user)
+        else:
+            # Anonymous analyses are public by design; staff-owned analyses are not.
+            queryset = queryset.filter(user__isnull=True)
+        analysis = get_object_or_404(queryset, pk=pk)
         plan = generate_and_store_plan(analysis)
         return Response(SkinCarePlanSerializer(plan, context={'request': request}).data)
 

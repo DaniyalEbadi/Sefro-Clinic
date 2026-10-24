@@ -101,3 +101,29 @@ def employee_client(username='emp_user', password=EMPLOYEE_PASSWORD):
     make_employee(username=username, password=password)
     login(client, username, password)
     return client
+
+
+WEBSITE_PASSWORD = 'Website-Manager-Test-2026!'
+
+
+def make_website_manager(user=None, website_username='web_manager', password=WEBSITE_PASSWORD):
+    from website.models import WebsiteManagerCredential
+
+    user = user or make_employee()
+    credential, _ = WebsiteManagerCredential.objects.get_or_create(
+        user=user, defaults={'username': website_username},
+    )
+    credential.username = website_username
+    credential.set_password(password)
+    credential.save()
+    return credential
+
+
+def website_manager_client(user=None):
+    credential = make_website_manager(user=user)
+    client = APIClient()
+    response = client.post('/api/v2/site-dashboard/login/', {
+        'username': credential.username, 'password': WEBSITE_PASSWORD,
+    }, format='json')
+    assert response.status_code == 200, response.data
+    return client

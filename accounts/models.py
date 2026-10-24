@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractUser, UserManager
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS as NAME_SANITIZERS
 
 
@@ -68,3 +69,6 @@ class ClinicUser(AbstractUser):
     @property
     def is_admin_user(self):
         return self.role == self.Role.ADMIN
+
+
+install_shamsi_mirrors(globals())

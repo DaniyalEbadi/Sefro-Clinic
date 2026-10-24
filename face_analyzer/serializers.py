@@ -1,12 +1,14 @@
 from django.conf import settings
+from drf_spectacular.utils import extend_schema_field
 from PIL import Image
 from rest_framework import serializers
 
-from customers.models import Service
 from Sefro_Clinic.fields import ShamsiDateTimeField
 from Sefro_Clinic.validators import TEXT_SANITIZERS
+from website.models import SiteService
 
 from .models import FaceAnalysis, SkinCarePlan, SkinCareTip
+from .services.recommendations import build_catalog_recommendations
 
 ALLOWED_MIME_TYPES = ('image/jpeg', 'image/png', 'image/webp')
 
@@ -87,11 +89,11 @@ class FaceAnalysisRequestSerializer(serializers.Serializer):
 
 
 class RelatedServiceSerializer(serializers.ModelSerializer):
-    """Compact service reference nested inside tips."""
+    """Public website service reference nested inside tips."""
 
     class Meta:
-        model = Service
-        fields = ['id', 'name', 'price_usd']
+        model = SiteService
+        fields = ['id', 'slug', 'name', 'price', 'price_usd', 'source_url', 'is_from_price']
 
 
 class SkinCareTipSerializer(serializers.ModelSerializer):
@@ -164,6 +166,36 @@ class SkinCarePlanSerializer(serializers.ModelSerializer):
         return self._period_tips(obj, 'professional')
 
 
+class CatalogPriceOptionRecommendationSerializer(serializers.Serializer):
+    label = serializers.CharField()
+    session_count = serializers.IntegerField(allow_null=True)
+    gift_session_count = serializers.IntegerField()
+    price_toman = serializers.CharField()
+
+
+class CatalogItemRecommendationSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    slug = serializers.CharField()
+    name = serializers.CharField()
+    price_toman = serializers.CharField()
+    source_url = serializers.URLField(allow_blank=True)
+    api_url = serializers.CharField()
+    image_url = serializers.URLField(allow_blank=True)
+    matched_concern = serializers.CharField()
+    reason = serializers.CharField()
+    is_from_price = serializers.BooleanField(required=False)
+    price_options = CatalogPriceOptionRecommendationSerializer(many=True, required=False)
+
+
+class CatalogRecommendationsSerializer(serializers.Serializer):
+    summary = serializers.CharField()
+    next_steps = serializers.ListField(child=serializers.CharField())
+    services = CatalogItemRecommendationSerializer(many=True)
+    products = CatalogItemRecommendationSerializer(many=True)
+    packages = CatalogItemRecommendationSerializer(many=True)
+    disclaimer = serializers.CharField()
+
+
 class FaceAnalysisResponseSerializer(serializers.ModelSerializer):
     """Full face analysis response including the nested skin-care plan."""
 
@@ -185,6 +217,7 @@ class FaceAnalysisResponseSerializer(serializers.ModelSerializer):
     detected_attributes = FaceAttributesSerializer(read_only=True)
     suggestions = SuggestionSerializer(many=True, read_only=True)
     skin_plan = serializers.SerializerMethodField()
+    recommendations = serializers.SerializerMethodField()
     created_at = ShamsiDateTimeField(read_only=True, help_text='Shamsi timestamp, YYYY-MM-DD HH:MM.')
 
     class Meta:
@@ -199,6 +232,7 @@ class FaceAnalysisResponseSerializer(serializers.ModelSerializer):
             'detected_attributes',
             'suggestions',
             'skin_plan',
+            'recommendations',
             'created_at',
             'provider',
             'model_version',
@@ -210,6 +244,10 @@ class FaceAnalysisResponseSerializer(serializers.ModelSerializer):
         if plan is None:
             return None
         return SkinCarePlanSerializer(plan, context=self.context).data
+
+    @extend_schema_field(CatalogRecommendationsSerializer)
+    def get_recommendations(self, obj):
+        return build_catalog_recommendations(obj)
 
 
 class FaceAnalysisHistorySerializer(serializers.ModelSerializer):

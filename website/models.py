@@ -1,8 +1,11 @@
 from decimal import Decimal
 
+from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.core.validators import MinValueValidator
 from django.db import models
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 
@@ -31,7 +34,9 @@ class SiteService(models.Model):
         help_text='Editable USD base price. The public Toman price is derived from this value.',
     )
     duration_label = models.CharField(max_length=40, blank=True, validators=TEXT_SANITIZERS)
-    image_url = models.URLField(blank=True)
+    image_url = models.URLField(max_length=500, blank=True)
+    image_object_key = models.CharField(max_length=255, blank=True, editable=False)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
 
@@ -73,6 +78,7 @@ class SitePackage(models.Model):
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
     source_url = models.URLField(blank=True)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
 
     class Meta:
         ordering = ['sort_order', 'price']
@@ -106,6 +112,7 @@ class SiteProduct(models.Model):
     source_url = models.URLField(blank=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
 
     class Meta:
         ordering = ['sort_order', 'name']
@@ -121,6 +128,8 @@ class TeamMember(models.Model):
     image_url = models.URLField(blank=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    source_key = models.CharField(max_length=100, unique=True, null=True, blank=True, editable=False)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
 
     class Meta:
         ordering = ['sort_order', 'id']
@@ -135,6 +144,8 @@ class Testimonial(models.Model):
     text = models.TextField(validators=TEXT_SANITIZERS)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    source_key = models.CharField(max_length=100, unique=True, null=True, blank=True, editable=False)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
 
     class Meta:
         ordering = ['sort_order', 'id']
@@ -178,6 +189,7 @@ class SiteSettings(models.Model):
     hero_image_url = models.URLField(blank=True)
     about_image_url = models.URLField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    is_manually_managed = models.BooleanField(default=False, editable=False)
 
     def __str__(self):
         return 'Website settings'
@@ -218,3 +230,34 @@ class WebsitePriceSyncRun(models.Model):
 
     def __str__(self):
         return f'Website price sync {self.started_at:%Y-%m-%d %H:%M:%S} ({self.status})'
+
+
+class WebsiteManagerCredential(models.Model):
+    """Separate website password for an existing clinic staff identity."""
+
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='website_credential')
+    username = models.CharField(max_length=150, unique=True)
+    password_hash = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def set_password(self, raw_password):
+        self.password_hash = make_password(raw_password)
+
+    def check_password(self, raw_password):
+        return check_password(raw_password, self.password_hash)
+
+    def __str__(self):
+        return self.username
+
+
+class WebsiteDashboardSession(models.Model):
+    credential = models.ForeignKey(WebsiteManagerCredential, on_delete=models.CASCADE, related_name='sessions')
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+
+install_shamsi_mirrors(globals())

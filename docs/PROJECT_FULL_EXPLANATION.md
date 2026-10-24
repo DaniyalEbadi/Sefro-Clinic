@@ -54,8 +54,8 @@ There are **three parallel API surfaces**:
 | Surface | Base path | Purpose | Docs |
 |---|---|---|---|
 | **Dashboard API (v1 "legacy")** | `/api/` | The internal clinic management dashboard (the main frontend consumes this) | `/api/docs/` |
-| **Site API (v2)** | `/api/v2/` | Public website (barancliniccenter.com): catalog, team, testimonials, contact | `/api/v2/docs/` |
-| **Face AI Analyzer API (v3)** | `/api/v3/` | Public face analysis + skin-care plans; staff analysis history | `/api/v3/docs/` |
+| **Site API (v2)** | `/api/v2/` | Public website (barancliniccenter.com): catalog, team, testimonials, contact, face analysis | `/api/v2/docs/` |
+| **Face AI Analyzer API (v3)** | `/api/v3/` | Existing face-analysis routes and staff history, sharing records with v2 | `/api/v3/docs/` |
 
 > The Django admin site is **not installed and not routed** (`django.contrib.admin` is absent
 > from `INSTALLED_APPS`, no `admin/` URL exists — a security test asserts `/admin/` → 404).
@@ -534,10 +534,11 @@ everything else on the resource follows read: staff / write: admin):
 | `POST …/receive/` | **admin** | `draft/ordered → received`. **The only step that moves money**: locks each product, sets `Product.cost_usd`, increments `count`, closes/opens `ProductCostHistory`, then writes `exchange_rate_snapshot` + per-line and order-level Toman totals |
 | `POST …/cancel/` | **admin** | any state except `received → cancelled` (a received order is immutable — it already changed stock) |
 
-### 6.10 Face AI Analyzer — `/api/v3/` (`face_analyzer` app)
+### 6.10 Face AI Analyzer — `/api/v2/face/` and `/api/v3/face/` (`face_analyzer` app)
 
-Own URLConf (`Sefro_Clinic/api_v3.py`) with its own Swagger/schema. Analysis is **public**;
-history is staff-only and scoped to the caller.
+The same four endpoints are available under both API prefixes. Site API v2
+documents them under **Site Face Analyzer**; v3 keeps its own Swagger/schema.
+Analysis is **public**; history is staff-only and scoped to the caller.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
@@ -549,7 +550,9 @@ history is staff-only and scoped to the caller.
 Notes: there is **no** create/update/delete API for analyses or tips — the only write path is
 `analyze`. `tips` regeneration runs `generate_and_store_plan()` atomically: it **upserts** the
 one-to-one plan and **replaces** all its tips (delete + bulk-create), resolving each tip's
-`related_service_slug` to a live `customers.Service`. `FaceAnalysis` rows own their plan and
+`related_service_slug` to a live `website.SiteService`. The full analysis response also
+includes Persian, current-catalog `recommendations` (see `docs/FACE_ANALYZER_SITE_API.md`).
+`FaceAnalysis` rows own their plan and
 tips, which cascade if an analysis is deleted (ORM/shell only).
 
 ### 6.11 Audit logs — `/api/logs/`

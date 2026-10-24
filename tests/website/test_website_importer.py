@@ -4,7 +4,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from rest_framework import status
 
-from tests.helpers import employee_client
+from tests.helpers import website_manager_client
 from tests.website.test_models import make_package, make_service
 from website.models import SitePackagePriceOption, SiteSettings
 from website.services.importer import import_website_catalog, parse_money
@@ -31,6 +31,24 @@ HOME_HTML = 'تهران — آدرس کلینیک ۰۹۱۰۰۳۰۰۸۷۵ شنب�
 
 
 class WebsiteImporterTests(TestCase):
+    @patch('website.services.importer.fetch_website_rate', return_value=(Decimal('100000'), 'test'))
+    @patch('website.services.importer._fetch')
+    def test_import_preserves_dashboard_managed_service_pages(self, fetch, _rate):
+        manual = make_service(slug='one', name='نسخه ویرایش شده', is_manually_managed=True,
+                              image_url='https://cdn.example.com/custom.png')
+        custom = make_service(slug='custom', name='صفحه جدید', is_manually_managed=True)
+        pages = {
+            '/services': SERVICES_HTML, '/packages': PACKAGES_HTML,
+            '/products': PRODUCTS_HTML, '/about': ABOUT_HTML, '/': HOME_HTML,
+        }
+        fetch.side_effect = lambda path: pages[path]
+        import_website_catalog()
+        manual.refresh_from_db()
+        custom.refresh_from_db()
+        self.assertEqual(manual.name, 'نسخه ویرایش شده')
+        self.assertEqual(manual.image_url, 'https://cdn.example.com/custom.png')
+        self.assertTrue(custom.is_active)
+
     @patch('website.services.importer.fetch_website_rate', return_value=(Decimal('100000'), 'test'))
     @patch('website.services.importer._fetch')
     def test_import_is_idempotent_and_deactivates_missing_records(self, fetch, rate):
@@ -75,7 +93,7 @@ class WebsitePackageOptionTests(TestCase):
             package=package, label='تک جلسه', price='100000.00', price_usd='1.00',
         )
         with patch('website.views.get_current_usd_to_toman_rate', return_value=Decimal('100000')):
-            response = employee_client().patch(
+            response = website_manager_client().patch(
                 f'/api/v2/site-dashboard/package-price-options/{option.pk}/',
                 {'price_usd': '2.00'}, format='json',
             )

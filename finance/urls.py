@@ -31,6 +31,7 @@ from .views import (
     StaffCompensationRuleViewSet,
     StaffPayoutSummaryView,
     StaffPayoutViewSet,
+    VisitSettlementView,
     WalletRewardRuleViewSet,
     WalletSummaryView,
     WalletTransactionViewSet,
@@ -67,6 +68,7 @@ router.register('welcome-pack-usages', WelcomePackUsageViewSet, basename='welcom
 
 urlpatterns = [
     path('checkout/', CheckoutView.as_view(), name='checkout'),
+    path('visits/<int:visit_id>/settle/', VisitSettlementView.as_view(), name='visit-settlement'),
     path('visits/<int:pk>/record-consumption/', RecordConsumptionView.as_view(), name='record-consumption'),
     path('reports/financial-summary/', FinancialSummaryView.as_view(), name='financial-summary'),
     path('reports/monthly-close/', MonthlyCloseView.as_view(), name='monthly-close'),

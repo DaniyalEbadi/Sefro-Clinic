@@ -446,6 +446,39 @@ class CheckoutSerializer(serializers.Serializer):
         return value
 
 
+class VisitSettlementConsumptionSerializer(serializers.Serializer):
+    selected_products = serializers.DictField(
+        child=serializers.ListField(
+            child=serializers.ListField(child=serializers.CharField(), min_length=2, max_length=2),
+        ),
+        required=False,
+        default=dict,
+    )
+    zero_consumption = serializers.DictField(
+        child=serializers.CharField(allow_blank=False), required=False, default=dict,
+    )
+    extra_products = serializers.ListField(
+        child=serializers.ListField(child=serializers.CharField(), min_length=2, max_length=2),
+        required=False,
+        default=list,
+    )
+
+
+class VisitSettlementWelcomePackSerializer(serializers.Serializer):
+    pack = serializers.IntegerField(min_value=1)
+    quantity = serializers.DecimalField(max_digits=10, decimal_places=3, required=False, default=Decimal('1'))
+    idempotency_key = serializers.CharField(max_length=64, required=False, allow_blank=True)
+
+
+class VisitSettlementRequestSerializer(serializers.Serializer):
+    idempotency_key = serializers.CharField(max_length=64, min_length=1)
+    customer = serializers.IntegerField(min_value=1)
+    consumption = VisitSettlementConsumptionSerializer(required=False, default=dict)
+    service_sale = CheckoutSerializer()
+    goods_sale = CheckoutSerializer(required=False, allow_null=True)
+    welcome_pack = VisitSettlementWelcomePackSerializer(required=False, allow_null=True)
+
+
 class RefundSerializer(serializers.Serializer):
     refund_amount_usd = serializers.DecimalField(max_digits=14, decimal_places=2, required=False, allow_null=True)
     reason = serializers.CharField(required=False, allow_blank=True, max_length=500)

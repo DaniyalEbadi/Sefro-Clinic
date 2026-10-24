@@ -32,7 +32,7 @@ class VisitUnrestrictedTimeTest(TestCase):
             customer=self.customer,
             start_at=past,
             end_at=past + timedelta(hours=1),
-            status=Visit.Status.COMPLETED,
+            status=Visit.Status.CONFIRMED,
         )
 
     def _login(self, username, password):

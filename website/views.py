@@ -1,12 +1,25 @@
+import logging
+
+from django.conf import settings as django_settings
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, extend_schema
-from rest_framework import generics, permissions, status, viewsets
+from rest_framework import generics, permissions, serializers, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
 
-from accounts.permissions import IsAdminOrEmployee
-from accounts.views import ClinicTokenObtainPairView
-from finance.services.exchange_rates import get_current_usd_to_toman_rate
+from accounts.authentication import _CsrfChecker
+from accounts.serializers import ClinicUserSerializer
 
+from .authentication import (
+    WebsiteDashboardAuthentication,
+    clear_website_session_cookie,
+    issue_website_session,
+    session_from_request,
+)
 from .models import (
     ContactMessage,
     SitePackage,
@@ -16,9 +29,12 @@ from .models import (
     SiteSettings,
     TeamMember,
     Testimonial,
+    WebsiteManagerCredential,
     WebsitePriceSyncRun,
 )
+from .permissions import IsWebsiteManager
 from .serializers import (
+    ContactMessageDashboardSerializer,
     ContactMessageSerializer,
     SitePackageDashboardSerializer,
     SitePackagePriceOptionDashboardSerializer,
@@ -26,12 +42,20 @@ from .serializers import (
     SiteProductDashboardSerializer,
     SiteProductSerializer,
     SiteServiceDashboardSerializer,
+    SiteServiceImageUploadSerializer,
     SiteServiceSerializer,
     SiteSettingsSerializer,
+    TeamMemberDashboardSerializer,
     TeamMemberSerializer,
+    TestimonialDashboardSerializer,
     TestimonialSerializer,
     WebsitePriceSyncRunSerializer,
 )
+from .services.image_storage import upload_service_image
+from .services.pricing import get_website_dashboard_rate as get_current_usd_to_toman_rate
+from .services.sync import WebsitePriceSyncAlreadyRunning, sync_website_prices
+
+logger = logging.getLogger(__name__)
 
 
 class PublicReadOnlyMixin:
@@ -67,9 +91,24 @@ class SiteProductViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
 
 
 class WebsitePriceDashboardMixin:
-    permission_classes = [IsAdminOrEmployee]
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
     lookup_field = 'slug'
-    http_method_names = ['get', 'patch', 'head', 'options']
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+    def create(self, request, *args, **kwargs):
+        rate = get_current_usd_to_toman_rate()
+        if rate is None or not rate.is_finite() or rate <= 0:
+            return Response(
+                {'detail': 'A valid exchange rate is required before changing website prices.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        serializer = self.get_serializer(
+            data=request.data, context={**self.get_serializer_context(), 'exchange_rate': rate},
+        )
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(
         description='Set a price using price (Toman) OR price_usd (USD). '
@@ -82,16 +121,19 @@ class WebsitePriceDashboardMixin:
         ],
     )
     def partial_update(self, request, *args, **kwargs):
-        rate = get_current_usd_to_toman_rate()
-        if rate is None or not rate.is_finite() or rate <= 0:
-            return Response(
-                {'detail': 'A valid exchange rate is required before changing website prices.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        context = self.get_serializer_context()
+        if any(name in request.data for name in ('price', 'price_usd', 'original_price', 'original_price_usd')):
+            rate = get_current_usd_to_toman_rate()
+            if rate is None or not rate.is_finite() or rate <= 0:
+                return Response(
+                    {'detail': 'A valid exchange rate is required before changing website prices.'},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            context['exchange_rate'] = rate
         instance = self.get_object()
         serializer = self.get_serializer(
             instance, data=request.data, partial=True,
-            context={**self.get_serializer_context(), 'exchange_rate': rate},
+            context=context,
         )
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
@@ -102,6 +144,69 @@ class WebsitePriceDashboardMixin:
 class WebsiteServiceDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
     queryset = SiteService.objects.all()
     serializer_class = SiteServiceDashboardSerializer
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+    def _price_context(self):
+        rate = get_current_usd_to_toman_rate()
+        if rate is None or not rate.is_finite() or rate <= 0:
+            return None, Response(
+                {'detail': 'A valid exchange rate is required before changing website prices.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return rate, None
+
+    @extend_schema(description='Create a complete website service page. Send price (Toman) OR price_usd (USD).')
+    def create(self, request, *args, **kwargs):
+        rate, error = self._price_context()
+        if error:
+            return error
+        serializer = self.get_serializer(
+            data=request.data, context={**self.get_serializer_context(), 'exchange_rate': rate},
+        )
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(description='Edit page text, image URL, visibility, or price. Price edits require a current exchange rate.')
+    def partial_update(self, request, *args, **kwargs):
+        context = self.get_serializer_context()
+        if 'price' in request.data or 'price_usd' in request.data:
+            rate, error = self._price_context()
+            if error:
+                return error
+            context['exchange_rate'] = rate
+        serializer = self.get_serializer(self.get_object(), data=request.data, partial=True, context=context)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @extend_schema(
+        request=SiteServiceImageUploadSerializer,
+        responses={200: SiteServiceDashboardSerializer},
+        description='Upload the service hero image to farabaks3/baran-clinic/services/<slug>/. '
+                    'Only the baran-clinic/ prefix should allow public reads for permanent URLs.',
+    )
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser], url_path='image')
+    def upload_image(self, request, *args, **kwargs):
+        serializer = SiteServiceImageUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if not request.FILES.get('image'):
+            return Response({'image': ['Upload an image file.']}, status=status.HTTP_400_BAD_REQUEST)
+        service = self.get_object()
+        try:
+            key, url = upload_service_image(service, request.FILES['image'])
+        except RuntimeError:
+            return Response({'detail': 'Website image storage is not configured.'}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        except ValidationError:
+            raise
+        except Exception:
+            logger.exception('Website service image upload failed')
+            return Response({'detail': 'Website image upload failed.'}, status=status.HTTP_502_BAD_GATEWAY)
+        service.image_object_key = key
+        service.image_url = url
+        service.is_manually_managed = True
+        service.save(update_fields=['image_object_key', 'image_url', 'is_manually_managed'])
+        return Response(self.get_serializer(service).data)
 
 
 @extend_schema(tags=['Website Dashboard - Packages'])
@@ -112,7 +217,8 @@ class WebsitePackageDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelV
 
 @extend_schema(tags=['Website Dashboard - Package Price Options'])
 class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAdminOrEmployee]
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
     queryset = SitePackagePriceOption.objects.select_related('package').all()
     serializer_class = SitePackagePriceOptionDashboardSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -139,13 +245,16 @@ class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(instance).data, status=status.HTTP_201_CREATED)
 
     def partial_update(self, request, *args, **kwargs):
-        rate, error = self._rate_context()
-        if error:
-            return error
+        context = self.get_serializer_context()
+        if 'price' in request.data or 'price_usd' in request.data:
+            rate, error = self._rate_context()
+            if error:
+                return error
+            context['exchange_rate'] = rate
         instance = self.get_object()
         serializer = self.get_serializer(
             instance, data=request.data, partial=True,
-            context={**self.get_serializer_context(), 'exchange_rate': rate},
+            context=context,
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -154,7 +263,8 @@ class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
 
 @extend_schema(tags=['Website Dashboard - Settings'])
 class WebsiteSettingsDashboardView(generics.RetrieveUpdateAPIView):
-    permission_classes = [IsAdminOrEmployee]
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
     serializer_class = SiteSettingsSerializer
 
     def get_object(self):
@@ -170,7 +280,8 @@ class WebsiteProductDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelV
 
 @extend_schema(tags=['Website Dashboard - Sync'])
 class WebsitePriceSyncStatusView(generics.RetrieveAPIView):
-    permission_classes = [IsAdminOrEmployee]
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
     serializer_class = WebsitePriceSyncRunSerializer
 
     def get_object(self):
@@ -183,16 +294,118 @@ class WebsitePriceSyncStatusView(generics.RetrieveAPIView):
         return super().retrieve(request, *args, **kwargs)
 
 
-@extend_schema(tags=['Website Dashboard - Login'])
-class WebsiteDashboardLoginAPIView(ClinicTokenObtainPairView):
-    """Website-dashboard login using the shared secure JWT cookie mechanism."""
+@extend_schema(tags=['Website Dashboard - Sync'], responses={200: WebsitePriceSyncRunSerializer})
+class WebsitePriceSyncRunView(APIView):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'website_sync'
 
-    def post(self, request, *args, **kwargs):
-        response = super().post(request, *args, **kwargs)
-        # This dedicated browser login never exposes tokens in JSON, even if
-        # the development setting enables body tokens for the general API.
-        response.data.pop('access', None)
-        response.data.pop('refresh', None)
+    def post(self, request):
+        try:
+            run = sync_website_prices()
+        except WebsitePriceSyncAlreadyRunning:
+            return Response({'detail': 'A website price sync is already running.'}, status=status.HTTP_409_CONFLICT)
+        except Exception:
+            logger.exception('Website price synchronization failed')
+            run = WebsitePriceSyncRun.objects.first()
+            return Response(
+                WebsitePriceSyncRunSerializer(run).data if run else {'detail': 'Website price sync failed.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        code = status.HTTP_200_OK if run.status == WebsitePriceSyncRun.Status.SUCCEEDED else status.HTTP_503_SERVICE_UNAVAILABLE
+        return Response(WebsitePriceSyncRunSerializer(run).data, status=code)
+
+
+@extend_schema(tags=['Website Dashboard - Team'])
+class WebsiteTeamDashboardViewSet(viewsets.ModelViewSet):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    queryset = TeamMember.objects.all()
+    serializer_class = TeamMemberDashboardSerializer
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+
+@extend_schema(tags=['Website Dashboard - Testimonials'])
+class WebsiteTestimonialDashboardViewSet(viewsets.ModelViewSet):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    queryset = Testimonial.objects.all()
+    serializer_class = TestimonialDashboardSerializer
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
+
+
+@extend_schema(tags=['Website Dashboard - Contacts'])
+class WebsiteContactDashboardViewSet(viewsets.ReadOnlyModelViewSet):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    queryset = ContactMessage.objects.all()
+    serializer_class = ContactMessageDashboardSerializer
+    http_method_names = ['get', 'patch', 'head', 'options']
+
+    def partial_update(self, request, *args, **kwargs):
+        if set(request.data) != {'is_handled'}:
+            raise ValidationError({'is_handled': 'Only is_handled may be changed.'})
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class WebsiteDashboardLoginSerializer(serializers.Serializer):
+    username = serializers.CharField()
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+
+@extend_schema(tags=['Website Dashboard - Login'], request=WebsiteDashboardLoginSerializer)
+class WebsiteDashboardLoginAPIView(APIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'auth'
+
+    def post(self, request):
+        serializer = WebsiteDashboardLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        credential = WebsiteManagerCredential.objects.select_related('user').filter(
+            username=serializer.validated_data['username'],
+        ).first()
+        if not credential or not credential.check_password(serializer.validated_data['password']):
+            return Response({'detail': 'Invalid website credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not credential.is_active or not credential.user.is_active:
+            return Response({'detail': 'Invalid website credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
+        response = Response({'detail': 'Logged in.'})
+        issue_website_session(response, request, credential)
+        return response
+
+
+@extend_schema(tags=['Website Dashboard - Login'], responses=ClinicUserSerializer)
+class WebsiteDashboardMeAPIView(APIView):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+
+    def get(self, request):
+        return Response(ClinicUserSerializer(request.user).data)
+
+
+@extend_schema(tags=['Website Dashboard - Login'])
+class WebsiteDashboardLogoutAPIView(APIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        if request.COOKIES.get(django_settings.WEBSITE_DASHBOARD_COOKIE):
+            checker = _CsrfChecker(lambda req: None)
+            checker.process_request(request)
+            if checker.process_view(request, None, (), {}):
+                raise PermissionDenied('CSRF verification failed.')
+        session = session_from_request(request)
+        if session and session.revoked_at is None:
+            session.revoked_at = timezone.now()
+            session.save(update_fields=['revoked_at'])
+        response = Response({'detail': 'Logged out.'})
+        clear_website_session_cookie(response)
         return response
 
 

@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.db import models
 
+from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
+
 
 class AuditLog(models.Model):
     class Action(models.TextChoices):
@@ -26,3 +28,6 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f'{self.user} {self.action} {self.model_name}#{self.object_id} at {self.timestamp}'
+
+
+install_shamsi_mirrors(globals())

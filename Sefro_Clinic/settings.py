@@ -3,6 +3,7 @@ import sys
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -92,16 +93,34 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'Sefro_Clinic.wsgi.application'
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('POSTGRES_DB', 'sefro_clinic'),
-        'USER': os.environ.get('POSTGRES_USER', 'postgres'),
-        'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
-        'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
-        'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    parsed_database_url = urlparse(database_url)
+    if parsed_database_url.scheme not in {'postgres', 'postgresql'}:
+        raise ImproperlyConfigured('DATABASE_URL must use the postgres:// or postgresql:// scheme.')
+    database_query = parse_qs(parsed_database_url.query)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': parsed_database_url.path.lstrip('/'),
+            'USER': unquote(parsed_database_url.username or ''),
+            'PASSWORD': unquote(parsed_database_url.password or ''),
+            'HOST': parsed_database_url.hostname or '',
+            'PORT': str(parsed_database_url.port or 5432),
+            **({'OPTIONS': {'sslmode': database_query['sslmode'][0]}} if 'sslmode' in database_query else {}),
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'sefro_clinic'),
+            'USER': os.environ.get('POSTGRES_USER', 'postgres'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -126,6 +145,15 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Dedicated website asset client; never replace the default media storage.
+LIARA_WEBSITE_BUCKET = 'farabaks3'
+LIARA_WEBSITE_ENDPOINT_URL = 'https://storage.c2.liara.site'
+LIARA_WEBSITE_PREFIX = 'baran-clinic'
+LIARA_ACCESS_KEY = os.environ.get('LIARA_ACCESS_KEY', '')
+LIARA_SECRET_KEY = os.environ.get('LIARA_SECRET_KEY', '')
+LIARA_WEBSITE_PUBLIC_BASE_URL = os.environ.get('LIARA_WEBSITE_PUBLIC_BASE_URL', '').rstrip('/')
+LIARA_WEBSITE_MAX_IMAGE_MB = 5
 
 AUTH_USER_MODEL = 'accounts.ClinicUser'
 
@@ -163,6 +191,10 @@ JWT_AUTH_REFRESH_COOKIE = 'refresh_token'
 JWT_AUTH_COOKIE_SECURE = env_bool('DJANGO_JWT_COOKIE_SECURE', str(SECURE_SSL_REDIRECT))
 JWT_AUTH_COOKIE_HTTP_ONLY = True
 JWT_AUTH_COOKIE_SAMESITE = 'Lax'
+
+# Website dashboard credentials and session are independent of finance JWTs.
+WEBSITE_DASHBOARD_COOKIE = 'website_dashboard_session'
+WEBSITE_DASHBOARD_SESSION_SECONDS = 8 * 60 * 60
 
 # When cookies are the transport, keep tokens out of the JSON body so XSS
 # cannot read them from a parseable response. Prod default False.
@@ -208,6 +240,7 @@ REST_FRAMEWORK = {
         # Login/refresh endpoints use the scoped 'auth' rate; keep it strict outside tests.
         'auth': '100000/min' if TESTING else os.environ.get('THROTTLE_AUTH_RATE', '10/min'),
         'contact': '100000/min' if TESTING else os.environ.get('THROTTLE_CONTACT_RATE', '5/min'),
+        'website_sync': '100000/min' if TESTING else os.environ.get('THROTTLE_WEBSITE_SYNC_RATE', '2/hour'),
         'anon': '100000/min' if TESTING else os.environ.get('THROTTLE_ANON_RATE', '60/min'),
         'user': '100000/min' if TESTING else os.environ.get('THROTTLE_USER_RATE', '600/min'),
         'face_analyzer': FACE_ANALYZER_THROTTLE_RATE,

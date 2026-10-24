@@ -18,3 +18,11 @@ class FaceAnalyzerError(APIException):
     status_code = status.HTTP_400_BAD_REQUEST
     default_detail = PERSIAN_ANALYZE_FAILURE
     default_code = 'face_analysis_failed'
+
+
+class AnalyzerUnavailable(APIException):
+    """The configured inference runtime or model asset is unavailable."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = 'مدل تحلیل چهره در دسترس نیست. لطفاً بعداً دوباره تلاش کنید.'
+    default_code = 'face_analyzer_unavailable'

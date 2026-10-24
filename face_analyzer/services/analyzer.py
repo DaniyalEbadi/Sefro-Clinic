@@ -15,6 +15,7 @@ import base64
 import io
 import json
 import math
+import os
 import re
 import statistics
 import urllib.request
@@ -29,7 +30,7 @@ from PIL import Image, ImageFilter, ImageStat
 
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
-from ..exceptions import AnalyzerError, FaceAnalyzerError
+from ..exceptions import AnalyzerError, AnalyzerUnavailable, FaceAnalyzerError
 
 try:
     import cv2
@@ -520,15 +521,45 @@ def cheek_firmness(points: list) -> float:
 def detect_faces(image_bytes: bytes) -> list:
     """Return one landmark list per detected face ([] when no face). Raises when MediaPipe is unavailable."""
     if mp is None:
-        raise FaceAnalyzerError()
+        raise AnalyzerUnavailable()
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        with mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=5) as mesh:
-            results = mesh.process(np.asarray(image))
-        if not results.multi_face_landmarks:
-            return []
-        return [list(face.landmark) for face in results.multi_face_landmarks]
-    except FaceAnalyzerError:
+        if hasattr(mp, 'solutions'):
+            with mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=5) as mesh:
+                results = mesh.process(np.asarray(image))
+            if not results.multi_face_landmarks:
+                return []
+            return [list(face.landmark) for face in results.multi_face_landmarks]
+
+        # MediaPipe 0.10.30+ removed the legacy ``mp.solutions`` namespace.
+        # Use the supported Tasks API when it is the only available interface.
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python import vision
+
+        configured_path = getattr(settings, 'FACE_ANALYZER_MODEL_PATH', '') or ''
+        if configured_path and not os.path.isabs(configured_path):
+            configured_path = os.path.join(settings.BASE_DIR, configured_path)
+        model_path = configured_path
+        if os.path.isdir(model_path):
+            model_path = os.path.join(model_path, 'face_landmarker.task')
+        if not os.path.isfile(model_path):
+            raise AnalyzerUnavailable()
+        options = vision.FaceLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=model_path),
+            num_faces=5,
+        )
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=np.asarray(image),
+        )
+        try:
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+        except Exception as exc:
+            raise AnalyzerUnavailable() from exc
+        with landmarker:
+            results = landmarker.detect(mp_image)
+        return [list(face) for face in results.face_landmarks]
+    except (FaceAnalyzerError, AnalyzerUnavailable):
         raise
     except Exception as exc:  # pragma: no cover - defensive: any inference failure
         raise FaceAnalyzerError() from exc
@@ -634,7 +665,7 @@ class LocalFaceAnalyzerBackend(FaceAnalyzerBackend):
                 raise FaceAnalyzerError('Multiple faces detected')
             points = to_pixel_points(faces[0], *image.size)
             return self._analyze_from_landmarks(image, points)
-        except FaceAnalyzerError:
+        except (FaceAnalyzerError, AnalyzerUnavailable):
             raise
         except Exception as exc:
             raise FaceAnalyzerError() from exc

@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from finance.models import ExchangeRate
-from tests.helpers import employee_client
+from tests.helpers import website_manager_client
 from tests.website.test_models import make_package, make_product, make_service
 from website.models import SitePackagePriceOption, WebsitePriceSyncRun
 from website.services.pricing import toman_price_from_usd
@@ -19,7 +19,7 @@ class WebsiteDashboardPriceTests(TestCase):
     def test_employee_can_update_service_price_with_whole_toman_ceiling(self, rate):
         service = make_service(price_usd='0.00')
 
-        response = employee_client().patch(
+        response = website_manager_client().patch(
             f'/api/v2/site-dashboard/services/{service.slug}/',
             {'price_usd': '0.01'}, format='json',
         )
@@ -34,7 +34,7 @@ class WebsiteDashboardPriceTests(TestCase):
     def test_package_updates_current_and_original_prices(self, rate):
         package = make_package(price_usd='10.00', original_price_usd='12.00')
 
-        response = employee_client().patch(
+        response = website_manager_client().patch(
             f'/api/v2/site-dashboard/packages/{package.slug}/',
             {'price_usd': '10.01', 'original_price_usd': '12.01'}, format='json',
         )
@@ -52,13 +52,15 @@ class WebsiteDashboardPriceTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_dashboard_rejects_content_only_edits(self):
+    def test_dashboard_accepts_content_only_edits(self):
         service = make_service()
-        response = employee_client().patch(
+        response = website_manager_client().patch(
             f'/api/v2/site-dashboard/services/{service.slug}/',
             {'name': 'تغییر نام'}, format='json',
         )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        service.refresh_from_db()
+        self.assertEqual(service.name, 'تغییر نام')
 
 
 class WebsitePriceSyncTests(TestCase):
@@ -99,7 +101,7 @@ class WebsitePriceSyncTests(TestCase):
 @patch('website.views.get_current_usd_to_toman_rate', return_value=Decimal('264280'))
 class WebsiteTomanPriceTests(TestCase):
     def setUp(self):
-        self.client = employee_client()
+        self.client = website_manager_client()
         self.service = make_service()
         self.product = make_product()
         self.package = make_package()

@@ -1,12 +1,18 @@
+import hashlib
+import json
 from datetime import date, datetime
 from decimal import Decimal
 
 import jdatetime
+from django.core.serializers.json import DjangoJSONEncoder
+from django.db import transaction
 from django.db.models import Sum
+from django.db.utils import IntegrityError
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, OpenApiTypes, extend_schema, inline_serializer
 from rest_framework import filters, serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -40,6 +46,7 @@ from .models import (
     ServiceItem,
     StaffCompensationRule,
     StaffPayout,
+    VisitSettlement,
     Wallet,
     WalletRewardRule,
     WalletTransaction,
@@ -69,6 +76,7 @@ from .serializers import (
     ServiceItemSerializer,
     StaffCompensationRuleSerializer,
     StaffPayoutSerializer,
+    VisitSettlementRequestSerializer,
     WalletRewardRuleSerializer,
     WalletSerializer,
     WalletTransactionSerializer,
@@ -638,6 +646,142 @@ class CheckoutView(APIView):
 
 
 @extend_schema(tags=['Finance'])
+class VisitSettlementView(APIView):
+    """Commit all financial and inventory effects for a visit as one unit."""
+    permission_classes = [IsEmployeeOrAdmin]
+
+    @extend_schema(request=VisitSettlementRequestSerializer, responses={201: serializers.JSONField})
+    def post(self, request, visit_id):
+        from customers.models import Customer, Visit
+        from customers.serializers import VisitSerializer
+
+        from .services import staff_compensation
+
+        serializer = VisitSettlementRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        encoded = json.dumps(data, sort_keys=True, cls=DjangoJSONEncoder, separators=(',', ':'))
+        request_hash = hashlib.sha256(encoded.encode()).hexdigest()
+        key = data['idempotency_key']
+        def stage_key(stage):
+            return f"settle-{hashlib.sha256(f'{key}:{stage}'.encode()).hexdigest()[:56]}"
+
+        def conflict(message):
+            return Response({'error': message}, status=status.HTTP_409_CONFLICT)
+
+        def render(settlement, code):
+            result = {
+                'visit': VisitSerializer(settlement.visit).data,
+                'service_sale': SaleSerializer(settlement.service_sale).data,
+                'goods_sale': SaleSerializer(settlement.goods_sale).data if settlement.goods_sale_id else None,
+                'welcome_pack_usage': WelcomePackUsageSerializer(settlement.welcome_pack_usage).data if settlement.welcome_pack_usage_id else None,
+            }
+            return Response(result, status=code)
+
+        existing = VisitSettlement.objects.select_related('visit', 'service_sale', 'goods_sale', 'welcome_pack_usage').filter(idempotency_key=key).first()
+        if existing:
+            if existing.visit_id != visit_id or existing.request_hash != request_hash:
+                return conflict('Idempotency key was already used for a different settlement request.')
+            return render(existing, status.HTTP_200_OK)
+
+        try:
+            with transaction.atomic():
+                visit = Visit.objects.select_for_update().get(pk=visit_id)
+                customer = Customer.objects.get(pk=data['customer'])
+                if visit.customer_id != customer.id:
+                    raise ValidationError({'customer': 'Customer must match the visit.'})
+                if visit.status not in (Visit.Status.PENDING, Visit.Status.CONFIRMED):
+                    raise ValidationError({'visit': f'Cannot settle a visit in {visit.status} status.'})
+
+                cons = data['consumption']
+                selected_products = cons.get('selected_products', {})
+                zero_consumption = cons.get('zero_consumption', {})
+                recorded_services = set(ProductUsage.objects.filter(
+                    visit=visit, package_sale__isnull=True, is_commission=False,
+                    welcome_pack_usage__isnull=True, service_id__isnull=False,
+                ).values_list('service_id', flat=True).distinct())
+                selected_products = {
+                    service_id: rows for service_id, rows in selected_products.items()
+                    if int(service_id) not in recorded_services
+                }
+                zero_consumption = {
+                    service_id: reason for service_id, reason in zero_consumption.items()
+                    if int(service_id) not in recorded_services
+                }
+                extras = cons.get('extra_products', [])
+                if ProductUsage.objects.filter(
+                    visit=visit, service__isnull=True, package_sale__isnull=True,
+                    is_commission=False, welcome_pack_usage__isnull=True,
+                ).exists():
+                    extras = []
+                if selected_products or zero_consumption or extras:
+                    accounting.record_visit_consumption(
+                        visit, selected_products=selected_products,
+                        extra_products=extras, zero_consumption=zero_consumption,
+                    )
+
+                def create_sale(raw, *, is_service):
+                    if raw['customer'] != customer.id:
+                        raise ValidationError({'customer': 'Sale customer must match the visit.'})
+                    raw_visit_id = raw.get('visit')
+                    if is_service and raw_visit_id not in (None, visit.id):
+                        raise ValidationError({'service_sale': 'Service sale must belong to this visit.'})
+                    if not is_service and (raw_visit_id or raw.get('package')):
+                        raise ValidationError({'goods_sale': 'Goods sale cannot be linked to a visit or package.'})
+                    package = None
+                    if raw.get('package'):
+                        package = Package.objects.get(pk=raw['package'])
+                    stage = 'service' if is_service else 'goods'
+                    return payments.checkout(
+                        customer=customer, amount_usd=raw['amount_usd'], components=raw['components'],
+                        discount_usd=raw.get('discount_usd', Decimal('0')),
+                        visit=visit if is_service else None, package=package,
+                        idempotency_key=stage_key(stage), description=raw.get('description', ''),
+                    )
+
+                service_sale = create_sale(data['service_sale'], is_service=True)
+                goods_sale = create_sale(data['goods_sale'], is_service=False) if data.get('goods_sale') else None
+
+                pack_usage = None
+                pack_data = data.get('welcome_pack')
+                if pack_data:
+                    pack = WelcomePack.objects.get(pk=pack_data['pack'])
+                    pack_key = stage_key('welcome-pack')
+                    pack_usage = welcome_pack_svc.issue_welcome_pack(
+                        welcome_pack=pack, customer=customer, quantity=pack_data['quantity'],
+                        visit=visit, issued_by=request.user, idempotency_key=pack_key,
+                    )
+
+                missing = accounting.missing_recipe_services(visit)
+                if missing:
+                    raise ValidationError({'visit': f"Actual consumption is required for: {', '.join(missing)}"})
+                uncovered = visit.resolve_operators()
+                if uncovered:
+                    raise ValidationError({'visit': f"Service operators are required for: {', '.join(uncovered)}"})
+                visit.status = Visit.Status.COMPLETED
+                visit.save(update_fields=['status'])
+                staff_compensation.generate_visit_payouts(visit, actor=request.user)
+                settlement = VisitSettlement.objects.create(
+                    visit=visit, customer=customer, service_sale=service_sale,
+                    goods_sale=goods_sale, welcome_pack_usage=pack_usage,
+                    idempotency_key=key, request_hash=request_hash, created_by=request.user,
+                )
+            settlement = VisitSettlement.objects.select_related('visit', 'service_sale', 'goods_sale', 'welcome_pack_usage').get(pk=settlement.pk)
+            return render(settlement, status.HTTP_201_CREATED)
+        except Visit.DoesNotExist:
+            raise NotFound('Visit not found.')
+        except (Customer.DoesNotExist, Package.DoesNotExist, WelcomePack.DoesNotExist) as exc:
+            raise ValidationError({'detail': 'A referenced customer, package, or welcome pack was not found.'}) from exc
+        except (payments.PaymentError, InsufficientFunds, accounting.ConsumptionError, welcome_pack_svc.WelcomePackError) as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except IntegrityError:
+            existing = VisitSettlement.objects.select_related('visit', 'service_sale', 'goods_sale', 'welcome_pack_usage').filter(idempotency_key=key).first()
+            if existing and existing.visit_id == visit_id and existing.request_hash == request_hash:
+                return render(existing, status.HTTP_200_OK)
+            return conflict('Idempotency key was concurrently used for another request.')
+
+
+@extend_schema(tags=['Finance'])
 class RecordConsumptionView(APIView):
     permission_classes = [IsEmployeeOrAdmin]
 
@@ -953,6 +1097,45 @@ class StaffPayoutViewSet(viewsets.ReadOnlyModelViewSet):
         if params.get('visit'):
             qs = qs.filter(visit_id=params['visit'])
         return _apply_date_range(qs, self.request)
+
+    def _transition(self, request, target):
+        from logs.models import AuditLog
+
+        from .services.periods_guard import audit_event, ensure_open
+
+        current = self.get_object()
+        ensure_open(current.created_at, action=f'{target} staff payout', user=request.user,
+                    object_repr=f'StaffPayout#{current.pk}')
+        with transaction.atomic():
+            payout = StaffPayout.objects.select_for_update().get(pk=self.get_object().pk)
+            if payout.status == target:
+                return payout
+            expected = StaffPayout.Status.PENDING if target == StaffPayout.Status.APPROVED else StaffPayout.Status.APPROVED
+            if payout.status != expected:
+                raise ValidationError({'status': f'Cannot transition payout from {payout.status} to {target}.'})
+            payout.status = target
+            fields = ['status', 'updated_at']
+            if target == StaffPayout.Status.APPROVED:
+                payout.approved_by = request.user
+                payout.approved_at = timezone.now()
+                fields += ['approved_by', 'approved_at']
+            else:
+                payout.paid_at = timezone.now()
+                fields.append('paid_at')
+            payout.save(update_fields=fields)
+            audit_event(request.user, AuditLog.Action.UPDATE, 'finance.staffpayout', payout.pk,
+                        event=f'PAYOUT_{target.upper()}', object_repr=str(payout), status=target)
+            return payout
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def approve(self, request, pk=None):
+        payout = self._transition(request, StaffPayout.Status.APPROVED)
+        return Response(self.get_serializer(payout).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def pay(self, request, pk=None):
+        payout = self._transition(request, StaffPayout.Status.PAID)
+        return Response(self.get_serializer(payout).data)
 
     @extend_schema(
         parameters=PAYOUT_SUMMARY_PARAMS,

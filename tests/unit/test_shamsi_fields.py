@@ -67,7 +67,7 @@ class ShamsiToGregTests(SimpleTestCase):
                 shamsi_to_greg_date(bad)
 
     def test_invalid_datetime_raises_validation_error(self):
-        for bad in ['1404-01-01 99:99', 'garbage', '1404-01-01T10:00']:
+        for bad in ['1404-01-01 99:99', 'garbage', '1404-01-01T10:00', '2026-01-01 12:30']:
             with self.assertRaises(ValidationError):
                 shamsi_to_greg_dt(bad)
 

@@ -151,8 +151,9 @@ class MonthlyCloseTests(CompensationFixtureMixin, TestCase):
             money(month['staff_compensation_total']['usd']),
             summary['staff_compensation']['total']['usd'],
         )
-        self.assertEqual(month['gregorian_start'], bounds['start'].date().isoformat())
-        self.assertEqual(month['gregorian_end'], bounds['end'].date().isoformat())
+        self.assertEqual(month['shamsi_start'], bounds['key'] + '-01')
+        self.assertNotIn('gregorian_start', month)
+        self.assertNotIn('gregorian_end', month)
 
     def test_year_total_is_the_sum_of_its_months(self):
         data = self._close()

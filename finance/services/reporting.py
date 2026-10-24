@@ -473,9 +473,6 @@ def _render_month(bounds, *, status=None, staff_id=None, role=None):
         'month_name': bounds['month_name'],
         'shamsi_start': jdatetime.date.fromgregorian(date=start.date()).strftime('%Y-%m-%d'),
         'shamsi_end': jdatetime.date.fromgregorian(date=end.date()).strftime('%Y-%m-%d'),
-        # Kept for existing consumers; new code should read shamsi_start/end.
-        'gregorian_start': start.date().isoformat(),
-        'gregorian_end': end.date().isoformat(),
         'period': {'start': start, 'end': end},
         'is_current': start <= timezone.now() <= end,
         'is_closed': False,
@@ -514,15 +511,27 @@ def _render_month(bounds, *, status=None, staff_id=None, role=None):
 
 
 def _frozen_month(row, bounds):
-    """A closed month's row: the stored snapshot, verbatim, plus its history.
+    """A closed month's row: its stored money snapshot plus closure history.
 
     The payload was JSON-encoded at close time, so its money values are
     strings -- exactly the shape the API already returns -- and its period
-    timestamps are ISO strings. Nothing is recomputed: that is the point of a
-    closed book. Only the closure metadata and the live ``is_current`` flag
+    timestamps are Shamsi strings. Legacy Gregorian timestamps are normalized
+    from the month bounds without touching the money snapshot. Only the closure metadata and the live ``is_current`` flag
     (always false for a past month) are added here.
     """
     month_row = dict(row.payload)
+    month_row.pop('gregorian_start', None)
+    month_row.pop('gregorian_end', None)
+    month_row['shamsi_start'] = jdatetime.date.fromgregorian(
+        date=bounds['start'].date(),
+    ).strftime('%Y-%m-%d')
+    month_row['shamsi_end'] = jdatetime.date.fromgregorian(
+        date=bounds['end'].date(),
+    ).strftime('%Y-%m-%d')
+    month_row['period'] = {
+        'start': _shamsi_dt(bounds['start']),
+        'end': _shamsi_dt(bounds['end']),
+    }
     month_row.update({
         'key': bounds['key'],
         'year': row.shamsi_year,

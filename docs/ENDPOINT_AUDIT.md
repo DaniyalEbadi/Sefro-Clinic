@@ -123,7 +123,10 @@ Every router-registered endpoint has a duplicate with format suffix (`.json`, `.
 
 ---
 
-## 9. v3 Face Analyzer — Clean
+## 9. Face Analyzer — Site API v2 and v3
+
+The same four routes are also available under `/api/v2/face/` and documented
+in `/api/v2/docs/`. Full responses include Persian website recommendations.
 
 | Endpoint | Auth | Notes |
 |---|---|---|

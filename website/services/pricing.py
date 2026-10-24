@@ -31,3 +31,18 @@ def usd_price_from_toman(price: Decimal, rate: Decimal) -> Decimal:
     with localcontext() as context:
         context.prec = 40
         return (round_toman_up(price) / rate).quantize(USD_QUANTUM, rounding=ROUND_FLOOR)
+
+
+def get_website_dashboard_rate():
+    """Use the last website sync rate, never the financial rate ledger."""
+    from website.models import WebsitePriceSyncRun
+    from website.services.sync import fetch_website_rate
+
+    rate = WebsitePriceSyncRun.objects.filter(
+        status=WebsitePriceSyncRun.Status.SUCCEEDED,
+        rate__isnull=False,
+    ).order_by('-finished_at', '-pk').values_list('rate', flat=True).first()
+    if rate is not None and rate.is_finite() and rate > 0:
+        return rate
+    rate, _ = fetch_website_rate()
+    return rate if rate is not None and rate.is_finite() and rate > 0 else None
