@@ -240,7 +240,9 @@ REST_FRAMEWORK = {
         # Login/refresh endpoints use the scoped 'auth' rate; keep it strict outside tests.
         'auth': '100000/min' if TESTING else os.environ.get('THROTTLE_AUTH_RATE', '10/min'),
         'contact': '100000/min' if TESTING else os.environ.get('THROTTLE_CONTACT_RATE', '5/min'),
-        'website_sync': '100000/min' if TESTING else os.environ.get('THROTTLE_WEBSITE_SYNC_RATE', '2/hour'),
+        'website_login': '100000/min' if TESTING else os.environ.get('THROTTLE_WEBSITE_LOGIN_RATE', '20/min'),
+        'website_dashboard': '100000/min' if TESTING else os.environ.get('THROTTLE_WEBSITE_DASHBOARD_RATE', '1200/min'),
+        'website_public': '100000/min' if TESTING else os.environ.get('THROTTLE_WEBSITE_PUBLIC_RATE', '600/min'),
         'anon': '100000/min' if TESTING else os.environ.get('THROTTLE_ANON_RATE', '60/min'),
         'user': '100000/min' if TESTING else os.environ.get('THROTTLE_USER_RATE', '600/min'),
         'face_analyzer': FACE_ANALYZER_THROTTLE_RATE,

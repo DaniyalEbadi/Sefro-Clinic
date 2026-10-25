@@ -37,10 +37,23 @@ Frontend changes required for the new isolated login:
   support GET/POST/PATCH; hide with `is_active=false` rather than deleting.
   Contact messages support GET and PATCH of `is_handled` only. Visitor text is
   never editable through the dashboard.
-- Trigger a manual price refresh with `POST /price-sync/run/`; inspect the
-  latest run with `GET /price-sync/status/`. The refresh is throttled and
-  serialized across workers. It updates website prices and website sync
-  history only, never the financial ExchangeRate ledger.
+- Read `GET /price-sync/status/` when loading the dashboard. Before any run,
+  it returns HTTP 200 with `status: "never_run"`; after a failed run, it also
+  exposes the last successful `effective_rate` if one exists. Do not POST a
+  sync automatically on login or on every page load.
+- Trigger `POST /price-sync/run/` only on a manager's explicit refresh action.
+  Omit the body to try the configured providers, or send
+  `{ "rate": "100000" }` to use a manager-supplied Toman-per-USD rate if they
+  are unavailable. Automatic requests made within five minutes of a finished
+  run return its cached result and a `Retry-After` header; a cached failure
+  remains HTTP 503, not HTTP 429. A manual rate can be submitted immediately.
+  Synchronization is serialized across workers and updates website prices and
+  website sync history only, never the financial ExchangeRate ledger.
+- Website-manager login, authenticated website-dashboard requests, and public
+  Site API v2 reads have separate rate-limit buckets. The manager's bucket is
+  keyed by website credential, not by the linked clinic user, so website
+  managers sharing one staff identity do not consume each other's quota or
+  the financial API quota. Contact submissions keep their stricter limit.
 - Product and package pages now support create and content-only PATCH in
   addition to Toman/USD price changes. A package's `service_ids` write field
   controls service links; `services` remains a read-only summary. Existing

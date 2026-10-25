@@ -27,8 +27,14 @@ team members, testimonials, and site settings. Records missing from a later
 import are marked inactive rather than deleted.
 
 The command tries the configured primary provider first and BrsApi as the
-backup. If both providers fail, existing website prices are preserved and the
-failure is recorded for `GET /api/v2/site-dashboard/price-sync/status/`.
+backup. Both require working provider access; the configured backup service
+has announced that its gold/currency API is discontinued. If no provider can
+return a rate, existing website prices are preserved and the failure is
+recorded for `GET /api/v2/site-dashboard/price-sync/status/`. A manager can
+use `POST /api/v2/site-dashboard/price-sync/run/` with
+`{"rate": "100000"}` to apply an independently verified Toman-per-USD rate
+without touching financial exchange rates. This manual step does not restore
+unattended twice-daily sync: configure a functioning provider for that.
 
 The protected website dashboard endpoints are:
 
@@ -39,7 +45,7 @@ The protected website dashboard endpoints are:
 - `GET/PATCH /api/v2/site-dashboard/package-price-options/<id>/`
 - `GET/PATCH /api/v2/site-dashboard/settings/`
 
-Existing authenticated admins and employees may submit either `price` (Toman)
+Authenticated website managers may submit either `price` (Toman)
 or `price_usd` (USD) for services, products, packages, and package price options.
 Do not send both currencies for the same price: this returns HTTP 400 without
 changing the record. A valid exchange rate is required for either currency;

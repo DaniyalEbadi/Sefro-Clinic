@@ -274,6 +274,29 @@ class WebsitePriceSyncRunSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class WebsitePriceSyncStatusSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True, allow_null=True)
+    status = serializers.CharField(read_only=True)
+    provider = serializers.CharField(read_only=True, allow_blank=True)
+    rate = serializers.DecimalField(max_digits=18, decimal_places=6, read_only=True, allow_null=True)
+    started_at = ShamsiDateTimeField(read_only=True, allow_null=True)
+    finished_at = ShamsiDateTimeField(read_only=True, allow_null=True)
+    updated_services = serializers.IntegerField(read_only=True)
+    updated_packages = serializers.IntegerField(read_only=True)
+    updated_products = serializers.IntegerField(read_only=True)
+    error = serializers.CharField(read_only=True, allow_blank=True)
+    effective_rate = serializers.DecimalField(max_digits=18, decimal_places=6, read_only=True, allow_null=True)
+    effective_rate_provider = serializers.CharField(read_only=True, allow_blank=True)
+
+
+class WebsitePriceSyncRequestSerializer(serializers.Serializer):
+    rate = serializers.DecimalField(
+        max_digits=18, decimal_places=6, min_value=Decimal('0.000001'),
+        required=False,
+        help_text='Optional manager-supplied Toman per USD. Omit to fetch live providers.',
+    )
+
+
 class TeamMemberSerializer(serializers.ModelSerializer):
     class Meta:
         model = TeamMember

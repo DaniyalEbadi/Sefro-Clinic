@@ -64,7 +64,9 @@ class SiteV2EndToEndAuditTests(TestCase):
         self.assertNotIn('access', login.data)
         self.assertEqual(client.get('/api/v2/site-dashboard/me/').status_code, 200)
         self.assertEqual(client.get('/api/auth/me/').status_code, 401)
-        self.assertEqual(client.get('/api/v2/site-dashboard/price-sync/status/').status_code, 404)
+        empty_sync = client.get('/api/v2/site-dashboard/price-sync/status/')
+        self.assertEqual(empty_sync.status_code, 200)
+        self.assertEqual(empty_sync.data['status'], 'never_run')
 
         service_url = '/api/v2/site-dashboard/services/'
         payload = {'name': 'بوتاکس صورت', 'slug': 'botox-face', 'category': 'face',

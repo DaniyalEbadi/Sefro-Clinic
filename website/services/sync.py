@@ -36,13 +36,17 @@ def _update_prices(queryset, usd_field='price_usd', toman_field='price', rate=No
     return len(objects)
 
 
-def _sync_website_prices_unlocked():
+def _sync_website_prices_unlocked(rate_override=None):
     run = WebsitePriceSyncRun.objects.create(status=WebsitePriceSyncRun.Status.RUNNING)
     try:
-        rate, provider = fetch_website_rate()
-        if rate is None:
+        rate, provider = (rate_override, 'manual') if rate_override is not None else fetch_website_rate()
+        if rate is None or not rate.is_finite() or rate <= 0:
             run.status = WebsitePriceSyncRun.Status.FAILED
-            run.error = 'Both configured exchange-rate providers failed.'
+            run.error = (
+                'Website exchange-rate providers are unavailable. Existing prices were preserved; '
+                'configure a working provider or submit a manager-supplied rate.'
+                if rate_override is None else 'Invalid manager-supplied website rate.'
+            )
             run.finished_at = timezone.now()
             run.save(update_fields=['status', 'error', 'finished_at'])
             return run
@@ -85,16 +89,16 @@ def _sync_website_prices_unlocked():
     return run
 
 
-def sync_website_prices():
+def sync_website_prices(*, rate_override=None):
     """Allow only one website sync at a time across API and scheduler workers."""
     if connection.vendor != 'postgresql':
-        return _sync_website_prices_unlocked()
+        return _sync_website_prices_unlocked(rate_override=rate_override)
     with connection.cursor() as cursor:
         cursor.execute('SELECT pg_try_advisory_lock(%s)', [_SYNC_LOCK_ID])
         if not cursor.fetchone()[0]:
             raise WebsitePriceSyncAlreadyRunning('A website price sync is already running.')
     try:
-        return _sync_website_prices_unlocked()
+        return _sync_website_prices_unlocked(rate_override=rate_override)
     finally:
         with connection.cursor() as cursor:
             cursor.execute('SELECT pg_advisory_unlock(%s)', [_SYNC_LOCK_ID])

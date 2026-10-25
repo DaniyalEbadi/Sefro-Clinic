@@ -1,4 +1,5 @@
 import logging
+from math import ceil
 
 from django.conf import settings as django_settings
 from django.utils import timezone
@@ -49,17 +50,22 @@ from .serializers import (
     TeamMemberSerializer,
     TestimonialDashboardSerializer,
     TestimonialSerializer,
+    WebsitePriceSyncRequestSerializer,
     WebsitePriceSyncRunSerializer,
+    WebsitePriceSyncStatusSerializer,
 )
 from .services.image_storage import upload_service_image
 from .services.pricing import get_website_dashboard_rate as get_current_usd_to_toman_rate
 from .services.sync import WebsitePriceSyncAlreadyRunning, sync_website_prices
+from .throttling import WebsiteDashboardThrottle, WebsitePublicReadThrottle
 
 logger = logging.getLogger(__name__)
 
 
 class PublicReadOnlyMixin:
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [WebsitePublicReadThrottle]
 
 
 @extend_schema(tags=['Site Services'])
@@ -93,6 +99,7 @@ class SiteProductViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
 class WebsitePriceDashboardMixin:
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     lookup_field = 'slug'
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
@@ -219,6 +226,7 @@ class WebsitePackageDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelV
 class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     queryset = SitePackagePriceOption.objects.select_related('package').all()
     serializer_class = SitePackagePriceOptionDashboardSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -265,6 +273,7 @@ class WebsitePackagePriceOptionDashboardViewSet(viewsets.ModelViewSet):
 class WebsiteSettingsDashboardView(generics.RetrieveUpdateAPIView):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     serializer_class = SiteSettingsSerializer
 
     def get_object(self):
@@ -278,10 +287,11 @@ class WebsiteProductDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelV
     serializer_class = SiteProductDashboardSerializer
 
 
-@extend_schema(tags=['Website Dashboard - Sync'])
+@extend_schema(tags=['Website Dashboard - Sync'], responses=WebsitePriceSyncStatusSerializer)
 class WebsitePriceSyncStatusView(generics.RetrieveAPIView):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     serializer_class = WebsitePriceSyncRunSerializer
 
     def get_object(self):
@@ -290,20 +300,46 @@ class WebsitePriceSyncStatusView(generics.RetrieveAPIView):
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance is None:
-            return Response({'detail': 'No website price synchronization has run yet.'}, status=status.HTTP_404_NOT_FOUND)
-        return super().retrieve(request, *args, **kwargs)
+            return Response({
+                'id': None, 'status': 'never_run', 'provider': '', 'rate': None,
+                'started_at': None, 'finished_at': None, 'updated_services': 0,
+                'updated_packages': 0, 'updated_products': 0, 'error': '',
+                'effective_rate': None, 'effective_rate_provider': '',
+            })
+        data = dict(self.get_serializer(instance).data)
+        successful = WebsitePriceSyncRun.objects.filter(
+            status=WebsitePriceSyncRun.Status.SUCCEEDED, rate__isnull=False,
+        ).first()
+        data['effective_rate'] = str(successful.rate) if successful else None
+        data['effective_rate_provider'] = successful.provider if successful else ''
+        return Response(data)
 
 
-@extend_schema(tags=['Website Dashboard - Sync'], responses={200: WebsitePriceSyncRunSerializer})
+@extend_schema(
+    tags=['Website Dashboard - Sync'],
+    request=WebsitePriceSyncRequestSerializer,
+    responses={200: WebsitePriceSyncRunSerializer},
+)
 class WebsitePriceSyncRunView(APIView):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'website_sync'
+    throttle_classes = [WebsiteDashboardThrottle]
 
     def post(self, request):
+        serializer = WebsitePriceSyncRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        manual_rate = serializer.validated_data.get('rate')
+        if manual_rate is None:
+            latest = WebsitePriceSyncRun.objects.first()
+            if latest and latest.finished_at:
+                seconds_since_finish = (timezone.now() - latest.finished_at).total_seconds()
+                if seconds_since_finish < 300:
+                    response = dict(WebsitePriceSyncRunSerializer(latest).data)
+                    response['cached'] = True
+                    code = status.HTTP_200_OK if latest.status == WebsitePriceSyncRun.Status.SUCCEEDED else status.HTTP_503_SERVICE_UNAVAILABLE
+                    return Response(response, status=code, headers={'Retry-After': str(ceil(300 - seconds_since_finish))})
         try:
-            run = sync_website_prices()
+            run = sync_website_prices(rate_override=manual_rate)
         except WebsitePriceSyncAlreadyRunning:
             return Response({'detail': 'A website price sync is already running.'}, status=status.HTTP_409_CONFLICT)
         except Exception:
@@ -314,13 +350,16 @@ class WebsitePriceSyncRunView(APIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
         code = status.HTTP_200_OK if run.status == WebsitePriceSyncRun.Status.SUCCEEDED else status.HTTP_503_SERVICE_UNAVAILABLE
-        return Response(WebsitePriceSyncRunSerializer(run).data, status=code)
+        response = dict(WebsitePriceSyncRunSerializer(run).data)
+        response['cached'] = False
+        return Response(response, status=code)
 
 
 @extend_schema(tags=['Website Dashboard - Team'])
 class WebsiteTeamDashboardViewSet(viewsets.ModelViewSet):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     queryset = TeamMember.objects.all()
     serializer_class = TeamMemberDashboardSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -330,6 +369,7 @@ class WebsiteTeamDashboardViewSet(viewsets.ModelViewSet):
 class WebsiteTestimonialDashboardViewSet(viewsets.ModelViewSet):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     queryset = Testimonial.objects.all()
     serializer_class = TestimonialDashboardSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
@@ -339,6 +379,7 @@ class WebsiteTestimonialDashboardViewSet(viewsets.ModelViewSet):
 class WebsiteContactDashboardViewSet(viewsets.ReadOnlyModelViewSet):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     queryset = ContactMessage.objects.all()
     serializer_class = ContactMessageDashboardSerializer
     http_method_names = ['get', 'patch', 'head', 'options']
@@ -363,7 +404,7 @@ class WebsiteDashboardLoginAPIView(APIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
     throttle_classes = [ScopedRateThrottle]
-    throttle_scope = 'auth'
+    throttle_scope = 'website_login'
 
     def post(self, request):
         serializer = WebsiteDashboardLoginSerializer(data=request.data)
@@ -384,6 +425,7 @@ class WebsiteDashboardLoginAPIView(APIView):
 class WebsiteDashboardMeAPIView(APIView):
     authentication_classes = [WebsiteDashboardAuthentication]
     permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
 
     def get(self, request):
         return Response(ClinicUserSerializer(request.user).data)
@@ -393,6 +435,7 @@ class WebsiteDashboardMeAPIView(APIView):
 class WebsiteDashboardLogoutAPIView(APIView):
     authentication_classes = []
     permission_classes = [permissions.AllowAny]
+    throttle_classes = []
 
     def post(self, request):
         if request.COOKIES.get(django_settings.WEBSITE_DASHBOARD_COOKIE):
@@ -428,6 +471,7 @@ class ContactMessageCreateView(generics.CreateAPIView):
     queryset = ContactMessage.objects.all()
     serializer_class = ContactMessageSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = []
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = 'contact'
 
