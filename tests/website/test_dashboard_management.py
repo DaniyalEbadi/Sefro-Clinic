@@ -9,6 +9,7 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from accounts.models import ClinicUser
 from finance.models import ExchangeRate
 from tests.helpers import (
     ADMIN_PASSWORD,
@@ -105,6 +106,28 @@ class WebsiteSessionIsolationTests(TestCase):
             )
         self.assertEqual(credential.sessions.count(), 0)
         self.assertEqual(client.get('/api/v2/site-dashboard/me/').status_code, 401)
+
+    def test_second_website_login_keeps_first_and_cannot_login_to_financial_dashboard(self):
+        financial_users_before = ClinicUser.objects.count()
+        with patch.dict(os.environ, {'WEBSITE_TEST_PASSWORD': 'BaranAdmin1234'}):
+            call_command(
+                'set_website_manager', '--clinic-username', self.user.username,
+                '--website-username', 'admin', '--password-env', 'WEBSITE_TEST_PASSWORD',
+                stdout=StringIO(),
+            )
+        self.assertEqual(ClinicUser.objects.count(), financial_users_before)
+        self.assertEqual(WebsiteManagerCredential.objects.filter(user=self.user).count(), 2)
+        for username, password in [('web_manager', WEBSITE_PASSWORD), ('admin', 'BaranAdmin1234')]:
+            with self.subTest(username=username):
+                client = APIClient()
+                login = client.post('/api/v2/site-dashboard/login/', {
+                    'username': username, 'password': password,
+                }, format='json')
+                self.assertEqual(login.status_code, 200, login.data)
+                self.assertEqual(client.get('/api/v2/site-dashboard/me/').status_code, 200)
+        self.assertEqual(APIClient().post('/api/auth/token/', {
+            'username': 'admin', 'password': 'BaranAdmin1234',
+        }, format='json').status_code, 401)
 
 
 class WebsiteDashboardContentTests(TestCase):

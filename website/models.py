@@ -235,7 +235,7 @@ class WebsitePriceSyncRun(models.Model):
 class WebsiteManagerCredential(models.Model):
     """Separate website password for an existing clinic staff identity."""
 
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='website_credential')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='website_credentials')
     username = models.CharField(max_length=150, unique=True)
     password_hash = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)

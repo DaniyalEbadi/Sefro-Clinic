@@ -37,10 +37,11 @@ class Command(BaseCommand):
         except ValidationError as exc:
             raise CommandError(' '.join(exc.messages)) from exc
         with transaction.atomic():
-            credential, _ = WebsiteManagerCredential.objects.get_or_create(
-                user=user, defaults={'username': website_username},
+            credential, created = WebsiteManagerCredential.objects.get_or_create(
+                username=website_username, defaults={'user': user},
             )
-            credential.username = website_username
+            if not created and credential.user_id != user.pk:
+                raise CommandError('Website username is already assigned to another staff identity.')
             credential.is_active = True
             credential.set_password(password)
             credential.save()

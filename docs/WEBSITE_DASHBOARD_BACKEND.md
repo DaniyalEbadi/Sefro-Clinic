@@ -19,7 +19,10 @@ Remove-Item Env:WEBSITE_MANAGER_NEW_PASSWORD
 ```
 
 Do not put the password in a shell command argument, source file, or API
-response. Provisioning a new password invalidates old website sessions.
+response. Resetting a website username's password invalidates only that
+username's sessions. Multiple website usernames can be linked to the same
+staff identity without replacing one another; none of their website passwords
+can authenticate the financial dashboard.
 
 Frontend changes required for the new isolated login:
 

@@ -111,9 +111,9 @@ def make_website_manager(user=None, website_username='web_manager', password=WEB
 
     user = user or make_employee()
     credential, _ = WebsiteManagerCredential.objects.get_or_create(
-        user=user, defaults={'username': website_username},
+        username=website_username, defaults={'user': user},
     )
-    credential.username = website_username
+    credential.user = user
     credential.set_password(password)
     credential.save()
     return credential
