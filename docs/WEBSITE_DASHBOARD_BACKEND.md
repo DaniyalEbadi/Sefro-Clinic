@@ -26,12 +26,37 @@ can authenticate the financial dashboard.
 
 Frontend changes required for the new isolated login:
 
+- Public homepage settings are `GET /api/v2/site/settings/` (no cookie or
+  clinic login required). The response contains `clinic_name`, `logo_url`,
+  `address`, `phone_numbers`, `contact_email`, `social_links`, `working_hours`,
+  `about_title`, `about_text`, `statistics`, `hero_image_url`, and
+  `about_image_url`. Website managers edit the same record with
+  `PATCH /api/v2/site-dashboard/settings/`. Newly added branding/social
+  fields default to empty until a manager fills them in. Frontend static
+  fallbacks should be treated as fallbacks, not the authoritative source.
+- Public catalog lists are paginated objects (`count`, `next`, `previous`,
+  `results`), not top-level arrays. Render `results` and follow `next` when
+  the page needs the full catalog (for example, all 62 services).
 - `POST /api/v2/site-dashboard/login/` with website username/password, then
   `GET /api/v2/site-dashboard/me/` and `POST /api/v2/site-dashboard/logout/`.
   Do not use `/api/auth/me/` or `/api/auth/logout/` for the website dashboard.
+- Treat `GET /me/` HTTP 401 as a settled logged-out state and clear any
+  loading indicator; do not retry it indefinitely or attempt clinic JWT
+  refresh. Login HTTP 401 means invalid website credentials, not a pending
+  session. On network/5xx errors, show a recoverable error state rather than
+  leaving authentication loading forever.
 - Send cookies (`credentials: 'include'`) and `X-CSRFToken` from the `csrftoken`
   cookie on PATCH/POST actions after login. Never store a website session token
   in browser JavaScript storage. Clinic and website sessions may coexist.
+- If the frontend is on a different origin from the API, add its exact scheme,
+  host, and port to both `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` in
+  the backend environment. For example, a frontend on
+  `http://localhost:3000` needs that exact value in both lists. The browser
+  sends an OPTIONS preflight before JSON login; an absent
+  `Access-Control-Allow-Origin` header means the request is blocked before
+  authentication. Do not set `CORS_ALLOW_ALL_ORIGINS=True` for a
+  credentialed dashboard. Prefer the same host spelling on both sides
+  (`localhost` versus `127.0.0.1`) so SameSite cookies behave predictably.
 - Manage team at `/team/`, testimonials at `/testimonials/`, and visitor messages
   at `/contact-messages/` under `/api/v2/site-dashboard/`. Team/testimonials
   support GET/POST/PATCH; hide with `is_active=false` rather than deleting.
@@ -63,3 +88,20 @@ Frontend changes required for the new isolated login:
 The repository includes a `sync_website_prices` management command for an
 external twice-daily scheduler; no scheduler configuration is included here.
 Production migrations and credential provisioning must be deployed explicitly.
+
+For local backend tests, the isolated test database bootstraps the fixed
+`sefro_admin` test fixture regardless of `CLINIC_ADMIN_USERNAME` in `.env`;
+normal commands and production continue to use the configured username.
+Check the effective `DATABASE_URL` before assuming a catalog is empty. A
+server started with a `DATABASE_URL` pointing to a different PostgreSQL
+database is not reading the local `sefro_clinic` catalog. To run against the
+local development database in PowerShell, explicitly clear that override for
+the process:
+
+```powershell
+$env:DATABASE_URL=''
+& 'venv\Scripts\python.exe' manage.py runserver
+```
+
+Never run migrations or imports on a remote database merely to make a local
+frontend appear populated.

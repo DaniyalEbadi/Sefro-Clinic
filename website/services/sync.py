@@ -1,13 +1,10 @@
 from django.db import connection, transaction
 from django.utils import timezone
 
-from finance.services.exchange_rates import (
-    BrsApiExchangeRateProvider,
-    ExternalExchangeRateProvider,
-)
+from finance.services.exchange_rates import ExternalExchangeRateProvider, NerkhsanjExchangeRateProvider
 
 from ..models import SitePackage, SitePackagePriceOption, SiteProduct, SiteService, WebsitePriceSyncRun
-from .pricing import toman_price_from_usd
+from .pricing import toman_price_from_usd, usd_price_from_toman
 
 
 class WebsitePriceSyncAlreadyRunning(RuntimeError):
@@ -20,10 +17,10 @@ _SYNC_LOCK_ID = 7742026
 def fetch_website_rate():
     rate = ExternalExchangeRateProvider().get_usd_to_toman_rate()
     if rate is not None:
-        return rate, 'tindex'
-    rate = BrsApiExchangeRateProvider().get_usd_to_toman_rate()
+        return rate, 'priceto_day'
+    rate = NerkhsanjExchangeRateProvider().get_usd_to_toman_rate()
     if rate is not None:
-        return rate, 'brsapi'
+        return rate, 'nerkhsanj'
     return None, ''
 
 
@@ -34,6 +31,15 @@ def _update_prices(queryset, usd_field='price_usd', toman_field='price', rate=No
     if objects:
         queryset.model.objects.bulk_update(objects, [toman_field])
     return len(objects)
+
+
+def _initialize_pending_usd_bases(model, rate):
+    """Anchor imported Toman prices at the first available website rate."""
+    pending = list(model.objects.filter(price_usd=0, price__gt=0))
+    for obj in pending:
+        obj.price_usd = usd_price_from_toman(obj.price, rate)
+    if pending:
+        model.objects.bulk_update(pending, ['price_usd'])
 
 
 def _sync_website_prices_unlocked(rate_override=None):
@@ -52,6 +58,8 @@ def _sync_website_prices_unlocked(rate_override=None):
             return run
 
         with transaction.atomic():
+            for model in (SiteService, SitePackage, SiteProduct, SitePackagePriceOption):
+                _initialize_pending_usd_bases(model, rate)
             service_count = _update_prices(SiteService.objects.all(), rate=rate)
             product_count = _update_prices(SiteProduct.objects.all(), rate=rate)
             package_count = _update_prices(SitePackage.objects.all(), rate=rate)

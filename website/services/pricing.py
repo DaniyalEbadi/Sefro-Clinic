@@ -41,6 +41,7 @@ def get_website_dashboard_rate():
     rate = WebsitePriceSyncRun.objects.filter(
         status=WebsitePriceSyncRun.Status.SUCCEEDED,
         rate__isnull=False,
+        provider__in=('priceto_day', 'nerkhsanj', 'manual'),
     ).order_by('-finished_at', '-pk').values_list('rate', flat=True).first()
     if rate is not None and rate.is_finite() and rate > 0:
         return rate

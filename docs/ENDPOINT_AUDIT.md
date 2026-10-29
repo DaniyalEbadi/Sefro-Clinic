@@ -28,7 +28,7 @@ Generated from live Django URL resolver. Total: **223 URL patterns** (all under 
 | Endpoint | Issue | Recommendation |
 |---|---|---|
 | `/api/reports/exchange-dollar/` | Returns current USD→Toman rate; 503 if no rate | **Merge into finance** — same data as `GET /api/finance/exchange-rates/` (latest active). The legacy report is a read-only subset. |
-| `/api/reports/backup-exchange/` | Same but forces BrsApi backup fetch | **Remove** — backup provider is already tried by `get_current_usd_to_toman_rate()` when cache is stale. No need for a separate endpoint. |
+| `/api/reports/backup-exchange/` | Retired endpoint (now 404) | Removed; the primary financial rate report handles PriceToDay and Nerkhsanj failover. |
 
 ### 2.2 Wallet Summary
 | Endpoint | Issue | Recommendation |
@@ -155,7 +155,7 @@ in `/api/v2/docs/`. Full responses include Persian website recommendations.
 
 | Priority | Action | Effort |
 |---|---|---|
-| **High** | Deprecate `/api/reports/exchange-dollar/` and `/backup-exchange/`; point to `/api/finance/exchange-rates/` | Low |
+| **High** | Review whether to keep `/api/reports/exchange-dollar/`; `/backup-exchange/` is removed | Low |
 | **High** | Deprecate `/api/finance/reports/wallet-summary/`; use `financial-summary.wallet` | Low |
 | **Medium** | Merge `profit-by-staff/coverage/` into main with `?include_coverage=true` | Low |
 | **Medium** | Deprecate legacy Shamsi reports (`/api/reports/daily|weekly|monthly|quarterly|yearly/`) | Medium (frontend migration) |

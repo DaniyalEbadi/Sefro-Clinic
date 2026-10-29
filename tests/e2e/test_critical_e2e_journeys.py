@@ -275,15 +275,16 @@ class ExchangeAndWebsiteE2ETests(TestCase):
         self.assertEqual(Decimal(resp.data['amount_usd']), Decimal('10.00'))
         self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1000000.00'))
 
-    @override_settings(EXCHANGE_RATE_PROVIDER='database', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_API_URL='')
+    @override_settings(EXCHANGE_RATE_PROVIDER='database', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'))
     def test_exchange_dollar_missing_rate_503_e2e(self):
         ExchangeRate.objects.all().delete()
         with override_settings(FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0')):
             resp = self.admin.get('/api/reports/exchange-dollar/')
             self.assertEqual(resp.status_code, 503)
 
-    def test_backup_exchange_mocked_e2e(self):
-        mock_data = {'currency': [{'name_en': 'US Dollar', 'symbol': 'USD', 'price': '250000'}]}
+    @override_settings(EXCHANGE_RATE_PROVIDER='external')
+    def test_priceto_day_exchange_mocked_e2e(self):
+        mock_data = {'success': True, 'price': 2705000}
         mock_resp = MagicMock()
         mock_resp.status = 200
         import json
@@ -291,11 +292,10 @@ class ExchangeAndWebsiteE2ETests(TestCase):
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = lambda s, *a: False
         with patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_resp):
-            with override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://Api.BrsApi.ir/Market/Gold_Currency.php', EXCHANGE_RATE_BACKUP_API_KEY='test-key'):
-                resp = self.admin.get('/api/reports/backup-exchange/?usd=5')
-                self.assertEqual(resp.status_code, 200)
-                self.assertEqual(resp.data['source'], 'brsapi')
-                self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1250000.00'))
+            resp = self.admin.get('/api/reports/exchange-dollar/?usd=5')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['source'], 'priceto_day')
+        self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1352500.00'))
 
     def test_public_website_api_does_not_expose_private_data_e2e(self):
         from rest_framework.test import APIClient

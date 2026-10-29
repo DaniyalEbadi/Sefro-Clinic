@@ -24,12 +24,23 @@ python manage.py import_website_catalog
 
 It imports the live services, packages, every package price option, products,
 team members, testimonials, and site settings. Records missing from a later
-import are marked inactive rather than deleted.
+import are marked inactive rather than deleted. Product detail-page descriptions
+are stored separately from card summaries.
 
-The command tries the configured primary provider first and BrsApi as the
-backup. Both require working provider access; the configured backup service
-has announced that its gold/currency API is discontinued. If no provider can
-return a rate, existing website prices are preserved and the failure is
+When the rate provider is unavailable, the importer still saves the exact
+live Toman prices. A positive Toman price with `price_usd=0` means its USD base
+is pending; the first successful sync using the updated backend derives that
+base from the saved Toman price at the newly available rate, preserving the
+public price on that run. Later successful runs reprice from the initialized
+USD base. Deploy the updated sync code before enabling a new provider or
+running a sync against these pending records; older deployed code would
+calculate zero Toman from the pending USD values.
+
+The command reads PriceToDay's USD price in rial and divides by 10 to get
+Toman per USD. If that request fails, it reads Nerkhsanj's public
+`/data/live.json` feed; `rates.dollar` is already Toman per USD. That feed
+requires no API token. The previous Tindex and BrsApi integrations are retired.
+If both feeds fail, existing website prices are preserved and the failure is
 recorded for `GET /api/v2/site-dashboard/price-sync/status/`. A manager can
 use `POST /api/v2/site-dashboard/price-sync/run/` with
 `{"rate": "100000"}` to apply an independently verified Toman-per-USD rate
@@ -65,7 +76,8 @@ Fractional Toman amounts are rounded upward (`799.999` becomes `800.00`).
 USD bases retain 12 decimal places so converting an entered Toman price back
 at the same rate preserves it. Future rate changes continue to adjust the
 Toman price. Existing stored USD values are preserved by the precision migration.
-The importer uses the same precise Toman-to-USD conversion for future imports.
+When a valid rate is available, the importer uses the same precise
+Toman-to-USD conversion for future imports.
 
 Packages also accept `original_price` (Toman) or `original_price_usd` (USD).
 These form a separate pair, so `price` and `original_price_usd` can be supplied

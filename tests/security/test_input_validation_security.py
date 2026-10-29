@@ -222,12 +222,12 @@ class ServiceCategoryInputValidationTests(TestCase):
     def test_exchange_rate_key_not_leaked_in_response(self):
         from django.test import override_settings
         client = admin_client()
-        # Trigger external provider failure with key set, ensure key not in error response
-        with override_settings(EXCHANGE_RATE_PROVIDER='external', EXCHANGE_RATE_API_URL='http://invalid/', EXCHANGE_RATE_API_KEY='super-secret-key'):
+        # Provider configuration must not be reflected in API responses.
+        with override_settings(EXCHANGE_RATE_PROVIDER='external', PRICE_TO_DAY_API_URL='http://private-rate-host.invalid/'):
             resp = client.get('/api/services/')
             self.assertEqual(resp.status_code, 200)
             body = str(resp.data)
-            self.assertNotIn('super-secret-key', body)
+            self.assertNotIn('private-rate-host.invalid', body)
 
 
 class OperatingExpenseInputValidationTests(TestCase):

@@ -1,6 +1,7 @@
 from decimal import Decimal
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -15,6 +16,7 @@ from finance.services.exchange_rates import (
 )
 
 
+@override_settings(EXCHANGE_RATE_PROVIDER='database')
 class CurrencyValidationTests(TestCase):
     def test_validate_rate_positive(self):
         self.assertEqual(_validate_rate('100000'), Decimal('100000'))
@@ -58,7 +60,7 @@ class CurrencyValidationTests(TestCase):
 
     def test_no_silent_default_when_fallback_missing(self):
         ExchangeRate.objects.all().delete()
-        with override_settings(FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_PROVIDER='database', EXCHANGE_RATE_API_URL=''):
+        with override_settings(FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_PROVIDER='database'):
             # _validate will reject 0, so should return None
             self.assertIsNone(get_current_usd_to_toman_rate())
 
@@ -71,13 +73,13 @@ class CurrencyValidationTests(TestCase):
 
 
 class ExternalProviderTests(TestCase):
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_API_KEY='secret', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_timeout_handled(self):
         provider = ExternalExchangeRateProvider()
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', side_effect=TimeoutError('timeout')):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_connection_failure(self):
         provider = ExternalExchangeRateProvider()
         import urllib.error
@@ -85,7 +87,7 @@ class ExternalProviderTests(TestCase):
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', side_effect=urllib.error.URLError('fail')):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_http_failure(self):
         provider = ExternalExchangeRateProvider()
         mock_resp = mock.MagicMock()
@@ -96,7 +98,7 @@ class ExternalProviderTests(TestCase):
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_malformed_json(self):
         provider = ExternalExchangeRateProvider()
         mock_resp = mock.MagicMock()
@@ -107,7 +109,7 @@ class ExternalProviderTests(TestCase):
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_missing_rate(self):
         provider = ExternalExchangeRateProvider()
         mock_resp = mock.MagicMock()
@@ -118,10 +120,10 @@ class ExternalProviderTests(TestCase):
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_zero_and_negative_rate(self):
         provider = ExternalExchangeRateProvider()
-        for payload in [b'{"rate": 0}', b'{"rate": -5}', b'{"rate": "abc"}']:
+        for payload in [b'{"success":true,"price":0}', b'{"success":true,"price":-5}', b'{"success":true,"price":"abc"}', b'{"success":true,"price":"NaN"}']:
             mock_resp = mock.MagicMock()
             mock_resp.status = 200
             mock_resp.read.return_value = payload
@@ -130,18 +132,18 @@ class ExternalProviderTests(TestCase):
             with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
                 self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_TIMEOUT=5)
     def test_valid_rate_extracted(self):
         provider = ExternalExchangeRateProvider()
         mock_resp = mock.MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b'{"rate": "110000"}'
+        mock_resp.read.return_value = b'{"success":true,"price":1100000}'
         mock_ctx = mock.MagicMock()
         mock_ctx.__enter__.return_value = mock_resp
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
             self.assertEqual(provider.get_usd_to_toman_rate(), Decimal('110000'))
 
-    @override_settings(EXCHANGE_RATE_API_URL='', EXCHANGE_RATE_TIMEOUT=5)
+    @override_settings(PRICE_TO_DAY_API_URL='', EXCHANGE_RATE_TIMEOUT=5)
     def test_no_url_configured(self):
         provider = ExternalExchangeRateProvider()
         # The provider falls back to a public DEFAULT_URL when no URL is set,
@@ -149,29 +151,60 @@ class ExternalProviderTests(TestCase):
         with mock.patch.object(ExternalExchangeRateProvider, 'DEFAULT_URL', ''):
             self.assertIsNone(provider.get_usd_to_toman_rate())
 
-    @override_settings(EXCHANGE_RATE_PROVIDER='external', EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_CACHE_TTL=3600, FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('100000'))
+    @override_settings(EXCHANGE_RATE_PROVIDER='external', PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_CACHE_TTL=3600, FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('100000'))
     def test_caching_uses_db_when_fresh(self):
         ExchangeRate.objects.all().delete()
         # Create fresh rate
-        ExchangeRate.objects.create(currency_from='USD', currency_to='TOMAN', rate=Decimal('90000'), effective_at=timezone.now(), source='test')
+        ExchangeRate.objects.create(currency_from='USD', currency_to='TOMAN', rate=Decimal('90000'), effective_at=timezone.now(), source='priceto_day')
         # Should not call external
         with mock.patch('finance.services.exchange_rates.ExternalExchangeRateProvider.get_usd_to_toman_rate') as mock_fetch:
             rate = get_current_usd_to_toman_rate()
             mock_fetch.assert_not_called()
             self.assertEqual(rate, Decimal('90000'))
 
-    @override_settings(EXCHANGE_RATE_PROVIDER='external', EXCHANGE_RATE_API_URL='http://example.com/rate', EXCHANGE_RATE_CACHE_TTL=3600)
+    @override_settings(EXCHANGE_RATE_PROVIDER='external', PRICE_TO_DAY_API_URL='http://example.com/rate', EXCHANGE_RATE_CACHE_TTL=3600)
     def test_stale_cached_triggers_fetch_and_caches(self):
         ExchangeRate.objects.all().delete()
         old = timezone.now() - timezone.timedelta(seconds=7200)
         ExchangeRate.objects.create(currency_from='USD', currency_to='TOMAN', rate=Decimal('80000'), effective_at=old, source='old')
         mock_resp = mock.MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = b'{"rate": "95000"}'
+        mock_resp.read.return_value = b'{"success":true,"price":950000}'
         mock_ctx = mock.MagicMock()
         mock_ctx.__enter__.return_value = mock_resp
         with mock.patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_ctx):
             rate = get_current_usd_to_toman_rate()
             self.assertEqual(rate, Decimal('95000'))
             # Should have cached new rate
-            self.assertTrue(ExchangeRate.objects.filter(rate=Decimal('95000'), source='external').exists())
+            self.assertTrue(ExchangeRate.objects.filter(rate=Decimal('95000'), source='priceto_day').exists())
+
+    @override_settings(EXCHANGE_RATE_PROVIDER='external', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'))
+    def test_primary_failure_uses_nerkhsanj_backup(self):
+        with mock.patch('finance.services.exchange_rates.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None):
+            with mock.patch('finance.services.exchange_rates.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=Decimal('270010')):
+                self.assertEqual(get_current_usd_to_toman_rate(), Decimal('270010'))
+        self.assertTrue(ExchangeRate.objects.filter(rate=Decimal('270010'), source='nerkhsanj').exists())
+
+    @override_settings(EXCHANGE_RATE_PROVIDER='external', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'))
+    def test_both_providers_failing_preserves_cached_rate(self):
+        ExchangeRate.objects.all().delete()
+        old = timezone.now() - timezone.timedelta(hours=3)
+        ExchangeRate.objects.create(currency_from='USD', currency_to='TOMAN', rate=Decimal('220000'), effective_at=old, source='priceto_day')
+        with mock.patch('finance.services.exchange_rates.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None):
+            with mock.patch('finance.services.exchange_rates.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=None):
+                self.assertEqual(get_current_usd_to_toman_rate(), Decimal('220000'))
+        self.assertEqual(ExchangeRate.objects.count(), 1)
+
+    @override_settings(EXCHANGE_RATE_PROVIDER='external', TESTING=False, FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'))
+    def test_provider_outage_is_rate_limited(self):
+        cache.clear()
+        ExchangeRate.objects.all().delete()
+        try:
+            with mock.patch('finance.services.exchange_rates.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None) as primary:
+                with mock.patch('finance.services.exchange_rates.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=None) as backup:
+                    self.assertIsNone(get_current_usd_to_toman_rate())
+                    self.assertIsNone(get_current_usd_to_toman_rate())
+            primary.assert_called_once()
+            backup.assert_called_once()
+        finally:
+            cache.clear()

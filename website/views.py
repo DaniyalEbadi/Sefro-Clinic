@@ -281,6 +281,18 @@ class WebsiteSettingsDashboardView(generics.RetrieveUpdateAPIView):
         return settings
 
 
+@extend_schema(tags=['Site Settings'])
+class SiteSettingsPublicView(generics.RetrieveAPIView):
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [WebsitePublicReadThrottle]
+    serializer_class = SiteSettingsSerializer
+
+    def get_object(self):
+        settings, _ = SiteSettings.objects.get_or_create(singleton_key='default')
+        return settings
+
+
 @extend_schema(tags=['Website Dashboard - Products'])
 class WebsiteProductDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
     queryset = SiteProduct.objects.all()
@@ -481,6 +493,7 @@ __all__ = [
     'TeamMemberListView', 'TestimonialListView', 'ContactMessageCreateView',
     'WebsiteServiceDashboardViewSet', 'WebsitePackageDashboardViewSet',
     'WebsitePackagePriceOptionDashboardViewSet', 'WebsiteSettingsDashboardView',
+    'SiteSettingsPublicView',
     'WebsiteProductDashboardViewSet', 'WebsitePriceSyncStatusView',
     'WebsiteDashboardLoginAPIView',
 ]

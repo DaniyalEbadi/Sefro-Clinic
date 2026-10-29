@@ -39,8 +39,8 @@ a clinic:
   pipeline, staff commission payouts
 - **Inventory** — products, stock counts, purchase history, consumption tracking with
   historical cost snapshots
-- **Exchange rates** — USD→Toman rate management with DB cache, optional external provider
-  (Tindex) and backup provider (BrsApi.ir)
+- **Exchange rates** — USD→Toman rate management with DB cache, PriceToDay's
+  rial quote converted to Toman, and Nerkhsanj's Toman quote as backup
 - **Welcome packs** — product gift bundles issued to customers with immutable cost snapshots
 - **Operating expenses** — direct clinic running costs (rent, supplies, …), a separate domain
   from the employee expense-claim pipeline
@@ -147,9 +147,10 @@ Copy `.env.example` → `.env`. Key variables:
 | `DJANGO_DOCS_PUBLIC` | `False` | If `True`, anonymous users may read API docs; otherwise login required |
 | `CORS_ALLOWED_ORIGINS` / `CORS_ALLOW_ALL_ORIGINS` / `CSRF_TRUSTED_ORIGINS` | empty | CORS/CSRF; credentials allowed |
 | `FINANCE_DEFAULT_USD_TO_TOMAN_RATE` | `100000` | Fallback exchange rate if no DB row exists (also seeded on first migrate) |
-| `EXCHANGE_RATE_PROVIDER` | `database` | `database` = DB cache only; `external` = HTTP fetch (Tindex) + DB cache |
-| `EXCHANGE_RATE_API_URL/API_KEY/TIMEOUT/CACHE_TTL` | Tindex URL / — / 5s / 3600s | Primary external provider config |
-| `EXCHANGE_RATE_BACKUP_API_URL/API_KEY` | BrsApi URL / — | Backup provider (BrsApi.ir) |
+| `EXCHANGE_RATE_PROVIDER` | `external` | `database` = DB cache only; `external` = HTTP fetch (PriceToDay) + DB cache |
+| `PRICE_TO_DAY_API_URL` | `https://api.priceto.day/v1/latest/irr/usd` | Primary USD/IRR quote; divided by 10 for Toman |
+| `NERKHSANJ_API_URL` | `https://nerkh.jahankhahan.shop/data/live.json` | Keyless backup USD/Toman quote from `rates.dollar` |
+| `EXCHANGE_RATE_TIMEOUT/CACHE_TTL` | 5s / 3600s | External provider timeout and financial cache lifetime |
 | `FACE_ANALYZER_MODEL_PROVIDER` | `local` | `local` = MediaPipe pipeline; `external` = HTTP analyzer (`FACE_ANALYZER_EXTERNAL_API_URL` + `_API_KEY`) |
 | `FACE_ANALYZER_MAX_IMAGE_MB` | `5` | Upload size cap for `POST /api/v3/face/analyze/` (JPEG/PNG/WebP, magic-byte + Pillow verified) |
 | `FACE_ANALYZER_ENABLE_HISTORY` | `True` | When `False`, the v3 history endpoints return 404 |
@@ -389,7 +390,6 @@ All require authentication. `date_from`/`date_to` query params are **Shamsi** `Y
 | GET | `/api/reports/customers/` | `by_visit_status`, `new_customers` (0 visits), `loyal_customers` (≥5), `total` |
 | GET | `/api/reports/referral/` | `total_visits`, `total_customers`, `returning_customers` (≥2 visits), `referral_rate` % |
 | GET | `/api/reports/exchange-dollar/` | Current USD→Toman rate (+optional `?usd=` / `?amount=` conversion). 503 if no rate configured |
-| GET | `/api/reports/backup-exchange/` | Same, but fetched live from the **BrsApi backup provider** |
 
 ### 6.4 Customers — `/api/customers/` (IsAdminOrEmployee)
 
@@ -804,9 +804,11 @@ scoped to their own expenses; admins see all. Only `approved`/`paid` expenses co
 - `get_rate()` — legacy: latest active DB row ≤ now, else `FINANCE_DEFAULT_USD_TO_TOMAN_RATE`
   (validated positive; hard floor 100000).
 - `get_current_usd_to_toman_rate()` — DB cache; when `EXCHANGE_RATE_PROVIDER=external` and the
-  cache is stale (`CACHE_TTL`), fetches the primary provider (Tindex), then the **BrsApi backup**,
-  caching successful results as new `ExchangeRate` rows. Returns `None` if everything fails
-  (callers expose `null`/503 rather than a wrong rate).
+  cache is stale (`CACHE_TTL`), fetches PriceToDay and divides its rial quote by 10;
+  if that fails it reads Nerkhsanj's Toman quote. It caches successful results
+  as new `ExchangeRate` rows. If both fail, it retains
+  the last valid cached rate or configured fallback and waits 60 seconds
+  before retrying the upstreams.
 - A `post_migrate` signal seeds a default rate row on first migrate.
 
 ### 8.8 Welcome packs (`finance/services/welcome_pack.py`)
@@ -982,7 +984,7 @@ to know before extending the system:
    remain computable, but you should configure a real rate.
 9. **Admin uniqueness by policy** — there is exactly one admin (the configured bootstrap
    account); the model layer rejects any other admin-role assignment.
-10. **Outbound HTTP is limited to three providers** — exchange-rate feeds (Tindex/BrsApi), the
+10. **Outbound HTTP is limited to four providers** — PriceToDay and Nerkhsanj exchange-rate feeds, the
     optional external face-analyzer backend, and the optional LLM tips provider. The default
     configuration (`FACE_ANALYZER_MODEL_PROVIDER=local`, `FACE_ANALYZER_TIPS_PROVIDER=rule_based`)
     makes face analysis fully offline, keeping the SSRF surface minimal (OWASP A10 near N/A).

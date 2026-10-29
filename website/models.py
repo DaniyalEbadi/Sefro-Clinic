@@ -102,6 +102,7 @@ class SiteProduct(models.Model):
     name = models.CharField(max_length=120, unique=True, validators=TEXT_SANITIZERS)
     slug = models.SlugField(max_length=120, unique=True)
     short_description = models.CharField(max_length=255, blank=True, validators=TEXT_SANITIZERS)
+    description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
     price_usd = models.DecimalField(
         max_digits=24, decimal_places=12, default=Decimal('0.00'),
@@ -180,8 +181,12 @@ class SitePackagePriceOption(models.Model):
 
 class SiteSettings(models.Model):
     singleton_key = models.CharField(max_length=20, unique=True, default='default', editable=False)
+    clinic_name = models.CharField(max_length=180, blank=True, validators=TEXT_SANITIZERS)
+    logo_url = models.URLField(blank=True)
     address = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     phone_numbers = models.JSONField(default=list, blank=True)
+    contact_email = models.EmailField(blank=True)
+    social_links = models.JSONField(default=dict, blank=True)
     working_hours = models.CharField(max_length=180, blank=True, validators=TEXT_SANITIZERS)
     about_title = models.CharField(max_length=180, blank=True, validators=TEXT_SANITIZERS)
     about_text = models.TextField(blank=True, validators=TEXT_SANITIZERS)

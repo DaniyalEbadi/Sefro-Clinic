@@ -285,8 +285,14 @@ SPECTACULAR_SETTINGS = {
     'DISABLE_ERRORS_AND_WARNINGS': True,
 }
 
-CLINIC_ADMIN_USERNAME = os.environ.get('CLINIC_ADMIN_USERNAME', '')
-CLINIC_ADMIN_PASSWORD = os.environ.get('CLINIC_ADMIN_PASSWORD', '')
+if TESTING:
+    # Keep the isolated test database independent of any deployment's bootstrap
+    # username. Tests and factories intentionally use this fixture identity.
+    CLINIC_ADMIN_USERNAME = 'sefro_admin'
+    CLINIC_ADMIN_PASSWORD = 'SefroAdmin-Test-2026!'
+else:
+    CLINIC_ADMIN_USERNAME = os.environ.get('CLINIC_ADMIN_USERNAME', '')
+    CLINIC_ADMIN_PASSWORD = os.environ.get('CLINIC_ADMIN_PASSWORD', '')
 if not CLINIC_ADMIN_USERNAME or not CLINIC_ADMIN_PASSWORD:
     raise ImproperlyConfigured(
         'CLINIC_ADMIN_USERNAME and CLINIC_ADMIN_PASSWORD must be set in .env.'
@@ -335,12 +341,10 @@ FINANCE_DEFAULT_USD_TO_TOMAN_RATE = Decimal(
 )
 
 # --- Exchange-rate provider --------------------------------------------------
-# Provider abstraction: 'database' (default, DB-cached) or 'external' (HTTP fetch + DB cache).
+# Provider abstraction: 'database' (DB-cached) or 'external' (default; HTTP fetch + DB cache).
 # External provider uses standard library urllib; no extra deps.
-EXCHANGE_RATE_PROVIDER = os.environ.get('EXCHANGE_RATE_PROVIDER', 'database')
-EXCHANGE_RATE_API_URL = os.environ.get('EXCHANGE_RATE_API_URL', '')
-EXCHANGE_RATE_API_KEY = os.environ.get('EXCHANGE_RATE_API_KEY', '')
+EXCHANGE_RATE_PROVIDER = 'database' if TESTING else os.environ.get('EXCHANGE_RATE_PROVIDER', 'external')
+PRICE_TO_DAY_API_URL = os.environ.get('PRICE_TO_DAY_API_URL', 'https://api.priceto.day/v1/latest/irr/usd')
+NERKHSANJ_API_URL = os.environ.get('NERKHSANJ_API_URL', 'https://nerkh.jahankhahan.shop/data/live.json')
 EXCHANGE_RATE_TIMEOUT = int(os.environ.get('EXCHANGE_RATE_TIMEOUT', '5') or 5)
 EXCHANGE_RATE_CACHE_TTL = int(os.environ.get('EXCHANGE_RATE_CACHE_TTL', '3600') or 3600)
-EXCHANGE_RATE_BACKUP_API_URL = os.environ.get('EXCHANGE_RATE_BACKUP_API_URL', '')
-EXCHANGE_RATE_BACKUP_API_KEY = os.environ.get('EXCHANGE_RATE_BACKUP_API_KEY', '')

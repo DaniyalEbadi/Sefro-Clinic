@@ -1,12 +1,11 @@
 """Unit tests for the exchange-rate helpers and providers.
 
-The conversion helpers and both HTTP providers (Tindex primary, BrsApi backup)
-previously had only partial coverage; the provider parsing paths were untested.
+The conversion helpers and the PriceToDay HTTP provider.
 """
 from decimal import Decimal
 from unittest import mock
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 
 from finance.services import exchange_rates as xr
 
@@ -59,7 +58,7 @@ class ConversionHelperTests(TestCase):
 
 
 class ExternalProviderParsingTests(TestCase):
-    """The Tindex/primary provider must tolerate several upstream shapes."""
+    """PriceToDay returns rial per USD, with an explicit success flag."""
 
     def setUp(self):
         self.provider = xr.ExternalExchangeRateProvider()
@@ -72,18 +71,17 @@ class ExternalProviderParsingTests(TestCase):
         with mock.patch.object(xr.urllib.request, 'urlopen', return_value=response):
             return self.provider.get_usd_to_toman_rate()
 
-    def test_list_payload_with_slug_key(self):
-        body = '{"data":[{"key":"EUR","rate":1},{"slug":"usd-exchange-rate","rate":"92570"}]}'
-        self.assertEqual(self._fetch(body), Decimal('92570'))
+    def test_rial_quote_is_converted_to_toman(self):
+        self.assertEqual(self._fetch('{"success":true,"price":2705000}'), Decimal('270500'))
 
-    def test_single_indicator_payload(self):
-        self.assertEqual(self._fetch('{"success":true,"data":{"price":"92570"}}'), Decimal('92570'))
+    def test_fractional_toman_quote_is_preserved(self):
+        self.assertEqual(self._fetch('{"success":true,"price":2705001}'), Decimal('270500.1'))
 
-    def test_nested_current_price(self):
-        self.assertEqual(self._fetch('{"data":{"current":{"price": 92570}}}'), Decimal('92570'))
+    def test_unsuccessful_response_is_rejected(self):
+        self.assertIsNone(self._fetch('{"success":false,"price":2705000}'))
 
-    def test_generic_rate_key_fallback(self):
-        self.assertEqual(self._fetch('{"rate": 92570}'), Decimal('92570'))
+    def test_legacy_provider_shape_is_rejected(self):
+        self.assertIsNone(self._fetch('{"rate":2705000}'))
 
     def test_non_200_response_returns_none(self):
         self.assertIsNone(self._fetch('{}', status=500))
@@ -94,50 +92,32 @@ class ExternalProviderParsingTests(TestCase):
     def test_payload_without_rate_returns_none(self):
         self.assertIsNone(self._fetch('{"data":[]}'))
 
-
-class BrsApiBackupProviderTests(TestCase):
+class NerkhsanjProviderTests(TestCase):
     def setUp(self):
-        self.provider = xr.BrsApiExchangeRateProvider()
+        self.provider = xr.NerkhsanjExchangeRateProvider()
 
     def _fetch(self, body, status=200):
         response = mock.MagicMock()
         response.status = status
         response.read.return_value = body if isinstance(body, bytes) else body.encode()
         response.__enter__.return_value = response
-        with mock.patch.object(xr.urllib.request, 'urlopen', return_value=response):
-            return self.provider.get_usd_to_toman_rate()
+        with mock.patch.object(xr.urllib.request, 'urlopen', return_value=response) as opener:
+            rate = self.provider.get_usd_to_toman_rate()
+        self.assertNotIn('Authorization', opener.call_args.args[0].headers)
+        return rate
 
-    @override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://backup.example/api',
-                       EXCHANGE_RATE_BACKUP_API_KEY='key-123')
-    def test_parses_currency_list(self):
-        body = '{"currency":[{"name_en":"US Dollar","symbol":"USD","price":"220300"}]}'
-        self.assertEqual(self._fetch(body), Decimal('220300'))
+    def test_toman_quote_is_used_without_rial_conversion(self):
+        self.assertEqual(self._fetch('{"rates":{"dollar":270010}}'), Decimal('270010'))
 
-    @override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://backup.example/api',
-                       EXCHANGE_RATE_BACKUP_API_KEY='key-123')
-    def test_no_usd_row_returns_none(self):
-        body = '{"currency":[{"name_en":"Euro","symbol":"EUR","price":"240000"}]}'
-        self.assertIsNone(self._fetch(body))
+    def test_missing_or_bad_dollar_is_rejected(self):
+        for body in ('{}', '{"rates":{"dollar":0}}', '{"rates":{"dollar":"NaN"}}'):
+            self.assertIsNone(self._fetch(body))
 
-    @override_settings(EXCHANGE_RATE_BACKUP_API_KEY='')
-    def test_missing_api_key_returns_none(self):
-        self.assertIsNone(self.provider.get_usd_to_toman_rate())
+    def test_http_and_json_failures_are_rejected(self):
+        self.assertIsNone(self._fetch('{}', status=500))
+        self.assertIsNone(self._fetch('not-json'))
 
-    @override_settings(EXCHANGE_RATE_BACKUP_API_URL='ftp://not-http',
-                       EXCHANGE_RATE_BACKUP_API_KEY='key')
-    def test_invalid_url_scheme_returns_none(self):
-        self.assertIsNone(self.provider.get_usd_to_toman_rate())
-
-    @override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://backup.example/api',
-                       EXCHANGE_RATE_BACKUP_API_KEY='key')
-    def test_http_error_returns_none(self):
-        error = xr.urllib.error.HTTPError('u', 500, 'x', None, None)
-        with mock.patch.object(xr.urllib.request, 'urlopen', side_effect=error):
-            self.assertIsNone(self.provider.get_usd_to_toman_rate())
-
-    @override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://backup.example/api',
-                       EXCHANGE_RATE_BACKUP_API_KEY='key')
-    def test_url_error_returns_none(self):
+    def test_transport_failure_is_rejected(self):
         with mock.patch.object(xr.urllib.request, 'urlopen', side_effect=xr.urllib.error.URLError('down')):
             self.assertIsNone(self.provider.get_usd_to_toman_rate())
 

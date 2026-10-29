@@ -1,7 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from finance.views import BackupExchangeRateReportView, ExchangeRateReportView
+from finance.views import ExchangeRateReportView
 
 from .views import (
                     AllReportsView,
@@ -40,6 +40,5 @@ urlpatterns = [
     path('reports/customers/', CustomerReportView.as_view(), name='report-customers'),
     path('reports/referral/', ReferralReportView.as_view(), name='report-referral'),
     path('reports/exchange-dollar/', ExchangeRateReportView.as_view(), name='report-exchange-dollar'),
-    path('reports/backup-exchange/', BackupExchangeRateReportView.as_view(), name='report-backup-exchange'),
     path('', include(router.urls)),
 ]

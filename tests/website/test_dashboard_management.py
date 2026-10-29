@@ -22,7 +22,15 @@ from tests.helpers import (
     website_manager_client,
 )
 from tests.website.test_models import make_package, make_product, make_service
-from tests.website.test_website_importer import ABOUT_HTML, HOME_HTML, PACKAGES_HTML, PRODUCTS_HTML, SERVICES_HTML
+from tests.website.test_website_importer import (
+    ABOUT_HTML,
+    CONTACT_HTML,
+    HOME_HTML,
+    PACKAGES_HTML,
+    PRODUCT_DETAIL_HTML,
+    PRODUCTS_HTML,
+    SERVICES_HTML,
+)
 from website.models import (
     ContactMessage,
     SitePackage,
@@ -216,19 +224,18 @@ class WebsiteDashboardContentTests(TestCase):
         self.assertFalse(option.is_active)
         self.assertTrue(package.is_manually_managed)
 
-    @patch('website.services.sync.BrsApiExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
     @patch('website.services.sync.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=Decimal('100000'))
-    def test_manual_price_sync_updates_website_only(self, primary, backup):
+    def test_manual_price_sync_updates_website_only(self, primary):
         service = make_service(price_usd=Decimal('2'))
         finance_before = ExchangeRate.objects.count()
         response = self.client.post('/api/v2/site-dashboard/price-sync/run/', {}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
-        self.assertEqual(response.data['provider'], 'tindex')
+        self.assertEqual(response.data['provider'], 'priceto_day')
         service.refresh_from_db()
         self.assertEqual(service.price, Decimal('200000'))
         self.assertEqual(ExchangeRate.objects.count(), finance_before)
         self.assertEqual(self.client.get('/api/v2/site-dashboard/price-sync/status/').data['rate'], '100000.000000')
-        self.assertEqual(backup.call_count, 0)
+        self.assertEqual(primary.call_count, 1)
 
     @patch('website.services.importer.fetch_website_rate', return_value=(Decimal('100000'), 'test'))
     @patch('website.services.importer._fetch')
@@ -236,6 +243,7 @@ class WebsiteDashboardContentTests(TestCase):
         pages = {
             '/services': SERVICES_HTML, '/packages': PACKAGES_HTML,
             '/products': PRODUCTS_HTML, '/about': ABOUT_HTML, '/': HOME_HTML,
+            '/contact': CONTACT_HTML, '/products/serum': PRODUCT_DETAIL_HTML,
         }
         fetch.side_effect = lambda path: pages[path]
         import_website_catalog()

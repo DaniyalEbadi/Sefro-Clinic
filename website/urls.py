@@ -6,6 +6,7 @@ from .views import (
     SitePackageViewSet,
     SiteProductViewSet,
     SiteServiceViewSet,
+    SiteSettingsPublicView,
     TeamMemberListView,
     TestimonialListView,
     WebsiteContactDashboardViewSet,
@@ -30,6 +31,7 @@ router.register('products', SiteProductViewSet, basename='site-product')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('site/settings/', SiteSettingsPublicView.as_view(), name='site-settings'),
     path('team/', TeamMemberListView.as_view(), name='site-team'),
     path('testimonials/', TestimonialListView.as_view(), name='site-testimonials'),
     path('contact/', ContactMessageCreateView.as_view(), name='site-contact'),

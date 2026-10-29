@@ -64,7 +64,7 @@ class WebsiteDashboardPriceTests(TestCase):
 
 
 class WebsitePriceSyncTests(TestCase):
-    @patch('website.services.sync.BrsApiExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
+    @patch('website.services.sync.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
     @patch('website.services.sync.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
     def test_failed_provider_refresh_keeps_existing_prices(self, primary, backup):
         service = make_service(price='799.99', price_usd='0.01')
@@ -77,7 +77,7 @@ class WebsitePriceSyncTests(TestCase):
         self.assertEqual(primary.call_count, 1)
         self.assertEqual(backup.call_count, 1)
 
-    @patch('website.services.sync.BrsApiExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
+    @patch('website.services.sync.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate')
     @patch('website.services.sync.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=Decimal('79999.9'))
     def test_successful_refresh_rounds_prices_up_to_whole_toman(self, primary, backup):
         service = make_service(price_usd='0.01')
@@ -87,7 +87,7 @@ class WebsitePriceSyncTests(TestCase):
         run = sync_website_prices()
 
         self.assertEqual(run.status, WebsitePriceSyncRun.Status.SUCCEEDED)
-        self.assertEqual(run.provider, 'tindex')
+        self.assertEqual(run.provider, 'priceto_day')
         service.refresh_from_db()
         package.refresh_from_db()
         product.refresh_from_db()
@@ -95,7 +95,21 @@ class WebsitePriceSyncTests(TestCase):
         self.assertEqual(package.price, Decimal('98400.00'))
         self.assertEqual(package.original_price, Decimal('188000.00'))
         self.assertEqual(product.price, Decimal('800.00'))
-        self.assertEqual(backup.call_count, 0)
+        self.assertEqual(primary.call_count, 1)
+        backup.assert_not_called()
+
+    @patch('website.services.sync.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=Decimal('270010'))
+    @patch('website.services.sync.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None)
+    def test_primary_failure_uses_backup_toman_rate(self, primary, backup):
+        service = make_service(price_usd='1.00')
+        run = sync_website_prices()
+        service.refresh_from_db()
+        self.assertEqual(run.status, WebsitePriceSyncRun.Status.SUCCEEDED)
+        self.assertEqual(run.provider, 'nerkhsanj')
+        self.assertEqual(run.rate, Decimal('270010'))
+        self.assertEqual(service.price, Decimal('270010'))
+        primary.assert_called_once()
+        backup.assert_called_once()
 
 
 @patch('website.views.get_current_usd_to_toman_rate', return_value=Decimal('264280'))

@@ -66,7 +66,7 @@ class SiteProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteProduct
         fields = [
-            'id', 'name', 'slug', 'short_description', 'price', 'price_usd',
+            'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
             'image_url', 'source_url',
         ]
 
@@ -159,7 +159,7 @@ class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
     class Meta:
         model = SiteProduct
         fields = [
-            'id', 'name', 'slug', 'short_description', 'price', 'price_usd',
+            'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
             'image_url', 'source_url', 'is_active', 'sort_order',
         ]
         read_only_fields = ['id']
@@ -247,11 +247,13 @@ class SitePackagePriceOptionDashboardSerializer(WebsitePriceInputMixin, serializ
 
 class SiteSettingsSerializer(serializers.ModelSerializer):
     updated_at = ShamsiDateTimeField(read_only=True)
+    social_links = serializers.DictField(child=serializers.URLField(), required=False)
 
     class Meta:
         model = SiteSettings
         fields = [
-            'id', 'address', 'phone_numbers', 'working_hours', 'about_title',
+            'id', 'clinic_name', 'logo_url', 'address', 'phone_numbers',
+            'contact_email', 'social_links', 'working_hours', 'about_title',
             'about_text', 'statistics', 'hero_image_url', 'about_image_url', 'updated_at',
         ]
         read_only_fields = ['id', 'updated_at']

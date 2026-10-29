@@ -284,7 +284,7 @@ class ExchangeRateReportIntegrationTests(TestCase):
         self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1100000.00'))
         self.assertEqual(resp.data['amount_usd'], '10.00')
 
-    @override_settings(EXCHANGE_RATE_PROVIDER='database', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_API_URL='')
+    @override_settings(EXCHANGE_RATE_PROVIDER='database', FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'))
     def test_exchange_dollar_report_missing_rate_returns_503(self):
         ExchangeRate.objects.all().delete()
         # ensure no external fetch
@@ -292,8 +292,9 @@ class ExchangeRateReportIntegrationTests(TestCase):
             resp = self.client.get('/api/reports/exchange-dollar/')
             self.assertEqual(resp.status_code, 503)
 
-    def test_backup_exchange_report_mocked_success_via_api(self):
-        mock_data = {'currency': [{'name_en': 'US Dollar', 'symbol': 'USD', 'price': '250000'}]}
+    @override_settings(EXCHANGE_RATE_PROVIDER='external')
+    def test_exchange_dollar_uses_priceto_day_rial_quote(self):
+        mock_data = {'success': True, 'price': 2705000}
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.read.return_value = str(mock_data).replace("'", '"').encode() if isinstance(mock_data, dict) else b'{"currency":[{"symbol":"USD","price":"250000"}]}'
@@ -303,17 +304,23 @@ class ExchangeRateReportIntegrationTests(TestCase):
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = lambda s, *a: False
         with patch('finance.services.exchange_rates.urllib.request.urlopen', return_value=mock_resp):
-            with override_settings(EXCHANGE_RATE_BACKUP_API_URL='https://Api.BrsApi.ir/Market/Gold_Currency.php', EXCHANGE_RATE_BACKUP_API_KEY='test-key'):
-                resp = self.client.get('/api/reports/backup-exchange/?usd=5')
-                self.assertEqual(resp.status_code, 200)
-                self.assertEqual(resp.data['source'], 'brsapi')
-                self.assertEqual(resp.data['provider'], 'BrsApi.ir')
-                self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1250000.00'))
+            resp = self.client.get('/api/reports/exchange-dollar/?usd=5')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['source'], 'priceto_day')
+        self.assertEqual(Decimal(resp.data['rate']), Decimal('270500'))
+        self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1352500.00'))
 
-    def test_backup_exchange_missing_key_returns_503(self):
-        with override_settings(EXCHANGE_RATE_BACKUP_API_KEY=''):
-            resp = self.client.get('/api/reports/backup-exchange/')
-            self.assertEqual(resp.status_code, 503)
+    def test_retired_backup_report_is_not_routed(self):
+        self.assertEqual(self.client.get('/api/reports/backup-exchange/').status_code, 404)
+
+    @override_settings(EXCHANGE_RATE_PROVIDER='external')
+    def test_financial_report_uses_backup_if_primary_fails(self):
+        with patch('finance.services.exchange_rates.ExternalExchangeRateProvider.get_usd_to_toman_rate', return_value=None):
+            with patch('finance.services.exchange_rates.NerkhsanjExchangeRateProvider.get_usd_to_toman_rate', return_value=Decimal('270010')):
+                resp = self.client.get('/api/reports/exchange-dollar/?usd=5')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['source'], 'nerkhsanj')
+        self.assertEqual(Decimal(resp.data['amount_toman']), Decimal('1350050'))
 
     def test_exchange_toman_decimal_precision_via_service(self):
         from finance.services.exchange_rates import convert_usd_to_toman

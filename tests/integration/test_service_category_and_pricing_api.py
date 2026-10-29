@@ -199,7 +199,7 @@ class ServicePricingApiTests(TestCase):
     def test_service_serializer_without_exchange_rate(self):
         ExchangeRate.objects.all().delete()
         # Use override to remove fallback and disable external fetch (would otherwise hit Tindex)
-        with override_settings(FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_PROVIDER='database', EXCHANGE_RATE_API_URL=''):
+        with override_settings(FINANCE_DEFAULT_USD_TO_TOMAN_RATE=Decimal('0'), EXCHANGE_RATE_PROVIDER='database'):
             resp = self.admin.get(f'/api/services/{self.service.id}/')
             self.assertEqual(resp.status_code, 200)
             self.assertIsNone(resp.data['price_toman'])
