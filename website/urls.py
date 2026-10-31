@@ -3,12 +3,15 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     ContactMessageCreateView,
+    SiteCategoryListView,
+    SiteMediaAssetListView,
     SitePackageViewSet,
     SiteProductViewSet,
     SiteServiceViewSet,
     SiteSettingsPublicView,
     TeamMemberListView,
     TestimonialListView,
+    WebsiteCategoryDashboardViewSet,
     WebsiteContactDashboardViewSet,
     WebsiteDashboardLoginAPIView,
     WebsiteDashboardLogoutAPIView,
@@ -31,6 +34,8 @@ router.register('products', SiteProductViewSet, basename='site-product')
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('categories/', SiteCategoryListView.as_view(), name='site-categories'),
+    path('media/', SiteMediaAssetListView.as_view(), name='site-media'),
     path('site/settings/', SiteSettingsPublicView.as_view(), name='site-settings'),
     path('team/', TeamMemberListView.as_view(), name='site-team'),
     path('testimonials/', TestimonialListView.as_view(), name='site-testimonials'),
@@ -38,6 +43,7 @@ urlpatterns = [
 ]
 
 dashboard_router = DefaultRouter()
+dashboard_router.register('categories', WebsiteCategoryDashboardViewSet, basename='website-dashboard-category')
 dashboard_router.register('services', WebsiteServiceDashboardViewSet, basename='website-dashboard-service')
 dashboard_router.register('packages', WebsitePackageDashboardViewSet, basename='website-dashboard-package')
 dashboard_router.register('package-price-options', WebsitePackagePriceOptionDashboardViewSet, basename='website-dashboard-package-price-option')

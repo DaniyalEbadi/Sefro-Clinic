@@ -5,16 +5,23 @@ authenticated dashboard. USD remains the base used by rate synchronization.
 Derived Toman prices are always rounded upward to a whole Toman, so values such
 as `799.999` are stored and returned as `800.00`.
 
-Run the synchronization command twice per day in the deployment environment:
+The Docker startup runs `run_website_price_scheduler` alongside Gunicorn. It
+checks the production database once a minute and syncs once in each Tehran
+00:00/06:00/12:00/18:00 window, including a missed window after a container restart.
+Failed provider attempts are retried after 15 minutes. A database advisory
+lock prevents duplicate scheduled runs across multiple containers. For a
+manual run, use:
 
 ```text
 python manage.py sync_website_prices
 ```
 
-Recommended Tehran schedule:
+Automatic Tehran schedule:
 
 - `00:00 Asia/Tehran`
+- `06:00 Asia/Tehran`
 - `12:00 Asia/Tehran`
+- `18:00 Asia/Tehran`
 
 The initial public catalog import is idempotent and can be run with:
 
@@ -25,7 +32,9 @@ python manage.py import_website_catalog
 It imports the live services, packages, every package price option, products,
 team members, testimonials, and site settings. Records missing from a later
 import are marked inactive rather than deleted. Product detail-page descriptions
-are stored separately from card summaries.
+are stored separately from card summaries. Once an imported record exists,
+subsequent catalog imports preserve its USD base and synchronized Toman price;
+the import cannot reset either price from old public site text.
 
 When the rate provider is unavailable, the importer still saves the exact
 live Toman prices. A positive Toman price with `price_usd=0` means its USD base

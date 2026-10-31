@@ -85,8 +85,26 @@ Frontend changes required for the new isolated login:
   slugs cannot be changed because they are public URLs and crawl identities.
   Dashboard-edited catalog/content rows are protected from later imports.
 
-The repository includes a `sync_website_prices` management command for an
-external twice-daily scheduler; no scheduler configuration is included here.
+The Docker startup runs the website price scheduler at the Tehran 00/06/12/18
+windows; `sync_website_prices` remains available for a manual run.
+
+Website categories are managed separately from financial API data:
+
+- `GET /api/v2/categories/?kind=service|package|product` returns active category
+  labels and active-item counts for public filters.
+- `GET/POST /api/v2/site-dashboard/categories/` and
+  `GET/PUT/PATCH/DELETE /api/v2/site-dashboard/categories/<id>/` use the website
+  manager cookie session. Each category has `kind`, `slug`, `name`, `sort_order`,
+  and `is_active`. A category that still has catalog items cannot be deleted;
+  reassign them first or hide the category with `is_active=false`.
+- Catalog dashboard writes assign a category with `site_category_id`. Public
+  service, package, and product records expose the nested `site_category`.
+  Filter catalog lists with `?site_category=<slug>`; `?category=<slug>` also
+  works. Existing service filters such as `?category=face` remain supported.
+- Service `category` still carries its internal face/skin/hair/body grouping
+  for existing API consumers. `site_category` is the editable website label.
+  The live product page has no category tabs, so imported products start in
+  the editable `skin-care` category.
 Production migrations and credential provisioning must be deployed explicitly.
 
 For local backend tests, the isolated test database bootstraps the fixed

@@ -2,6 +2,7 @@ import logging
 from math import ceil
 
 from django.conf import settings as django_settings
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import generics, permissions, serializers, status, viewsets
@@ -23,6 +24,8 @@ from .authentication import (
 )
 from .models import (
     ContactMessage,
+    SiteCategory,
+    SiteMediaAsset,
     SitePackage,
     SitePackagePriceOption,
     SiteProduct,
@@ -37,6 +40,9 @@ from .permissions import IsWebsiteManager
 from .serializers import (
     ContactMessageDashboardSerializer,
     ContactMessageSerializer,
+    SiteCategoryDashboardSerializer,
+    SiteCategoryPublicSerializer,
+    SiteMediaAssetSerializer,
     SitePackageDashboardSerializer,
     SitePackagePriceOptionDashboardSerializer,
     SitePackageSerializer,
@@ -70,7 +76,7 @@ class PublicReadOnlyMixin:
 
 @extend_schema(tags=['Site Services'])
 class SiteServiceViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
-    queryset = SiteService.objects.filter(is_active=True)
+    queryset = SiteService.objects.filter(is_active=True).select_related('site_category')
     serializer_class = SiteServiceSerializer
     lookup_field = 'slug'
 
@@ -78,22 +84,79 @@ class SiteServiceViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
         queryset = super().get_queryset()
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            if category in SiteService.Category.values:
+                queryset = queryset.filter(category=category)
+            else:
+                queryset = queryset.filter(site_category__slug=category)
+        site_category = self.request.query_params.get('site_category')
+        if site_category:
+            queryset = queryset.filter(site_category__slug=site_category)
         return queryset
+
+
+@extend_schema(tags=['Site Categories'])
+class SiteCategoryListView(PublicReadOnlyMixin, generics.ListAPIView):
+    queryset = SiteCategory.objects.filter(is_active=True)
+    serializer_class = SiteCategoryPublicSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        kind = self.request.query_params.get('kind')
+        return queryset.filter(kind=kind) if kind else queryset
+
+
+@extend_schema(tags=['Site Media'])
+class SiteMediaAssetListView(PublicReadOnlyMixin, generics.ListAPIView):
+    queryset = SiteMediaAsset.objects.all()
+    serializer_class = SiteMediaAssetSerializer
 
 
 @extend_schema(tags=['Site Packages'])
 class SitePackageViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
-    queryset = SitePackage.objects.filter(is_active=True).prefetch_related('services')
+    queryset = SitePackage.objects.filter(is_active=True).select_related('site_category').prefetch_related('services')
     serializer_class = SitePackageSerializer
     lookup_field = 'slug'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        category = self.request.query_params.get('site_category') or self.request.query_params.get('category')
+        return queryset.filter(site_category__slug=category) if category else queryset
 
 
 @extend_schema(tags=['Site Products'])
 class SiteProductViewSet(PublicReadOnlyMixin, viewsets.ReadOnlyModelViewSet):
-    queryset = SiteProduct.objects.filter(is_active=True)
+    queryset = SiteProduct.objects.filter(is_active=True).select_related('site_category')
     serializer_class = SiteProductSerializer
     lookup_field = 'slug'
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        category = self.request.query_params.get('site_category') or self.request.query_params.get('category')
+        return queryset.filter(site_category__slug=category) if category else queryset
+
+
+@extend_schema(tags=['Website Dashboard - Categories'])
+class WebsiteCategoryDashboardViewSet(viewsets.ModelViewSet):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
+    queryset = SiteCategory.objects.all()
+    serializer_class = SiteCategoryDashboardSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        kind = self.request.query_params.get('kind')
+        return queryset.filter(kind=kind) if kind else queryset
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {'detail': 'Reassign or remove catalog items before deleting this category.'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
 
 class WebsitePriceDashboardMixin:
@@ -149,7 +212,7 @@ class WebsitePriceDashboardMixin:
 
 @extend_schema(tags=['Website Dashboard - Services'])
 class WebsiteServiceDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
-    queryset = SiteService.objects.all()
+    queryset = SiteService.objects.all().select_related('site_category')
     serializer_class = SiteServiceDashboardSerializer
     http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
@@ -218,7 +281,7 @@ class WebsiteServiceDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelV
 
 @extend_schema(tags=['Website Dashboard - Packages'])
 class WebsitePackageDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
-    queryset = SitePackage.objects.all().prefetch_related('services')
+    queryset = SitePackage.objects.all().select_related('site_category').prefetch_related('services')
     serializer_class = SitePackageDashboardSerializer
 
 
@@ -295,7 +358,7 @@ class SiteSettingsPublicView(generics.RetrieveAPIView):
 
 @extend_schema(tags=['Website Dashboard - Products'])
 class WebsiteProductDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
-    queryset = SiteProduct.objects.all()
+    queryset = SiteProduct.objects.all().select_related('site_category')
     serializer_class = SiteProductDashboardSerializer
 
 

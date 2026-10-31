@@ -6,6 +6,8 @@ from Sefro_Clinic.fields import ShamsiDateTimeField
 
 from .models import (
     ContactMessage,
+    SiteCategory,
+    SiteMediaAsset,
     SitePackage,
     SitePackagePriceOption,
     SiteProduct,
@@ -18,14 +20,71 @@ from .models import (
 from .services.pricing import round_toman_up, toman_price_from_usd, usd_price_from_toman
 
 
+class SiteCategorySummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SiteCategory
+        fields = ['id', 'kind', 'slug', 'name']
+
+
+class SiteCategoryPublicSerializer(SiteCategorySummarySerializer):
+    item_count = serializers.SerializerMethodField()
+
+    class Meta(SiteCategorySummarySerializer.Meta):
+        fields = SiteCategorySummarySerializer.Meta.fields + ['sort_order', 'item_count']
+
+    def get_item_count(self, obj):
+        relation = {
+            SiteCategory.Kind.SERVICE: obj.services,
+            SiteCategory.Kind.PACKAGE: obj.packages,
+            SiteCategory.Kind.PRODUCT: obj.products,
+        }[obj.kind]
+        return relation.filter(is_active=True).count()
+
+
+class SiteCategoryDashboardSerializer(SiteCategoryPublicSerializer):
+    class Meta(SiteCategoryPublicSerializer.Meta):
+        fields = SiteCategoryPublicSerializer.Meta.fields + ['is_active']
+        read_only_fields = ['id', 'item_count']
+
+    def validate(self, attrs):
+        kind = attrs.get('kind', self.instance.kind if self.instance else None)
+        if self.instance and kind != self.instance.kind:
+            raise serializers.ValidationError({'kind': 'A category kind cannot be changed.'})
+        for field in ('slug', 'name'):
+            value = attrs.get(field, getattr(self.instance, field, None))
+            if value and SiteCategory.objects.filter(kind=kind, **{field: value}).exclude(
+                pk=self.instance.pk if self.instance else None,
+            ).exists():
+                raise serializers.ValidationError({field: 'This value already exists for this category kind.'})
+        return attrs
+
+
+class SiteCategoryAssignmentMixin:
+    site_category_kind = None
+
+    def validate(self, attrs):
+        category = attrs.get('site_category')
+        if category and (category.kind != self.site_category_kind or not category.is_active):
+            raise serializers.ValidationError({'site_category_id': 'Choose an active category of the correct kind.'})
+        return super().validate(attrs)
+
+
 class SiteServiceSerializer(serializers.ModelSerializer):
+    site_category = SiteCategorySummarySerializer(read_only=True)
+
     class Meta:
         model = SiteService
         fields = [
             'id', 'name', 'slug', 'category', 'short_description',
             'description', 'price', 'price_usd', 'duration_label', 'image_url',
-            'source_category', 'is_from_price', 'source_url',
+            'source_category', 'site_category', 'is_from_price', 'source_url',
         ]
+
+
+class SiteMediaAssetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SiteMediaAsset
+        fields = ['source_path', 'source_url', 'public_url', 'content_type']
 
 
 class SiteServiceMiniSerializer(serializers.ModelSerializer):
@@ -35,6 +94,7 @@ class SiteServiceMiniSerializer(serializers.ModelSerializer):
 
 
 class SitePackageSerializer(serializers.ModelSerializer):
+    site_category = SiteCategorySummarySerializer(read_only=True)
     services = SiteServiceMiniSerializer(many=True, read_only=True)
     price_options = serializers.SerializerMethodField()
     discount_percent = serializers.IntegerField(read_only=True)
@@ -44,7 +104,7 @@ class SitePackageSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'slug', 'tier', 'tagline', 'badge',
             'price', 'price_usd', 'original_price', 'original_price_usd', 'discount_percent',
-            'free_service_count', 'services', 'price_options',
+            'free_service_count', 'services', 'price_options', 'site_category',
         ]
 
     def get_price_options(self, obj):
@@ -63,11 +123,13 @@ class SitePackagePriceOptionSerializer(serializers.ModelSerializer):
 
 
 class SiteProductSerializer(serializers.ModelSerializer):
+    site_category = SiteCategorySummarySerializer(read_only=True)
+
     class Meta:
         model = SiteProduct
         fields = [
             'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
-            'image_url', 'source_url',
+            'image_url', 'source_url', 'site_category',
         ]
 
 
@@ -119,14 +181,19 @@ class WebsitePriceInputMixin:
         return attrs
 
 
-class SiteServiceDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+class SiteServiceDashboardSerializer(SiteCategoryAssignmentMixin, WebsitePriceInputMixin, serializers.ModelSerializer):
+    site_category_kind = SiteCategory.Kind.SERVICE
     require_price_update = False
     price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
+    site_category = SiteCategorySummarySerializer(read_only=True)
+    site_category_id = serializers.PrimaryKeyRelatedField(
+        source='site_category', queryset=SiteCategory.objects.all(), required=False, allow_null=True, write_only=True,
+    )
 
     class Meta:
         model = SiteService
         fields = [
-            'id', 'name', 'slug', 'category', 'source_category', 'short_description',
+            'id', 'name', 'slug', 'category', 'source_category', 'site_category', 'site_category_id', 'short_description',
             'description', 'price', 'price_usd', 'is_from_price', 'duration_label',
             'image_url', 'image_object_key', 'source_url', 'is_active', 'sort_order',
         ]
@@ -153,14 +220,19 @@ class SiteServiceImageUploadSerializer(serializers.Serializer):
     image = serializers.ImageField(help_text='JPEG, PNG, or WebP; maximum 5 MB.')
 
 
-class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+class SiteProductDashboardSerializer(SiteCategoryAssignmentMixin, WebsitePriceInputMixin, serializers.ModelSerializer):
+    site_category_kind = SiteCategory.Kind.PRODUCT
     price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
+    site_category = SiteCategorySummarySerializer(read_only=True)
+    site_category_id = serializers.PrimaryKeyRelatedField(
+        source='site_category', queryset=SiteCategory.objects.all(), required=False, allow_null=True, write_only=True,
+    )
 
     class Meta:
         model = SiteProduct
         fields = [
             'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
-            'image_url', 'source_url', 'is_active', 'sort_order',
+            'image_url', 'source_url', 'site_category', 'site_category_id', 'is_active', 'sort_order',
         ]
         read_only_fields = ['id']
 
@@ -179,7 +251,8 @@ class SiteProductDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
         return super().update(instance, validated_data)
 
 
-class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSerializer):
+class SitePackageDashboardSerializer(SiteCategoryAssignmentMixin, WebsitePriceInputMixin, serializers.ModelSerializer):
+    site_category_kind = SiteCategory.Kind.PACKAGE
     price_pairs = (('price', 'price_usd'), ('original_price', 'original_price_usd'))
     price = TomanPriceField(help_text='Current Toman price. Send price OR price_usd.')
     original_price = TomanPriceField(
@@ -192,6 +265,10 @@ class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
     )
     price_options = SitePackagePriceOptionSerializer(many=True, read_only=True)
     discount_percent = serializers.IntegerField(read_only=True)
+    site_category = SiteCategorySummarySerializer(read_only=True)
+    site_category_id = serializers.PrimaryKeyRelatedField(
+        source='site_category', queryset=SiteCategory.objects.all(), required=False, allow_null=True, write_only=True,
+    )
 
     class Meta:
         model = SitePackage
@@ -199,7 +276,7 @@ class SitePackageDashboardSerializer(WebsitePriceInputMixin, serializers.ModelSe
             'id', 'name', 'slug', 'tier', 'tagline', 'badge', 'free_service_count',
             'price', 'price_usd', 'original_price', 'original_price_usd',
             'discount_percent', 'services', 'service_ids', 'price_options',
-            'source_url', 'is_active', 'sort_order',
+            'source_url', 'site_category', 'site_category_id', 'is_active', 'sort_order',
         ]
         read_only_fields = ['id', 'discount_percent', 'services', 'price_options']
 

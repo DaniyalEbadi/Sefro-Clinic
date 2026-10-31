@@ -9,6 +9,29 @@ from Sefro_Clinic.shamsi_storage import install_shamsi_mirrors
 from Sefro_Clinic.validators import TEXT_SANITIZERS
 
 
+class SiteCategory(models.Model):
+    class Kind(models.TextChoices):
+        SERVICE = 'service', 'Service'
+        PACKAGE = 'package', 'Package'
+        PRODUCT = 'product', 'Product'
+
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    slug = models.SlugField(max_length=100)
+    name = models.CharField(max_length=100, validators=TEXT_SANITIZERS)
+    sort_order = models.PositiveIntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['kind', 'sort_order', 'name']
+        constraints = [
+            models.UniqueConstraint(fields=['kind', 'slug'], name='unique_site_category_kind_slug'),
+            models.UniqueConstraint(fields=['kind', 'name'], name='unique_site_category_kind_name'),
+        ]
+
+    def __str__(self):
+        return f'{self.get_kind_display()}: {self.name}'
+
+
 class SiteService(models.Model):
     class Category(models.TextChoices):
         FACE = 'face', 'صورت'
@@ -20,6 +43,9 @@ class SiteService(models.Model):
     slug = models.SlugField(max_length=100, unique=True)
     category = models.CharField(max_length=20, choices=Category.choices)
     source_category = models.CharField(max_length=80, blank=True, validators=TEXT_SANITIZERS)
+    site_category = models.ForeignKey(
+        SiteCategory, null=True, blank=True, on_delete=models.PROTECT, related_name='services',
+    )
     short_description = models.CharField(max_length=255, blank=True, validators=TEXT_SANITIZERS)
     description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(
@@ -55,6 +81,9 @@ class SitePackage(models.Model):
 
     name = models.CharField(max_length=120, unique=True, validators=TEXT_SANITIZERS)
     slug = models.SlugField(max_length=120, unique=True)
+    site_category = models.ForeignKey(
+        SiteCategory, null=True, blank=True, on_delete=models.PROTECT, related_name='packages',
+    )
     tier = models.CharField(max_length=20, choices=Tier.choices, default=Tier.BASE)
     tagline = models.CharField(max_length=180, blank=True, validators=TEXT_SANITIZERS)
     badge = models.CharField(max_length=30, blank=True, validators=TEXT_SANITIZERS)
@@ -101,6 +130,9 @@ class SitePackage(models.Model):
 class SiteProduct(models.Model):
     name = models.CharField(max_length=120, unique=True, validators=TEXT_SANITIZERS)
     slug = models.SlugField(max_length=120, unique=True)
+    site_category = models.ForeignKey(
+        SiteCategory, null=True, blank=True, on_delete=models.PROTECT, related_name='products',
+    )
     short_description = models.CharField(max_length=255, blank=True, validators=TEXT_SANITIZERS)
     description = models.TextField(blank=True, validators=TEXT_SANITIZERS)
     price = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(0)])
@@ -198,6 +230,25 @@ class SiteSettings(models.Model):
 
     def __str__(self):
         return 'Website settings'
+
+
+class SiteMediaAsset(models.Model):
+    """A public website image mirrored under our dedicated Liara prefix."""
+
+    source_path = models.CharField(max_length=500, unique=True)
+    source_url = models.URLField(max_length=1000)
+    public_url = models.URLField(max_length=1000)
+    object_key = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=80)
+    byte_size = models.PositiveIntegerField()
+    sha256 = models.CharField(max_length=64)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['source_path']
+
+    def __str__(self):
+        return self.source_path
 
 
 class ContactMessage(models.Model):

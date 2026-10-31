@@ -11,6 +11,8 @@ from django.db import transaction
 from django.utils.text import slugify
 
 from ..models import (
+    SiteCategory,
+    SiteMediaAsset,
     SitePackage,
     SitePackagePriceOption,
     SiteProduct,
@@ -92,6 +94,17 @@ def _image(fragment: str) -> str:
     return html.unescape(urllib.parse.urljoin(BASE_URL, match.group(1))) if match else ''
 
 
+def _mirrored_url(url: str, media_urls: dict[str, str]) -> str:
+    """Keep imported catalog images on Liara after future catalog refreshes."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.hostname != 'barancliniccenter.com':
+        return url
+    path = parsed.path
+    if path == '/_next/image':
+        path = urllib.parse.parse_qs(parsed.query).get('url', [''])[0]
+    return media_urls.get(urllib.parse.unquote(path), url)
+
+
 def _category(source_category: str, name: str) -> str:
     source = f'{source_category} {name}'
     if 'مو' in source or 'hair' in source.lower():
@@ -148,6 +161,14 @@ def _option_row(fragment: str, order: int) -> dict | None:
 
 def _package_rows(source: str) -> Iterable[dict]:
     headings = list(re.finditer(r'<h3[^>]*>([\s\S]*?)</h3>', source, re.I))
+    groups = []
+    for button in re.findall(r'<button[^>]*>([\s\S]*?)</button>', source, re.I):
+        name = _text(button.split('<span', 1)[0])
+        count = parse_money(_first(r'<span[^>]*>([\s\S]*?)</span>', button))
+        if name and name != 'همه' and count is not None and count > 0:
+            groups.extend([name] * int(count))
+    if len(groups) != len(headings):
+        groups = []
     for order, heading in enumerate(headings):
         end = headings[order + 1].start() if order + 1 < len(headings) else len(source)
         fragment = source[heading.start():end]
@@ -177,6 +198,7 @@ def _package_rows(source: str) -> Iterable[dict]:
             'badge': 'پیشنهاد ویژه' if 'پیشنهاد ویژه' in _text(fragment) else '',
             'options': options,
             'source_url': _source_url('/packages'),
+            'source_category': groups[order] if groups else '',
             'sort_order': order,
         }
 
@@ -278,6 +300,35 @@ def _usd(toman: Decimal, rate: Decimal | None, *, current=None) -> Decimal:
     return Decimal('0')
 
 
+def _catalog_price_values(source_price: Decimal, rate: Decimal | None, current=None) -> dict:
+    """The first import anchors USD; later catalog crawls must not reset it."""
+    if current is not None and (current.price > 0 or current.price_usd > 0):
+        return {'price': current.price, 'price_usd': current.price_usd}
+    return {'price': source_price, 'price_usd': _usd(source_price, rate)}
+
+
+_SOURCE_CATEGORY_SLUGS = {
+    ('service', 'فیلر و بوتاکس'): 'filler-botox',
+    ('service', 'لیزر بانوان'): 'laser-women',
+    ('service', 'لیزر آقایان'): 'laser-men',
+    ('service', 'فیشیال'): 'facial',
+    ('package', 'کربن تراپی'): 'carbon-therapy',
+    ('package', 'لیزر بانوان'): 'laser-women',
+    ('package', 'لیزر آقایان'): 'laser-men',
+    ('product', 'مراقبت پوست'): 'skin-care',
+}
+
+
+def _site_category(kind: str, name: str):
+    if not name:
+        return None
+    slug = _SOURCE_CATEGORY_SLUGS.get((kind, name)) or f'source-{hashlib.sha256(name.encode()).hexdigest()[:12]}'
+    category, _ = SiteCategory.objects.get_or_create(
+        kind=kind, slug=slug, defaults={'name': name, 'sort_order': 100},
+    )
+    return category
+
+
 def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
     """Fetch and atomically upsert the public Baran Clinic website catalog."""
     services_source = _fetch('/services')
@@ -312,6 +363,7 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
 
     result = WebsiteImportResult()
     with transaction.atomic():
+        media_urls = dict(SiteMediaAsset.objects.values_list('source_path', 'public_url'))
         seen_services = set()
         for row in service_rows:
             seen_services.add(row['slug'])
@@ -321,10 +373,12 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
             defaults = {
                 'name': row['name'], 'category': _category(row['source_category'], row['name']),
                 'source_category': row['source_category'], 'short_description': row['description'][:255],
-                'description': row['description'], 'price': row['price'],
-                'price_usd': _usd(row['price'], rate, current=existing_service),
+                'site_category': _site_category('service', row['source_category'])
+                or (existing_service.site_category if existing_service else None),
+                'description': row['description'],
+                **_catalog_price_values(row['price'], rate, existing_service),
                 'is_from_price': row['is_from_price'],
-                'image_url': row['image_url'], 'source_url': row['source_url'],
+                'image_url': _mirrored_url(row['image_url'], media_urls), 'source_url': row['source_url'],
                 'is_active': True, 'sort_order': row['sort_order'],
             }
             SiteService.objects.update_or_create(slug=row['slug'], defaults=defaults)
@@ -344,9 +398,11 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                 slug=row['slug'],
                 defaults={
                     'name': row['name'], 'tagline': row['tagline'], 'badge': row['badge'],
-                    'price': first['price'],
-                    'price_usd': _usd(first['price'], rate, current=existing_package),
-                    'original_price': None, 'original_price_usd': None,
+                    'site_category': _site_category('package', row.get('source_category', ''))
+                    or (existing_package.site_category if existing_package else None),
+                    **_catalog_price_values(first['price'], rate, existing_package),
+                    'original_price': existing_package.original_price if existing_package else None,
+                    'original_price_usd': existing_package.original_price_usd if existing_package else None,
                     'is_active': True, 'source_url': row['source_url'], 'sort_order': row['sort_order'],
                 },
             )
@@ -358,8 +414,7 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                     defaults={
                         'session_count': option['session_count'],
                         'gift_session_count': option['gift_session_count'],
-                        'price': option['price'],
-                        'price_usd': _usd(option['price'], rate, current=existing_option),
+                        **_catalog_price_values(option['price'], rate, existing_option),
                         'source_url': row['source_url'], 'sort_order': option['sort_order'],
                         'is_active': True,
                     },
@@ -381,9 +436,9 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                 defaults={
                     'name': row['name'], 'short_description': row['description'][:255],
                     'description': row['full_description'],
-                    'price': row['price'],
-                    'price_usd': _usd(row['price'], rate, current=existing_product),
-                    'image_url': row['image_url'], 'source_url': row['source_url'],
+                    'site_category': _site_category('product', 'مراقبت پوست'),
+                    **_catalog_price_values(row['price'], rate, existing_product),
+                    'image_url': _mirrored_url(row['image_url'], media_urls), 'source_url': row['source_url'],
                     'is_active': True, 'sort_order': row['sort_order'],
                 },
             )
@@ -391,12 +446,16 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
         result.products = len(seen_products)
 
         if not SiteSettings.objects.filter(singleton_key='default', is_manually_managed=True).exists():
+            for field in ('hero_image_url', 'about_image_url', 'logo_url'):
+                if field in settings_data:
+                    settings_data[field] = _mirrored_url(settings_data[field], media_urls)
             SiteSettings.objects.update_or_create(
                 singleton_key='default', defaults=settings_data,
             )
 
         seen_team = set()
         for row in team_rows:
+            row['image_url'] = _mirrored_url(row.get('image_url', ''), media_urls)
             seen_team.add(row['source_key'])
             member = TeamMember.objects.filter(source_key=row['source_key']).first()
             if member is None:

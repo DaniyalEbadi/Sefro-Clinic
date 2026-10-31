@@ -95,6 +95,28 @@ class WebsiteImporterTests(TestCase):
         self.assertEqual(import_website_catalog().services, 2)
         self.assertEqual(old.__class__.objects.filter(slug='one').count(), 1)
 
+    @patch('website.services.importer.fetch_website_rate', return_value=(Decimal('100000'), 'test'))
+    @patch('website.services.importer._fetch')
+    def test_reimport_does_not_reset_usd_bases_or_synced_toman_prices(self, fetch, _rate):
+        pages = {
+            '/services': SERVICES_HTML, '/packages': PACKAGES_HTML,
+            '/products': PRODUCTS_HTML, '/about': ABOUT_HTML, '/': HOME_HTML,
+            '/contact': CONTACT_HTML, '/products/serum': PRODUCT_DETAIL_HTML,
+        }
+        fetch.side_effect = lambda path: pages[path]
+        import_website_catalog()
+        with patch('website.services.sync.fetch_website_rate', return_value=(Decimal('200000'), 'priceto_day')):
+            sync_website_prices()
+        items = [
+            SiteService.objects.get(slug='one'), SitePackage.objects.get(),
+            SitePackagePriceOption.objects.first(), SiteProduct.objects.get(),
+        ]
+        synced = [(item.price, item.price_usd) for item in items]
+        import_website_catalog()
+        for item, expected in zip(items, synced):
+            item.refresh_from_db()
+            self.assertEqual((item.price, item.price_usd), expected)
+
     def test_parse_persian_toman_and_decimal(self):
         self.assertEqual(parse_money('از ۷۹۹٬۰۰۰ تومان'), Decimal('799000'))
         self.assertEqual(parse_money('800.5 تومان'), Decimal('800.5'))

@@ -1,3 +1,6 @@
+from datetime import timedelta
+from zoneinfo import ZoneInfo
+
 from django.db import connection, transaction
 from django.utils import timezone
 
@@ -12,6 +15,8 @@ class WebsitePriceSyncAlreadyRunning(RuntimeError):
 
 
 _SYNC_LOCK_ID = 7742026
+_SCHEDULE_LOCK_ID = 7742027
+_TEHRAN = ZoneInfo('Asia/Tehran')
 
 
 def fetch_website_rate():
@@ -63,7 +68,7 @@ def _sync_website_prices_unlocked(rate_override=None):
             service_count = _update_prices(SiteService.objects.all(), rate=rate)
             product_count = _update_prices(SiteProduct.objects.all(), rate=rate)
             package_count = _update_prices(SitePackage.objects.all(), rate=rate)
-            option_objects = list(SitePackagePriceOption.objects.filter(is_active=True))
+            option_objects = list(SitePackagePriceOption.objects.all())
             for option in option_objects:
                 option.price = toman_price_from_usd(option.price_usd, rate)
             if option_objects:
@@ -110,3 +115,42 @@ def sync_website_prices(*, rate_override=None):
     finally:
         with connection.cursor() as cursor:
             cursor.execute('SELECT pg_advisory_unlock(%s)', [_SYNC_LOCK_ID])
+
+
+def _scheduled_window_start(now):
+    local_now = timezone.localtime(now, _TEHRAN)
+    hour = (local_now.hour // 6) * 6
+    return local_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+
+def _sync_website_prices_if_due_unlocked(now):
+    window_start = _scheduled_window_start(now)
+    if WebsitePriceSyncRun.objects.filter(
+        status=WebsitePriceSyncRun.Status.SUCCEEDED,
+        provider__in=('priceto_day', 'nerkhsanj'),
+        finished_at__gte=window_start,
+    ).exists():
+        return None
+    recent_failure = WebsitePriceSyncRun.objects.filter(
+        status=WebsitePriceSyncRun.Status.FAILED,
+        finished_at__gte=max(window_start, now - timedelta(minutes=15)),
+    ).exists()
+    if recent_failure:
+        return None
+    return sync_website_prices()
+
+
+def sync_website_prices_if_due(*, now=None):
+    """Run once in each Tehran 00:00/06:00/12:00/18:00 window."""
+    now = now or timezone.now()
+    if connection.vendor != 'postgresql':
+        return _sync_website_prices_if_due_unlocked(now)
+    with connection.cursor() as cursor:
+        cursor.execute('SELECT pg_try_advisory_lock(%s)', [_SCHEDULE_LOCK_ID])
+        if not cursor.fetchone()[0]:
+            return None
+    try:
+        return _sync_website_prices_if_due_unlocked(now)
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT pg_advisory_unlock(%s)', [_SCHEDULE_LOCK_ID])
