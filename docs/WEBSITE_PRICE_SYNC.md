@@ -1,9 +1,10 @@
 # Website price synchronization
 
-Website catalog prices can be entered in either Toman or USD through the
-authenticated dashboard. USD remains the base used by rate synchronization.
+Website service, package, and package-option prices can be entered in either
+Toman or USD through the authenticated dashboard. Products are unpriced.
+USD remains the base used by rate synchronization.
 Derived Toman prices are always rounded upward to a whole Toman, so values such
-as `799.999` are stored and returned as `800.00`.
+as `799.999` are stored as `800.00` and returned as `800`.
 
 The Docker startup runs `run_website_price_scheduler` alongside Gunicorn. It
 checks the production database once a minute and syncs once in each Tehran
@@ -33,8 +34,10 @@ It imports the live services, packages, every package price option, products,
 team members, testimonials, and site settings. Records missing from a later
 import are marked inactive rather than deleted. Product detail-page descriptions
 are stored separately from card summaries. Once an imported record exists,
-subsequent catalog imports preserve its USD base and synchronized Toman price;
-the import cannot reset either price from old public site text.
+subsequent catalog imports preserve service and package USD bases and
+synchronized Toman prices; the import cannot reset those prices from old
+public site text. Imported products have zero-valued legacy price columns,
+which are absent from Site API v2 and never synchronized.
 
 When the rate provider is unavailable, the importer still saves the exact
 live Toman prices. A positive Toman price with `price_usd=0` means its USD base
@@ -54,7 +57,7 @@ recorded for `GET /api/v2/site-dashboard/price-sync/status/`. A manager can
 use `POST /api/v2/site-dashboard/price-sync/run/` with
 `{"rate": "100000"}` to apply an independently verified Toman-per-USD rate
 without touching financial exchange rates. This manual step does not restore
-unattended twice-daily sync: configure a functioning provider for that.
+unattended sync: configure a functioning provider for that.
 
 The protected website dashboard endpoints are:
 
@@ -66,7 +69,9 @@ The protected website dashboard endpoints are:
 - `GET/PATCH /api/v2/site-dashboard/settings/`
 
 Authenticated website managers may submit either `price` (Toman)
-or `price_usd` (USD) for services, products, packages, and package price options.
+or `price_usd` (USD) for services, packages, and package price options.
+Product creation and edits reject price fields; neither product endpoint returns
+prices. Face-analyzer product recommendations also omit prices.
 Do not send both currencies for the same price: this returns HTTP 400 without
 changing the record. A valid exchange rate is required for either currency;
 if no rate is available the request returns HTTP 503 without saving changes.
@@ -81,7 +86,7 @@ Content-Type: application/json
 ```
 
 This stores `1800000.00` Toman and derives `price_usd` using the current rate.
-Fractional Toman amounts are rounded upward (`799.999` becomes `800.00`).
+Fractional Toman amounts are rounded upward (`799.999` is returned as `800`).
 USD bases retain 12 decimal places so converting an entered Toman price back
 at the same rate preserves it. Future rate changes continue to adjust the
 Toman price. Existing stored USD values are preserved by the precision migration.

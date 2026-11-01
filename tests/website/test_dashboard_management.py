@@ -193,13 +193,14 @@ class WebsiteDashboardContentTests(TestCase):
         self.assertEqual(self.client.patch(package_url, {'price': '1000'}, format='json').status_code, 503)
 
     @patch('website.views.get_current_usd_to_toman_rate', return_value=Decimal('100000'))
-    def test_creating_product_and_package_accepts_toman_and_relationships(self, _rate):
+    def test_creating_unpriced_product_and_priced_package(self, _rate):
         service = make_service()
         product = self.client.post('/api/v2/site-dashboard/products/', {
-            'name': 'محصول جدید', 'slug': 'new-product', 'price': '799.001',
+            'name': 'محصول جدید', 'slug': 'new-product',
         }, format='json')
         self.assertEqual(product.status_code, 201, product.data)
-        self.assertEqual(SiteProduct.objects.get(slug='new-product').price, Decimal('800'))
+        self.assertEqual(SiteProduct.objects.get(slug='new-product').price, Decimal('0'))
+        self.assertNotIn('price', product.data)
         package = self.client.post('/api/v2/site-dashboard/packages/', {
             'name': 'پکیج جدید', 'slug': 'new-package', 'price_usd': '10',
             'service_ids': [service.pk],

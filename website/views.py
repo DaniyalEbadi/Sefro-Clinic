@@ -357,9 +357,14 @@ class SiteSettingsPublicView(generics.RetrieveAPIView):
 
 
 @extend_schema(tags=['Website Dashboard - Products'])
-class WebsiteProductDashboardViewSet(WebsitePriceDashboardMixin, viewsets.ModelViewSet):
+class WebsiteProductDashboardViewSet(viewsets.ModelViewSet):
+    authentication_classes = [WebsiteDashboardAuthentication]
+    permission_classes = [IsWebsiteManager]
+    throttle_classes = [WebsiteDashboardThrottle]
     queryset = SiteProduct.objects.all().select_related('site_category')
     serializer_class = SiteProductDashboardSerializer
+    lookup_field = 'slug'
+    http_method_names = ['get', 'post', 'patch', 'head', 'options']
 
 
 @extend_schema(tags=['Website Dashboard - Sync'], responses=WebsitePriceSyncStatusSerializer)

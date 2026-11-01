@@ -187,11 +187,22 @@ class CatalogItemRecommendationSerializer(serializers.Serializer):
     price_options = CatalogPriceOptionRecommendationSerializer(many=True, required=False)
 
 
+class CatalogProductRecommendationSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    slug = serializers.CharField()
+    name = serializers.CharField()
+    source_url = serializers.URLField(allow_blank=True)
+    api_url = serializers.CharField()
+    image_url = serializers.URLField(allow_blank=True)
+    matched_concern = serializers.CharField()
+    reason = serializers.CharField()
+
+
 class CatalogRecommendationsSerializer(serializers.Serializer):
     summary = serializers.CharField()
     next_steps = serializers.ListField(child=serializers.CharField())
     services = CatalogItemRecommendationSerializer(many=True)
-    products = CatalogItemRecommendationSerializer(many=True)
+    products = CatalogProductRecommendationSerializer(many=True)
     packages = CatalogItemRecommendationSerializer(many=True)
     disclaimer = serializers.CharField()
 

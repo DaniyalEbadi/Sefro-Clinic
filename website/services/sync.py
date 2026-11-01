@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from finance.services.exchange_rates import ExternalExchangeRateProvider, NerkhsanjExchangeRateProvider
 
-from ..models import SitePackage, SitePackagePriceOption, SiteProduct, SiteService, WebsitePriceSyncRun
+from ..models import SitePackage, SitePackagePriceOption, SiteService, WebsitePriceSyncRun
 from .pricing import toman_price_from_usd, usd_price_from_toman
 
 
@@ -63,10 +63,9 @@ def _sync_website_prices_unlocked(rate_override=None):
             return run
 
         with transaction.atomic():
-            for model in (SiteService, SitePackage, SiteProduct, SitePackagePriceOption):
+            for model in (SiteService, SitePackage, SitePackagePriceOption):
                 _initialize_pending_usd_bases(model, rate)
             service_count = _update_prices(SiteService.objects.all(), rate=rate)
-            product_count = _update_prices(SiteProduct.objects.all(), rate=rate)
             package_count = _update_prices(SitePackage.objects.all(), rate=rate)
             option_objects = list(SitePackagePriceOption.objects.all())
             for option in option_objects:
@@ -86,7 +85,7 @@ def _sync_website_prices_unlocked(rate_override=None):
             run.provider = provider
             run.rate = rate
             run.updated_services = service_count
-            run.updated_products = product_count
+            run.updated_products = 0
             run.updated_packages = package_count
             run.finished_at = timezone.now()
             run.save(update_fields=[

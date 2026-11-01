@@ -15,7 +15,7 @@ from website.models import (
     TeamMember,
     Testimonial,
 )
-from website.services.importer import _team_rows, _testimonial_rows, import_website_catalog, parse_money
+from website.services.importer import _product_rows, _team_rows, _testimonial_rows, import_website_catalog, parse_money
 from website.services.sync import sync_website_prices
 
 SERVICES_HTML = (
@@ -31,8 +31,7 @@ PACKAGES_HTML = (
     '</ul>'
 )
 PRODUCTS_HTML = (
-    '<a href="/products/serum"><h3>سروم</h3><p>محصول مراقبتی</p>'
-    '<span>۴۵۰٬۰۰۰</span> تومان</a>'
+    '<a href="/products/serum"><h3>سروم</h3><p>محصول مراقبتی</p></a>'
 )
 PRODUCT_DETAIL_HTML = '<h1>سروم</h1><p>محصول مراقبتی</p><p>توضیح کامل محصول و روش استفاده.</p>'
 ABOUT_HTML = (
@@ -121,6 +120,13 @@ class WebsiteImporterTests(TestCase):
         self.assertEqual(parse_money('از ۷۹۹٬۰۰۰ تومان'), Decimal('799000'))
         self.assertEqual(parse_money('800.5 تومان'), Decimal('800.5'))
 
+    def test_product_parser_accepts_cards_without_prices(self):
+        source = '<a href="/products/serum"><h3>سروم</h3><p>محصول مراقبتی</p></a>'
+        rows = list(_product_rows(source))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['slug'], 'serum')
+        self.assertNotIn('price', rows[0])
+
     def test_team_and_testimonials_are_extracted_from_source(self):
         about = '<section><h2>تیم متخصص ما</h2><h3>دکتر نمونه</h3><p>متخصص پوست</p><p>رزومه</p></section>'
         home = '<p>“<!-- -->خدمت عالی بود.<!-- -->”</p><div><p>مراجع نمونه</p><p>مراجع</p></div>'
@@ -172,11 +178,13 @@ class WebsiteImporterTests(TestCase):
 
         run = sync_website_prices(rate_override=Decimal('100000'))
         self.assertEqual(run.status, 'succeeded')
-        for item in (service, package, option, product):
+        for item in (service, package, option):
             old_price = item.price
             item.refresh_from_db()
             self.assertEqual(item.price, old_price)
             self.assertGreater(item.price_usd, 0)
+        product.refresh_from_db()
+        self.assertEqual((product.price, product.price_usd), (Decimal('0'), Decimal('0')))
 
 
 class WebsitePackageOptionTests(TestCase):

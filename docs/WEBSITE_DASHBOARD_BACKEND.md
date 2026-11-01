@@ -79,8 +79,10 @@ Frontend changes required for the new isolated login:
   keyed by website credential, not by the linked clinic user, so website
   managers sharing one staff identity do not consume each other's quota or
   the financial API quota. Contact submissions keep their stricter limit.
-- Product and package pages now support create and content-only PATCH in
-  addition to Toman/USD price changes. A package's `service_ids` write field
+- Product pages support create and content-only PATCH, with no product price
+  fields in the public or dashboard API. Service, package, and package-option
+  prices still support Toman/USD edits and scheduled synchronization.
+  A package's `service_ids` write field
   controls service links; `services` remains a read-only summary. Existing
   slugs cannot be changed because they are public URLs and crawl identities.
   Dashboard-edited catalog/content rows are protected from later imports.

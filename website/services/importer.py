@@ -210,11 +210,10 @@ def _product_rows(source: str) -> Iterable[dict]:
         headings = re.findall(r'<h[234][^>]*>([\s\S]*?)</h[234]>', fragment, re.I)
         name = _text(headings[0]) if headings else ''
         description = _first(r'<p[^>]*>([\s\S]*?)</p>', fragment)
-        prices = _money_values(fragment)
-        if name and prices:
+        if name:
             yield {
                 'slug': match.group(1).rsplit('/', 1)[-1], 'name': name,
-                'description': description, 'price': prices[-1],
+                'description': description,
                 'image_url': _image(fragment), 'source_url': _source_url(match.group(1)),
                 'sort_order': order,
             }
@@ -437,7 +436,7 @@ def import_website_catalog(rate: Decimal | None = None) -> WebsiteImportResult:
                     'name': row['name'], 'short_description': row['description'][:255],
                     'description': row['full_description'],
                     'site_category': _site_category('product', 'مراقبت پوست'),
-                    **_catalog_price_values(row['price'], rate, existing_product),
+                    'price': Decimal('0'), 'price_usd': Decimal('0'),
                     'image_url': _mirrored_url(row['image_url'], media_urls), 'source_url': row['source_url'],
                     'is_active': True, 'sort_order': row['sort_order'],
                 },

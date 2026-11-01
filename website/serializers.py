@@ -20,6 +20,18 @@ from .models import (
 from .services.pricing import round_toman_up, toman_price_from_usd, usd_price_from_toman
 
 
+class TomanPriceField(serializers.DecimalField):
+    def __init__(self, **kwargs):
+        super().__init__(
+            max_digits=None, decimal_places=None, min_value=Decimal('0'),
+            max_value=Decimal('999999999999'),
+            required=False, **kwargs,
+        )
+
+    def to_representation(self, value):
+        return format(round_toman_up(value), '.0f') if value is not None else None
+
+
 class SiteCategorySummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteCategory
@@ -71,6 +83,7 @@ class SiteCategoryAssignmentMixin:
 
 class SiteServiceSerializer(serializers.ModelSerializer):
     site_category = SiteCategorySummarySerializer(read_only=True)
+    price = TomanPriceField(read_only=True)
 
     class Meta:
         model = SiteService
@@ -95,6 +108,8 @@ class SiteServiceMiniSerializer(serializers.ModelSerializer):
 
 class SitePackageSerializer(serializers.ModelSerializer):
     site_category = SiteCategorySummarySerializer(read_only=True)
+    price = TomanPriceField(read_only=True)
+    original_price = TomanPriceField(read_only=True)
     services = SiteServiceMiniSerializer(many=True, read_only=True)
     price_options = serializers.SerializerMethodField()
     discount_percent = serializers.IntegerField(read_only=True)
@@ -114,6 +129,8 @@ class SitePackageSerializer(serializers.ModelSerializer):
 
 
 class SitePackagePriceOptionSerializer(serializers.ModelSerializer):
+    price = TomanPriceField(read_only=True)
+
     class Meta:
         model = SitePackagePriceOption
         fields = [
@@ -128,21 +145,9 @@ class SiteProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteProduct
         fields = [
-            'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
+            'id', 'name', 'slug', 'short_description', 'description',
             'image_url', 'source_url', 'site_category',
         ]
-
-
-class TomanPriceField(serializers.DecimalField):
-    def __init__(self, **kwargs):
-        super().__init__(
-            max_digits=None, decimal_places=None, min_value=Decimal('0'),
-            max_value=Decimal('999999999999'),
-            required=False, **kwargs,
-        )
-
-    def to_representation(self, value):
-        return format(value, '.2f') if value is not None else None
 
 
 class WebsitePriceInputMixin:
@@ -220,9 +225,8 @@ class SiteServiceImageUploadSerializer(serializers.Serializer):
     image = serializers.ImageField(help_text='JPEG, PNG, or WebP; maximum 5 MB.')
 
 
-class SiteProductDashboardSerializer(SiteCategoryAssignmentMixin, WebsitePriceInputMixin, serializers.ModelSerializer):
+class SiteProductDashboardSerializer(SiteCategoryAssignmentMixin, serializers.ModelSerializer):
     site_category_kind = SiteCategory.Kind.PRODUCT
-    price = TomanPriceField(help_text='Toman price; rounded upward to a whole Toman. Send price OR price_usd.')
     site_category = SiteCategorySummarySerializer(read_only=True)
     site_category_id = serializers.PrimaryKeyRelatedField(
         source='site_category', queryset=SiteCategory.objects.all(), required=False, allow_null=True, write_only=True,
@@ -231,19 +235,22 @@ class SiteProductDashboardSerializer(SiteCategoryAssignmentMixin, WebsitePriceIn
     class Meta:
         model = SiteProduct
         fields = [
-            'id', 'name', 'slug', 'short_description', 'description', 'price', 'price_usd',
+            'id', 'name', 'slug', 'short_description', 'description',
             'image_url', 'source_url', 'site_category', 'site_category_id', 'is_active', 'sort_order',
         ]
         read_only_fields = ['id']
 
     def validate(self, attrs):
-        self.require_price_update = self.instance is None
+        if {'price', 'price_usd'} & self.initial_data.keys():
+            raise serializers.ValidationError({'price': 'Website products do not have prices.'})
         if self.instance is not None and 'slug' in attrs and attrs['slug'] != self.instance.slug:
             raise serializers.ValidationError({'slug': 'An existing catalog slug cannot be changed.'})
         return super().validate(attrs)
 
     def create(self, validated_data):
         validated_data['is_manually_managed'] = True
+        validated_data['price'] = Decimal('0')
+        validated_data['price_usd'] = Decimal('0')
         return super().create(validated_data)
 
     def update(self, instance, validated_data):

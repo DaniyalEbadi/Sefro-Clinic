@@ -87,7 +87,7 @@ class SiteFaceAnalyzerTests(TestCase):
         self.assertTrue(recommendations['services'][0]['is_from_price'])
         self.assertEqual(recommendations['services'][0]['source_url'], service.source_url)
         self.assertEqual(recommendations['products'][0]['slug'], product.slug)
-        self.assertEqual(recommendations['products'][0]['price_toman'], '320000')
+        self.assertNotIn('price_toman', recommendations['products'][0])
         self.assertEqual(recommendations['packages'][0]['slug'], package.slug)
         self.assertEqual(recommendations['packages'][0]['price_options'][0]['price_toman'], '2800000')
         self.assertEqual(recommendations['packages'][0]['price_options'][0]['gift_session_count'], 1)
@@ -111,7 +111,7 @@ class SiteFaceAnalyzerTests(TestCase):
         detail = client.get(f"/api/v2/face/history/{response.data['id']}/")
         self.assertEqual(detail.status_code, 200, detail.data)
         self.assertEqual(detail.data['recommendations']['services'][0]['price_toman'], '1700000')
-        self.assertEqual(detail.data['recommendations']['products'][0]['price_toman'], '350001')
+        self.assertNotIn('price_toman', detail.data['recommendations']['products'][0])
         self.assertEqual(detail.data['recommendations']['packages'][0]['price_options'][0]['price_toman'], '3000000')
 
         service.is_active = False

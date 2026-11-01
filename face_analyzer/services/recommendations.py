@@ -63,13 +63,14 @@ def _catalog_item(item, kind: str, concern: str) -> dict:
         'id': item.pk,
         'slug': item.slug,
         'name': item.name,
-        'price_toman': str(round_toman_up(item.price)),
         'source_url': item.source_url,
         'api_url': f'/api/v2/{kind}s/{quote(item.slug)}/',
         'image_url': getattr(item, 'image_url', ''),
         'matched_concern': concern,
         'reason': f'برای بررسی {label}: {action}',
     }
+    if kind != 'product':
+        result['price_toman'] = str(round_toman_up(item.price))
     if kind == 'service':
         result['is_from_price'] = item.is_from_price
     if kind == 'package':

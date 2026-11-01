@@ -94,7 +94,8 @@ class WebsitePriceSyncTests(TestCase):
         self.assertEqual(service.price, Decimal('800.00'))
         self.assertEqual(package.price, Decimal('98400.00'))
         self.assertEqual(package.original_price, Decimal('188000.00'))
-        self.assertEqual(product.price, Decimal('800.00'))
+        self.assertEqual(product.price, Decimal('450000.00'))
+        self.assertEqual(run.updated_products, 0)
         self.assertEqual(primary.call_count, 1)
         backup.assert_not_called()
 
@@ -132,11 +133,11 @@ class WebsiteTomanPriceTests(TestCase):
 
     def test_toman_edits_store_exact_price_and_precise_usd_base_for_every_catalog_type(self, rate):
         finance_rates_before = ExchangeRate.objects.count()
-        for obj, url in self.targets:
+        for obj, url in (self.targets[0], *self.targets[2:]):
             with self.subTest(url=url):
                 response = self.client.patch(url, {'price': '1800001'}, format='json')
                 self.assertEqual(response.status_code, 200, response.data)
-                self.assertEqual(response.data['price'], '1800001.00')
+                self.assertEqual(response.data['price'], '1800001')
                 obj.refresh_from_db()
                 self.assertEqual(obj.price, Decimal('1800001'))
                 self.assertEqual(toman_price_from_usd(obj.price_usd, rate.return_value), obj.price)
@@ -156,10 +157,41 @@ class WebsiteTomanPriceTests(TestCase):
         self.assertEqual(self.service.price, toman_price_from_usd(usd_base, Decimal('300000')))
 
     def test_fractional_toman_rounds_up_and_zero_is_allowed(self, rate):
-        for value, expected in [('799.999', '800.00'), ('0', '0.00')]:
+        for value, expected in [('799.999', '800'), ('0', '0')]:
             response = self.client.patch(self.targets[0][1], {'price': value}, format='json')
             self.assertEqual(response.status_code, 200, response.data)
             self.assertEqual(response.data['price'], expected)
+
+    def test_public_and_dashboard_show_whole_toman_prices_for_all_catalog_types(self, rate):
+        self.service.price = Decimal('799.99')
+        self.service.save(update_fields=['price'])
+        self.product.price = Decimal('899.01')
+        self.product.save(update_fields=['price'])
+        self.package.price = Decimal('999.01')
+        self.package.original_price = Decimal('1199.01')
+        self.package.save(update_fields=['price', 'original_price'])
+        self.option.price = Decimal('499.01')
+        self.option.save(update_fields=['price'])
+
+        public = APIClient()
+        expected = [('800', self.service, self.targets[0][1]),
+                    ('1000', self.package, self.targets[2][1])]
+        for price, obj, dashboard_url in expected:
+            with self.subTest(slug=obj.slug):
+                public_url = f'/api/v2/{obj._meta.model_name.removeprefix("site")}s/{obj.slug}/'
+                self.assertEqual(public.get(public_url).data['price'], price)
+                self.assertEqual(self.client.get(dashboard_url).data['price'], price)
+        public_product = public.get(f'/api/v2/products/{self.product.slug}/').data
+        dashboard_product = self.client.get(self.targets[1][1]).data
+        for field in ('price', 'price_usd'):
+            self.assertNotIn(field, public_product)
+            self.assertNotIn(field, dashboard_product)
+        public_package = public.get(f'/api/v2/packages/{self.package.slug}/').data
+        dashboard_package = self.client.get(self.targets[2][1]).data
+        self.assertEqual(public_package['original_price'], '1200')
+        self.assertEqual(dashboard_package['original_price'], '1200')
+        self.assertEqual(public_package['price_options'][0]['price'], '500')
+        self.assertEqual(self.client.get(self.targets[3][1]).data['price'], '500')
 
     def test_rejects_both_currencies_for_same_price_without_saving(self, rate):
         for obj, url in self.targets:
@@ -238,13 +270,16 @@ class WebsiteTomanPriceTests(TestCase):
         self.assertEqual(response.status_code, 200)
         schemas = response.data['components']['schemas']
         for name in [
-            'PatchedSiteServiceDashboard', 'PatchedSiteProductDashboard',
-            'PatchedSitePackageDashboard', 'PatchedSitePackagePriceOptionDashboard',
+            'PatchedSiteServiceDashboard', 'PatchedSitePackageDashboard',
+            'PatchedSitePackagePriceOptionDashboard',
         ]:
             price = schemas[name]['properties']['price']
             self.assertFalse(price.get('readOnly', False), name)
         original_price = schemas['PatchedSitePackageDashboard']['properties']['original_price']
         self.assertFalse(original_price.get('readOnly', False))
+        product_fields = schemas['PatchedSiteProductDashboard']['properties']
+        self.assertNotIn('price', product_fields)
+        self.assertNotIn('price_usd', product_fields)
 
     def test_missing_or_invalid_rate_returns_503_without_saving(self, rate):
         for value in [None, Decimal('0'), Decimal('-1')]:

@@ -37,7 +37,7 @@ class SiteV2EndToEndAuditTests(TestCase):
 
         detail = client.get(f'/api/v2/services/{service.slug}/').data
         self.assertEqual(detail['source_url'], service.source_url)
-        self.assertEqual(detail['price'], '2500000.00')
+        self.assertEqual(detail['price'], '2500000')
         package_detail = client.get(f'/api/v2/packages/{package.slug}/').data
         self.assertEqual(package_detail['price_options'][0]['id'], option.pk)
         self.assertEqual(package_detail['services'][0]['slug'], service.slug)
@@ -75,7 +75,7 @@ class SiteV2EndToEndAuditTests(TestCase):
         csrf = {'HTTP_X_CSRFTOKEN': client.cookies['csrftoken'].value}
         created = client.post(service_url, payload, format='json', **csrf)
         self.assertEqual(created.status_code, 201, created.data)
-        self.assertEqual(created.data['price'], '800.00')
+        self.assertEqual(created.data['price'], '800')
         detail_url = f'{service_url}botox-face/'
         edited = client.patch(detail_url, {'description': 'توضیح ویرایش شده'}, format='json', **csrf)
         self.assertEqual(edited.status_code, 200, edited.data)
@@ -90,7 +90,7 @@ class SiteV2EndToEndAuditTests(TestCase):
         self.assertEqual(client.get('/api/v2/site-dashboard/products/').status_code, 200)
         self.assertEqual(client.get(product_url).status_code, 200)
         self.assertEqual(client.patch(package_url, {'price_usd': '10'}, format='json', **csrf).status_code, 200)
-        self.assertEqual(client.patch(product_url, {'price': '900.1'}, format='json', **csrf).status_code, 200)
+        self.assertEqual(client.patch(product_url, {'price': '900.1'}, format='json', **csrf).status_code, 400)
 
         options_url = '/api/v2/site-dashboard/package-price-options/'
         option = client.post(options_url, {
@@ -109,12 +109,13 @@ class SiteV2EndToEndAuditTests(TestCase):
 
         public = APIClient()
         self.assertEqual(public.get('/api/v2/services/botox-face/').data['description'], 'توضیح ویرایش شده')
-        self.assertEqual(public.get(f'/api/v2/products/{product.slug}/').data['price'], '901.00')
-        self.assertEqual(public.get(f'/api/v2/packages/{package.slug}/').data['price'], '1000000.00')
+        self.assertNotIn('price', public.get(f'/api/v2/products/{product.slug}/').data)
+        self.assertNotIn('price_usd', client.get(product_url).data)
+        self.assertEqual(public.get(f'/api/v2/packages/{package.slug}/').data['price'], '1000000')
 
         with patch('website.services.sync.fetch_website_rate', return_value=(Decimal('200000'), 'test')):
             sync_website_prices()
-        self.assertEqual(public.get('/api/v2/services/botox-face/').data['price'], '1600.00')
+        self.assertEqual(public.get('/api/v2/services/botox-face/').data['price'], '1600')
         sync_status = client.get('/api/v2/site-dashboard/price-sync/status/')
         self.assertEqual(sync_status.status_code, 200)
         self.assertEqual(sync_status.data['status'], 'succeeded')

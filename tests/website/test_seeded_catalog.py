@@ -40,7 +40,7 @@ class SeededCatalogTests(TestCase):
         for field in ['id', 'name', 'slug', 'category', 'short_description',
                       'description', 'price', 'duration_label', 'image_url']:
             self.assertIn(field, response.data)
-        self.assertEqual(response.data['price'], '2500000.00')
+        self.assertEqual(response.data['price'], '2500000')
 
     def test_package_includes_nested_services_and_discount(self):
         package = make_package()
